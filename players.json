@@ -1,8 +1,14 @@
 {
-  "players": [
-    {
-      "nick": " sha",
-      "ready": "white"
-    }
-  ]
+  "players": {
+    "players": [
+      {
+        "nick": " sha",
+        "ready": "white"
+      },
+      {
+        "nick": "dsdsd",
+        "ready": "white"
+      }
+    ]
+  }
 }
