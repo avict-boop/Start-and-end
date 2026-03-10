@@ -11,6 +11,10 @@
     {
       "nick": ".,.,.",
       "ready": "white"
+    },
+    {
+      "nick": "..,",
+      "ready": "white"
     }
   ]
 }
