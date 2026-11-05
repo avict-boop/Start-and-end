@@ -14,6 +14,7 @@ from rich.table import Table
 
 from .client import OpenRouterClient
 from .config import load_config, load_dotenv
+from .estimate import estimate, parse_pricing, unknown_models
 from .mock import MockClient
 from .report import save
 from .session import Council, CouncilError
@@ -64,17 +65,66 @@ def _read_options(args) -> list[str] | None:
     return opts or None
 
 
-def _make_client(cfg, mock: bool):
+def _make_client(cfg, mock: bool, *, need_key: bool = True):
     if mock:
         return MockClient()
-    key = os.environ.get("OPENROUTER_API_KEY")
-    if not key:
+    key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not key and need_key:
         console.print(
             "[red]Нет OPENROUTER_API_KEY.[/] Создайте ключ на https://openrouter.ai/keys и положите его в "
             "файл .env (см. .env.example) или в переменную окружения. Для пробного прогона без ключа: --mock"
         )
         sys.exit(2)
     return OpenRouterClient(key, timeout=cfg.timeout_s, max_retries=cfg.max_retries)
+
+
+async def _preflight(client, cfg, args, *, mode, rounds, options, criteria) -> int | None:
+    """Проверяет модели на OpenRouter, показывает оценку стоимости и спрашивает подтверждение.
+
+    Возвращает код выхода, если запускать заседание не нужно, иначе None.
+    """
+    pricing: dict = {}
+    if not args.mock:
+        try:
+            models = await client.list_models()
+        except Exception as e:  # noqa: BLE001 — проверка необязательна, само заседание может пройти
+            console.print(f"[yellow]Не удалось получить список моделей OpenRouter ({e!r}); проверка пропущена.[/]")
+            models = []
+        if models:
+            pricing = parse_pricing(models)
+            missing = unknown_models(cfg, set(pricing))
+            if missing:
+                console.print("[red bold]На OpenRouter нет моделей из config.yaml:[/]")
+                for model, similar in missing.items():
+                    hint = f" — возможно: {', '.join(similar)}" if similar else ""
+                    console.print(f"  • {model}{hint}")
+                console.print("Исправьте id в config.yaml (поиск: python -m council models <название>) "
+                              "или исключите участника через --only.")
+                return 2
+
+    est = estimate(cfg, pricing, mode=mode, rounds=rounds,
+                   n_options=len(options) if options else None, has_criteria=bool(criteria))
+    t = Table(title=f"План заседания: режим {mode}" + (f", раундов {rounds}" if mode == "debate" else ""))
+    for col in ("Участник", "Модель", "Вызовов", "Токены ~вход/выход", "Стоимость ~"):
+        t.add_column(col)
+    for m in est.members:
+        cost = f"${m.cost:.4f}" if m.cost is not None else "?"
+        t.add_row(m.name, m.model, str(m.calls), f"{m.prompt_tokens}/{m.completion_tokens}", cost)
+    console.print(t)
+    if pricing:
+        console.print(f"Оценка: [bold]${est.low:.3f} – ${est.high:.3f}[/] за {est.calls} вызовов "
+                      f"(лимит ${cfg.max_cost_usd:.2f})")
+        if est.high > cfg.max_cost_usd:
+            console.print("[yellow]Верхняя оценка выше лимита — заседание может остановиться по бюджету "
+                          "(увеличьте --budget или уменьшите --rounds).[/]")
+    if args.dry_run:
+        return 0
+    if not args.mock and not args.yes and sys.stdin.isatty():
+        answer = console.input("Начать заседание? [Y/n] ").strip().lower()
+        if answer not in ("", "y", "yes", "д", "да"):
+            console.print("Отменено.")
+            return 0
+    return None
 
 
 async def _ask(args) -> int:
@@ -106,16 +156,22 @@ async def _ask(args) -> int:
                         + (f"\nАдвокат дьявола: {cfg.devil_advocate}" if cfg.devil_advocate else "")
                         + f"\nЛимит бюджета: ${cfg.max_cost_usd:.2f}" + ("\n[yellow]MOCK-режим[/]" if args.mock else ""),
                         title="Совет нейросетей"))
-    client = _make_client(cfg, args.mock)
-    council = Council(cfg, client, on_event=_on_event, seed=args.seed)
+    options = _read_options(args)
+    mode = "evaluate" if options else (args.mode or cfg.mode)
+    rounds = args.rounds if args.rounds is not None else cfg.debate_rounds
+    client = _make_client(cfg, args.mock, need_key=not args.dry_run)
     try:
+        go = await _preflight(client, cfg, args, mode=mode, rounds=rounds, options=options, criteria=criteria)
+        if go is not None:
+            return go
+        council = Council(cfg, client, on_event=_on_event, seed=args.seed)
         res = await council.run(
             question,
             criteria=criteria,
-            options=_read_options(args),
+            options=options,
             context=context,
-            mode=args.mode,
-            rounds=args.rounds,
+            mode=mode,
+            rounds=rounds,
         )
     except CouncilError as e:
         console.print(f"[red bold]Заседание прервано:[/] {e}")
@@ -180,6 +236,8 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
     a.add_argument("--seed", type=int, help="seed для перемешивания меток")
     a.add_argument("--mock", action="store_true", help="прогон без ключа на фейковых ответах")
+    a.add_argument("--dry-run", action="store_true", help="только проверить модели и оценить стоимость")
+    a.add_argument("-y", "--yes", action="store_true", help="не спрашивать подтверждение перед запуском")
 
     m = sub.add_parser("models", help="список моделей OpenRouter (чтобы найти точные id)")
     m.add_argument("search", nargs="?", help="фильтр, напр. kimi или deepseek")
