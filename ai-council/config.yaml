@@ -1,0 +1,48 @@
+# Конфигурация «Совета нейросетей».
+# id моделей — это slug-и OpenRouter. Они периодически обновляются:
+# проверить актуальные можно командой `python -m council models <поиск>`.
+
+language: Russian        # на каком языке модели пишут ответы
+mode: debate             # quick | debate | evaluate (evaluate включается сам при --option)
+debate_rounds: 1         # раундов «критика → доработка» в режиме debate
+min_quorum: 2            # минимум участников, чьи предложения получены
+max_cost_usd: 2.0        # жёсткий лимит стоимости одного заседания
+temperature: 0.7
+max_tokens: 4000         # с запасом: reasoning-модели тратят токены на размышления
+timeout_s: 180
+max_retries: 3           # ретраи при сетевых ошибках / 429 / 5xx
+json_retries: 2          # повторы, если модель вернула JSON не по схеме
+max_concurrency: 8
+
+chair: claude            # председатель: формулирует критерии и пишет итоговое решение
+devil_advocate: deepseek # ищет слабые места и неочевидные альтернативы (можно убрать)
+runs_dir: runs           # куда сохранять отчёты и стенограммы
+
+members:
+  - name: claude
+    model: anthropic/claude-sonnet-4.5
+  - name: chatgpt
+    model: openai/gpt-5
+  - name: gemini
+    model: google/gemini-2.5-pro
+  - name: kimi
+    model: moonshotai/kimi-k2
+  - name: deepseek
+    model: deepseek/deepseek-chat
+
+  # Дополнительные участники: включите enabled: true
+  - name: grok
+    model: x-ai/grok-4
+    enabled: false
+  - name: qwen
+    model: qwen/qwen3-max
+    enabled: false
+  - name: mistral
+    model: mistralai/mistral-large
+    enabled: false
+  - name: llama
+    model: meta-llama/llama-4-maverick
+    enabled: false
+  - name: perplexity        # с поиском в интернете — полезен как фактчекер
+    model: perplexity/sonar-pro
+    enabled: false
