@@ -657,7 +657,7 @@ async def run_bot(config_path: str | Path) -> None:
     allowed = parse_allowed(os.environ.get("TELEGRAM_ALLOWED_USERS"))
     if not allowed:
         log.warning("TELEGRAM_ALLOWED_USERS пуст: бот никого не пустит, но покажет каждому его Telegram ID")
-    api = TelegramAPI(token)
+    api = TelegramAPI(token, base_url=os.environ.get("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/"))
     bot = CouncilBot(api, config_path, allowed_users=allowed)
     try:
         await bot.run()

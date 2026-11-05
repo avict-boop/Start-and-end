@@ -106,7 +106,13 @@ docker compose up -d                   # Telegram-бот
 docker compose --profile web up -d     # + веб-интерфейс (доступ через SSH-туннель)
 ```
 
-Пошаговая инструкция с нуля, от аренды сервера до первого вопроса: **[DEPLOY.md](DEPLOY.md)**.
+Установка на чистый сервер Ubuntu одной командой (скрипт спросит ключи и всё проверит):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/avict-boop/Start-and-end/refs/heads/claude/multi-ai-comparison-tool-50nc5z/ai-council/install.sh | sudo bash
+```
+
+Подробная инструкция с нуля, от аренды сервера до первого вопроса: **[DEPLOY.md](DEPLOY.md)**.
 
 ## Командная строка
 
