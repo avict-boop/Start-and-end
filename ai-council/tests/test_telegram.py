@@ -27,12 +27,15 @@ class FakeTelegram:
         else:
             body = {"_multipart": request.content[:200].decode("utf-8", "replace")}
         self.calls.append((method, body))
-        if method in self.fail:
-            code, desc = self.fail.pop(method)
+        if self.fail.get(method):
+            f = self.fail[method]
+            code, desc = f.pop(0) if isinstance(f, list) else self.fail.pop(method)
             return httpx.Response(200, json={"ok": False, "error_code": code, "description": desc})
         if method in ("sendMessage", "sendDocument"):
             self.next_id += 1
             return httpx.Response(200, json={"ok": True, "result": {"message_id": self.next_id}})
+        if method == "getUpdates":
+            return httpx.Response(200, json={"ok": True, "result": []})
         if method == "getMe":
             return httpx.Response(200, json={"ok": True, "result": {"username": "council_bot"}})
         return httpx.Response(200, json={"ok": True, "result": True})
@@ -231,3 +234,27 @@ def test_format_helpers():
     huge = split_message("x" * 9000, limit=4000)
     assert all(len(p) <= 4000 for p in huge) and sum(map(len, huge)) == 9000
     assert parse_allowed("1, 2;x, -100") == {1, 2, -100}
+
+
+def test_run_exits_on_bad_token(env):
+    bot, fake, _ = env
+    fake.fail["getMe"] = (401, "Unauthorized")
+    with pytest.raises(SystemExit, match="Неверный TELEGRAM_BOT_TOKEN"):
+        asyncio.run(bot.run())
+
+
+def test_run_retries_when_telegram_unavailable(env, monkeypatch):
+    bot, fake, _ = env
+    fake.fail["getMe"] = [(502, "Bad Gateway")] * 4  # больше, чем повторов внутри API-клиента
+    sleeps = []
+
+    async def fake_sleep(d):
+        sleeps.append(d)
+        if any(m == "getUpdates" for m, _ in fake.calls):  # Telegram «ожил», бот дошёл до опроса
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr("council.telegram.bot.asyncio.sleep", fake_sleep)
+    monkeypatch.setattr("council.telegram.api.asyncio.sleep", fake_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(bot.run())
+    assert sum(m == "getMe" for m, _ in fake.calls) == 5 and 5 in sleeps  # был повтор на уровне бота

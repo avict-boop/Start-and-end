@@ -233,7 +233,17 @@ class CouncilBot:
         return msg
 
     async def run(self) -> None:
-        me = await self.api.get_me()
+        delay = 5
+        while True:
+            try:
+                me = await self.api.get_me()
+                break
+            except TelegramError as e:
+                if e.code in (401, 404):
+                    raise SystemExit("Неверный TELEGRAM_BOT_TOKEN: проверьте токен у @BotFather") from e
+                log.warning("Telegram недоступен (%s), повтор через %d с", e, delay)
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, 120)
         self.username = me.get("username", "")
         try:
             await self.api.set_commands(COMMANDS)

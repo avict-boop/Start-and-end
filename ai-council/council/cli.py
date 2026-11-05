@@ -226,7 +226,8 @@ def _web(args) -> int:
         console.print("[red]Для веб-интерфейса установите зависимости:[/] pip install -r requirements.txt")
         return 2
     load_config(args.config)  # сразу показать ошибку конфига, а не при первом запросе
-    if args.host not in ("127.0.0.1", "localhost"):
+    in_docker = Path("/.dockerenv").exists()  # в контейнере порт наружу ограничивает docker-compose.yml
+    if args.host not in ("127.0.0.1", "localhost") and not in_docker:
         console.print("[yellow]Внимание: интерфейс без пароля будет доступен всем в сети, "
                       "и любой сможет тратить ваш баланс OpenRouter.[/]")
     console.print(f"Совет нейросетей: [bold]http://{args.host}:{args.port}[/]  (Ctrl+C — остановить)")
