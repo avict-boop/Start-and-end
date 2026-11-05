@@ -25,6 +25,7 @@ from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models
 from ..mock import MockClient
 from ..report import make_stem, save
 from ..session import Council, CouncilError
+from .auth import BasicAuth
 
 log = logging.getLogger("council.web")
 STATIC = Path(__file__).parent / "static"
@@ -131,7 +132,7 @@ class RunState:
 # ---------------------------------------------------------------- app
 
 
-def create_app(config_path: str | Path, *, mock_delay: float = 0.6) -> FastAPI:
+def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: str | None = None) -> FastAPI:
     config_path = Path(config_path)
     app = FastAPI(title="Совет нейросетей", docs_url="/api/docs")
     runs: dict[str, RunState] = {}
@@ -347,9 +348,19 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6) -> FastAPI:
             raise HTTPException(404, "заседание не найдено")
         return {"ok": True}
 
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
     @app.get("/")
     async def index() -> FileResponse:
         return FileResponse(STATIC / "index.html")
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+    password = os.environ.get("WEB_PASSWORD", "") if password is None else password
+    if password:
+        user = os.environ.get("WEB_USER", "").strip() or "admin"
+        trust = os.environ.get("TRUST_PROXY", "") == "1"
+        return BasicAuth(app, user=user, password=password, trust_proxy=trust)  # type: ignore[return-value]
     return app

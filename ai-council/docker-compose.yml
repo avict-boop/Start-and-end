@@ -1,5 +1,7 @@
-# Запуск: docker compose up -d            — Telegram-бот
-#         docker compose --profile web up -d — бот + веб-интерфейс (только для localhost сервера)
+# Запуск (обычно это делает install.sh):
+#   docker compose up -d                        — только Telegram-бот
+#   docker compose --profile web up -d          — + веб-интерфейс на localhost сервера (доступ через SSH-туннель)
+#   docker compose --profile https up -d        — + веб-интерфейс из интернета по HTTPS с паролем (нужны DOMAIN и WEB_PASSWORD в .env)
 # Подробности — DEPLOY.md
 
 x-common: &common
@@ -21,17 +23,38 @@ services:
 
   web:
     <<: *common
-    profiles: ["web"]
+    profiles: ["web", "https"]
     command: ["python", "-m", "council", "web", "--host", "0.0.0.0", "--port", "8000"]
-    # Порт открыт только на самом сервере: у веб-интерфейса нет пароля.
-    # Заходить через SSH-туннель (см. DEPLOY.md).
+    environment:
+      TRUST_PROXY: "1"   # реальный IP клиента берётся из X-Forwarded-For (для защиты от перебора пароля)
+    # Наружу порт открыт только на самом сервере; из интернета — через Caddy (профиль https)
     ports:
       - "127.0.0.1:8000:8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/config', timeout=5)"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
       interval: 60s
       timeout: 10s
       retries: 3
 
+  caddy:
+    image: caddy:2.8
+    profiles: ["https"]
+    restart: unless-stopped
+    depends_on: [web]
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data       # сертификаты
+      - caddy-config:/config
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
 volumes:
   council-runs:
+  caddy-data:
+  caddy-config:

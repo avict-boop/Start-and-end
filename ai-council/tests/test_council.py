@@ -160,3 +160,14 @@ def test_config_validation():
         make_cfg(chair="nobody")
     with pytest.raises(ValueError):
         CouncilConfig.model_validate({"chair": "a", "members": [{"name": "a", "model": "x"}]})
+
+
+def test_load_dotenv(tmp_path, monkeypatch):
+    import os
+    from council.config import load_dotenv
+    for k in ("A1", "A2", "A3", "A4"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("A4", "keep")
+    (tmp_path / ".env").write_text('# c\nA1=plain  # comment\nA2="quoted # not comment"\nexport A3=x:y\nA4=override\n')
+    load_dotenv(tmp_path / ".env")
+    assert (os.environ["A1"], os.environ["A2"], os.environ["A3"], os.environ["A4"]) == ("plain", "quoted # not comment", "x:y", "keep")

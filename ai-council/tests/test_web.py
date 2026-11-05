@@ -99,3 +99,30 @@ def test_history_replay_from_file(client, tmp_path):
 def test_path_traversal_rejected(client):
     assert client.get("/api/sessions/..%2Fconfig/report").status_code == 404
     assert client.get("/api/sessions/nope/events").status_code == 404
+
+
+def test_password_protection(tmp_path, monkeypatch):
+    import base64
+    cfg = {"chair": "a", "runs_dir": str(tmp_path / "runs"), "members": [{"name": n, "model": f"m/{n}"} for n in "ab"]}
+    (tmp_path / "c.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    monkeypatch.setenv("WEB_USER", "boss")
+    monkeypatch.setenv("TRUST_PROXY", "1")
+    app = create_app(tmp_path / "c.yaml", mock_delay=0, password="s3cret-pass")
+    auth = lambda u, p: {"Authorization": "Basic " + base64.b64encode(f"{u}:{p}".encode()).decode()}  # noqa: E731
+    with TestClient(app) as c:
+        assert c.get("/healthz").status_code == 200                       # проверка здоровья без пароля
+        r = c.get("/")
+        assert r.status_code == 401 and "Basic" in r.headers["www-authenticate"]
+        assert c.get("/api/config", headers=auth("boss", "wrong")).status_code == 401
+        assert c.get("/api/config", headers=auth("boss", "s3cret-pass")).status_code == 200
+        assert c.get("/static/app.js", headers=auth("boss", "s3cret-pass")).status_code == 200
+        # перебор: после 10 ошибок адрес блокируется, даже с верным паролем
+        bad = {**auth("boss", "x"), "X-Forwarded-For": "6.6.6.6"}
+        for _ in range(10):
+            assert c.get("/", headers=bad).status_code == 401
+        assert c.get("/", headers={**auth("boss", "s3cret-pass"), "X-Forwarded-For": "6.6.6.6"}).status_code == 429
+        assert c.get("/", headers={**auth("boss", "s3cret-pass"), "X-Forwarded-For": "7.7.7.7"}).status_code == 200
+        # SSE тоже за паролем
+        sid = c.post("/api/sessions", json={"question": "Вопрос?", "mock": True},
+                     headers=auth("boss", "s3cret-pass")).json()["id"]
+        assert c.get(f"/api/sessions/{sid}/events").status_code == 401

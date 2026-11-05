@@ -1,0 +1,13 @@
+# HTTPS для веб-интерфейса: Caddy сам получает и продлевает сертификат Let's Encrypt.
+# Адрес берётся из переменной DOMAIN в .env (свой домен или бесплатный вида 1-2-3-4.sslip.io).
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy web:8000
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}

@@ -227,9 +227,9 @@ def _web(args) -> int:
         return 2
     load_config(args.config)  # сразу показать ошибку конфига, а не при первом запросе
     in_docker = Path("/.dockerenv").exists()  # в контейнере порт наружу ограничивает docker-compose.yml
-    if args.host not in ("127.0.0.1", "localhost") and not in_docker:
+    if args.host not in ("127.0.0.1", "localhost") and not in_docker and not os.environ.get("WEB_PASSWORD"):
         console.print("[yellow]Внимание: интерфейс без пароля будет доступен всем в сети, "
-                      "и любой сможет тратить ваш баланс OpenRouter.[/]")
+                      "и любой сможет тратить ваш баланс OpenRouter. Задайте WEB_PASSWORD в .env.[/]")
     console.print(f"Совет нейросетей: [bold]http://{args.host}:{args.port}[/]  (Ctrl+C — остановить)")
     uvicorn.run(create_app(args.config), host=args.host, port=args.port, log_level="warning")
     return 0

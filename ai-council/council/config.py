@@ -78,7 +78,11 @@ def load_dotenv(path: str | Path = ".env") -> None:
             continue
         key, value = line.split("=", 1)
         key = key.strip().removeprefix("export ").strip()
-        value = value.strip().strip("'\"")
+        value = value.strip()
+        if value[:1] in ("'", '"') and value[-1:] == value[:1] and len(value) > 1:
+            value = value[1:-1]
+        elif " #" in value:  # комментарий после значения: KEY=value  # пояснение
+            value = value.split(" #", 1)[0].rstrip()
         os.environ.setdefault(key, value)
 
 
