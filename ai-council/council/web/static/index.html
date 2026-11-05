@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Совет нейросетей</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%235b5bd6'/><circle cx='16' cy='9' r='3' fill='white'/><circle cx='9' cy='20' r='3' fill='white'/><circle cx='23' cy='20' r='3' fill='white'/></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo" aria-hidden="true"></span>Совет нейросетей</div>
+  <div class="topbar-right">
+    <span id="keyStatus" class="pill"></span>
+    <button id="newBtn" class="ghost" type="button">+ Новое заседание</button>
+  </div>
+</header>
+
+<div class="layout">
+  <aside class="sidebar">
+    <form id="form" class="card" autocomplete="off">
+      <label class="field">
+        <span>Вопрос для совета</span>
+        <textarea id="question" rows="4" required minlength="3"
+          placeholder="Например: какой стек выбрать для MVP интернет-магазина с бюджетом 1 млн ₽?"></textarea>
+      </label>
+
+      <div class="field">
+        <span>Режим</span>
+        <div class="segmented" id="modeSeg" role="radiogroup">
+          <button type="button" data-mode="debate" role="radio">Дебаты</button>
+          <button type="button" data-mode="quick" role="radio">Быстро</button>
+          <button type="button" data-mode="evaluate" role="radio">Оценка вариантов</button>
+        </div>
+        <small id="modeHint" class="hint"></small>
+      </div>
+
+      <label class="field" id="roundsField">
+        <span>Раундов критики и доработки</span>
+        <input id="rounds" type="number" min="1" max="5" value="1">
+      </label>
+
+      <label class="field" id="optionsField" hidden>
+        <span>Ваши варианты</span>
+        <textarea id="options" rows="5"
+          placeholder="Каждый вариант с новой строки.&#10;Многострочные варианты разделяйте строкой ---"></textarea>
+      </label>
+
+      <label class="field">
+        <span>Критерии <em>(необязательно, через запятую)</em></span>
+        <input id="criteria" type="text" placeholder="Если пусто — председатель предложит сам">
+      </label>
+
+      <details class="field">
+        <summary>Дополнительный контекст</summary>
+        <textarea id="context" rows="4" placeholder="Факты, ограничения, данные — всё, что совету нужно знать"></textarea>
+      </details>
+
+      <div class="field">
+        <span>Участники</span>
+        <div id="members" class="members"></div>
+      </div>
+
+      <div class="row2">
+        <label class="field">
+          <span>Председатель</span>
+          <select id="chair"></select>
+        </label>
+        <label class="field">
+          <span>Адвокат дьявола</span>
+          <select id="devil"></select>
+        </label>
+      </div>
+
+      <div class="row2">
+        <label class="field">
+          <span>Лимит, $</span>
+          <input id="budget" type="number" min="0.01" max="100" step="any">
+        </label>
+        <label class="check field">
+          <input id="mock" type="checkbox">
+          <span>Демо-режим<br><small class="hint">без ключа и затрат</small></span>
+        </label>
+      </div>
+
+      <div id="formError" class="error" hidden></div>
+      <div id="estimate" class="estimate" hidden></div>
+
+      <div class="actions">
+        <button id="estimateBtn" type="button" class="secondary">Оценить стоимость</button>
+        <button id="startBtn" type="submit" class="primary">Начать заседание</button>
+      </div>
+    </form>
+
+    <section class="card history">
+      <h2>История</h2>
+      <ul id="history"><li class="muted">Пока пусто</li></ul>
+    </section>
+  </aside>
+
+  <main id="main">
+    <section id="empty" class="empty card">
+      <h1>Несколько нейросетей решают вашу задачу как совет экспертов</h1>
+      <ol class="steps-intro">
+        <li><b>Предложения.</b> Каждая модель вслепую предлагает свой вариант.</li>
+        <li><b>Критика.</b> Варианты анонимны (A, B, C…), модели оценивают чужие по критериям.</li>
+        <li><b>Доработка.</b> Каждая модель улучшает свой вариант с учётом критики.</li>
+        <li><b>Голосование.</b> Ранжирование чужих вариантов, подсчёт по Борда.</li>
+        <li><b>Вердикт.</b> Председатель сводит лучшее в итоговое решение.</li>
+      </ol>
+      <p class="muted">Заполните форму слева. Без ключа OpenRouter попробуйте демо-режим.</p>
+    </section>
+
+    <div id="session" hidden>
+      <section class="card head">
+        <div class="head-top">
+          <div>
+            <div class="eyebrow" id="sMeta"></div>
+            <h1 id="sQuestion"></h1>
+            <div id="sRefined" class="muted"></div>
+            <div id="sCriteria" class="chips"></div>
+          </div>
+          <div class="head-stats">
+            <div><span class="stat-label">Стоимость</span><span id="sCost" class="stat">$0.0000</span></div>
+            <div><span class="stat-label">Время</span><span id="sTime" class="stat">0 с</span></div>
+          </div>
+        </div>
+        <ol id="timeline" class="timeline"></ol>
+        <div class="head-bottom">
+          <div id="memberStatus" class="chips"></div>
+          <div class="head-actions">
+            <label class="check small"><input id="blind" type="checkbox"> Скрыть авторов до вердикта</label>
+            <button id="cancelBtn" type="button" class="danger" hidden>Остановить</button>
+          </div>
+        </div>
+        <div id="sError" class="error" hidden></div>
+      </section>
+
+      <section id="verdictSec" class="card verdict" hidden>
+        <div class="verdict-head">
+          <div>
+            <div class="eyebrow">Решение совета</div>
+            <h2 id="vTitle"></h2>
+          </div>
+          <a id="reportLink" class="button secondary" hidden>Скачать отчёт (.md)</a>
+        </div>
+        <div id="vAnswer" class="md"></div>
+        <div class="verdict-grid">
+          <div><h3>Почему</h3><div id="vWhy" class="md"></div></div>
+          <div id="vDissentBox"><h3>Особые мнения</h3><ul id="vDissent"></ul></div>
+          <div id="vRisksBox"><h3>Риски</h3><ul id="vRisks"></ul></div>
+        </div>
+      </section>
+
+      <section id="tallySec" class="card" hidden>
+        <h2>Итоги голосования</h2>
+        <div class="table-wrap"><table id="tally" class="table"></table></div>
+        <div id="ballots" class="ballots"></div>
+      </section>
+
+      <section id="proposalsSec" class="card" hidden>
+        <h2>Варианты</h2>
+        <div id="proposals" class="proposals"></div>
+      </section>
+
+      <section id="critiqueSec" class="card" hidden>
+        <h2>Критика <span class="muted small">— средняя оценка 1–10, наведите на ячейку для подробностей</span></h2>
+        <div class="table-wrap"><table id="matrix" class="table matrix"></table></div>
+      </section>
+
+      <section id="failSec" class="card" hidden>
+        <h2>Сбои</h2>
+        <ul id="failures" class="failures"></ul>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

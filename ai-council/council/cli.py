@@ -217,6 +217,23 @@ async def _models(args) -> int:
     return 0
 
 
+def _web(args) -> int:
+    try:
+        import uvicorn
+
+        from .web.app import create_app
+    except ImportError:
+        console.print("[red]Для веб-интерфейса установите зависимости:[/] pip install -r requirements.txt")
+        return 2
+    load_config(args.config)  # сразу показать ошибку конфига, а не при первом запросе
+    if args.host not in ("127.0.0.1", "localhost"):
+        console.print("[yellow]Внимание: интерфейс без пароля будет доступен всем в сети, "
+                      "и любой сможет тратить ваш баланс OpenRouter.[/]")
+    console.print(f"Совет нейросетей: [bold]http://{args.host}:{args.port}[/]  (Ctrl+C — остановить)")
+    uvicorn.run(create_app(args.config), host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(PROJECT_DIR / ".env")
     load_dotenv(".env")
@@ -242,7 +259,14 @@ def main(argv: list[str] | None = None) -> int:
     m = sub.add_parser("models", help="список моделей OpenRouter (чтобы найти точные id)")
     m.add_argument("search", nargs="?", help="фильтр, напр. kimi или deepseek")
 
+    w = sub.add_parser("web", help="запустить веб-интерфейс")
+    w.add_argument("--host", default="127.0.0.1", help="адрес (0.0.0.0 — доступ из локальной сети)")
+    w.add_argument("--port", type=int, default=8000)
+    w.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
+
     args = p.parse_args(argv)
+    if args.cmd == "web":
+        return _web(args)
     try:
         return asyncio.run(_ask(args) if args.cmd == "ask" else _models(args))
     except KeyboardInterrupt:

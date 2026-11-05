@@ -130,6 +130,7 @@ class Council:
         s.prompt_tokens += comp.prompt_tokens
         s.completion_tokens += comp.completion_tokens
         s.cost += comp.cost
+        self._emit("cost", member=member.name, total=self.total_cost)
 
     async def _ask(
         self,
@@ -207,7 +208,7 @@ class Council:
                 self._emit("member_failed", stage=stage, member=name, error=repr(res))
             else:
                 ok[name] = res
-                self._emit("member_done", stage=stage, member=name)
+                self._emit("member_done", stage=stage, member=name, result=res)
         return ok
 
     # ------------------------------------------------------------------ main flow
@@ -378,6 +379,7 @@ class Council:
                 risks=top.risks,
             )
 
+        self._emit("verdict", verdict=verdict)
         return SessionResult(
             question=question,
             refined_question=refined,

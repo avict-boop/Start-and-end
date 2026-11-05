@@ -88,11 +88,15 @@ def render_markdown(res: SessionResult) -> str:
     return "\n".join(out) + "\n"
 
 
-def save(res: SessionResult, runs_dir: str | Path) -> tuple[Path, Path]:
+def make_stem(question: str) -> str:
+    slug = re.sub(r"[^\w]+", "-", question.lower(), flags=re.U).strip("-")[:40] or "session"
+    return f"{datetime.now():%Y%m%d-%H%M%S}-{slug}"
+
+
+def save(res: SessionResult, runs_dir: str | Path, stem: str | None = None) -> tuple[Path, Path]:
     d = Path(runs_dir)
     d.mkdir(parents=True, exist_ok=True)
-    slug = re.sub(r"[^\w]+", "-", res.question.lower(), flags=re.U).strip("-")[:40] or "session"
-    stem = f"{datetime.now():%Y%m%d-%H%M%S}-{slug}"
+    stem = stem or make_stem(res.question)
     json_path = d / f"{stem}.json"
     md_path = d / f"{stem}.md"
     json_path.write_text(json.dumps(res.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
