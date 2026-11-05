@@ -80,3 +80,42 @@ def load_dotenv(path: str | Path = ".env") -> None:
         key = key.strip().removeprefix("export ").strip()
         value = value.strip().strip("'\"")
         os.environ.setdefault(key, value)
+
+
+class OverrideError(ValueError):
+    """Некорректные пользовательские настройки заседания."""
+
+
+def with_overrides(
+    base: CouncilConfig,
+    *,
+    members: list[str] | None = None,
+    chair: str | None = None,
+    devil_advocate: str | None = None,  # "" — убрать адвоката дьявола, None — оставить как есть
+    budget: float | None = None,
+) -> CouncilConfig:
+    """Возвращает копию конфига с выбранными участниками/ролями/бюджетом, проверяя результат."""
+    from pydantic import ValidationError
+
+    data = base.model_dump()
+    if members is not None:
+        unknown = set(members) - {m["name"] for m in data["members"]}
+        if unknown:
+            raise OverrideError(f"неизвестные участники: {', '.join(sorted(unknown))}")
+        for m in data["members"]:
+            m["enabled"] = m["name"] in members
+    enabled = [m["name"] for m in data["members"] if m["enabled"]]
+    if chair:
+        data["chair"] = chair
+    elif data["chair"] not in enabled and enabled:
+        data["chair"] = enabled[0]
+    if devil_advocate is not None:
+        data["devil_advocate"] = devil_advocate or None
+    elif data.get("devil_advocate") not in enabled:
+        data["devil_advocate"] = None
+    if budget:
+        data["max_cost_usd"] = budget
+    try:
+        return CouncilConfig.model_validate(data)
+    except ValidationError as e:
+        raise OverrideError("; ".join(err["msg"].removeprefix("Value error, ") for err in e.errors())) from e

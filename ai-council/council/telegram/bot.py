@@ -1,0 +1,656 @@
+"""Telegram-бот совета нейросетей.
+
+Запуск: `python -m council telegram`. Нужны переменные окружения (или .env):
+  TELEGRAM_BOT_TOKEN       токен от @BotFather
+  TELEGRAM_ALLOWED_USERS   Telegram ID пользователей через запятую, кому можно пользоваться ботом
+  OPENROUTER_API_KEY       ключ OpenRouter (без него работает только демо-режим)
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+import time
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
+
+from ..client import LLMClient, OpenRouterClient
+from ..config import CouncilConfig, OverrideError, load_config, with_overrides
+from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models
+from ..mock import MockClient
+from ..report import make_stem, render_markdown, save
+from ..session import Council, CouncilError, SessionResult
+from .api import TelegramAPI, TelegramError
+from .format import esc, md_to_tg, split_message, strip_tags
+
+log = logging.getLogger("council.telegram")
+
+STAGES = [("framing", "Постановка"), ("proposal", "Предложения"), ("critique", "Критика"),
+          ("revision", "Доработка"), ("vote", "Голосование"), ("verdict", "Вердикт")]
+MODE_NAME = {"debate": "Дебаты", "quick": "Быстро", "evaluate": "Оценка вариантов"}
+COMMANDS = [
+    ("ask", "задать вопрос совету"),
+    ("evaluate", "выбрать из ваших вариантов"),
+    ("settings", "режим, раунды, участники, демо"),
+    ("budget", "лимит стоимости, напр. /budget 0.5"),
+    ("stop", "остановить идущее заседание"),
+    ("help", "как пользоваться"),
+]
+HELP = """<b>Совет нейросетей</b>
+Несколько моделей (Claude, ChatGPT, Gemini, Kimi, DeepSeek…) решают вашу задачу как совет экспертов: предлагают варианты вслепую, анонимно критикуют друг друга, дорабатывают, голосуют, а председатель выносит решение.
+
+<b>Как пользоваться</b>
+• Просто напишите вопрос (в группе: <code>/ask вопрос</code>) — бот покажет настройки и оценку стоимости, нажмите «Начать».
+• <code>/evaluate</code> — выбор из готовых вариантов: первая строка — вопрос, дальше по варианту на строку (или блоки через <code>---</code>).
+• /settings — режим, раунды, участники, демо-режим. Настройки запоминаются для чата.
+• /budget 0.5 — лимит стоимости одного заседания в $.
+• /stop — остановить заседание.
+
+После заседания придут решение, итоги голосования и полный отчёт файлом."""
+
+
+# ---------------------------------------------------------------- состояние
+
+
+@dataclass
+class ChatSettings:
+    mode: str = "debate"
+    rounds: int = 1
+    members: list[str] | None = None  # None — как в config.yaml
+    budget: float | None = None
+    demo: bool = False
+
+
+@dataclass
+class Pending:
+    question: str
+    options: list[str] | None = None
+    card_id: int | None = None
+    view: str = "main"  # main | members
+
+
+@dataclass
+class Progress:
+    question: str
+    mode: str
+    rounds: int
+    members: list[str]
+    chair: str
+    demo: bool
+    stage: str | None = None
+    stage_title: str = ""
+    done_stages: set[str] = field(default_factory=set)
+    work: dict[str, str] = field(default_factory=dict)
+    proposals: dict[str, str] = field(default_factory=dict)
+    authors: dict[str, str | None] = field(default_factory=dict)
+    failures: list[str] = field(default_factory=list)
+    cost: float = 0.0
+    started: float = field(default_factory=time.monotonic)
+
+    def apply(self, event: str, d: dict[str, Any]) -> None:
+        if event == "stage":
+            if self.stage and self.stage != d["stage"]:
+                self.done_stages.add(self.stage)
+            self.stage, self.stage_title = d["stage"], d["title"]
+            who = [self.chair] if d["stage"] in ("framing", "verdict") else self.members
+            self.work = {n: "work" for n in who}
+        elif event == "framing":
+            self.done_stages.add("framing")
+        elif event == "member_done":
+            self.work[d["member"]] = "done"
+        elif event == "member_failed":
+            self.work[d["member"]] = "fail"
+            self.failures.append(f"{d['member']} ({d['stage']}): {d['error'][:150]}")
+        elif event == "proposals":
+            self.proposals = {l: p.title for l, p in d["proposals"].items()}
+            self.authors = d["authors"]
+        elif event == "revisions":
+            self.proposals.update({l: p.title for l, p in d["revised"].items()})
+        elif event == "cost":
+            self.cost = d["total"]
+
+    def skipped(self) -> set[str]:
+        return {"quick": {"critique", "revision"}, "evaluate": {"proposal", "revision"}}.get(self.mode, set())
+
+    def render(self, *, final: str | None = None) -> str:
+        head = final or "🏛 <b>Совет заседает…</b>"
+        meta = MODE_NAME.get(self.mode, self.mode) + (f", раундов: {self.rounds}" if self.mode == "debate" else "")
+        if self.demo:
+            meta += " · демо"
+        lines = [head, f"<i>{esc(meta)}</i>", f"❓ {esc(self.question[:300])}", ""]
+        steps = []
+        for key, name in STAGES:
+            if key in self.skipped():
+                continue
+            icon = "✅" if key in self.done_stages else "⏳" if key == self.stage else "▫️"
+            steps.append(f"{icon} {name}")
+        lines.append("  ".join(steps))
+        if self.stage and not final:
+            lines.append(f"<b>Сейчас:</b> {esc(self.stage_title)}")
+            icons = {"work": "⏳", "done": "✅", "fail": "❌"}
+            lines.append(" ".join(f"{icons[s]}{esc(n)}" for n, s in self.work.items()))
+        if self.proposals:
+            lines += ["", "<b>Варианты:</b>"]
+            lines += [f"<b>{l}</b> — {esc(t[:80])}" for l, t in sorted(self.proposals.items())]
+        if self.failures:
+            lines += ["", "<b>Сбои:</b>"] + [f"❌ {esc(f)}" for f in self.failures[-5:]]
+        secs = int(time.monotonic() - self.started)
+        lines += ["", f"💰 ${self.cost:.4f} · ⏱ {secs // 60} мин {secs % 60} с" if secs >= 60
+                  else f"💰 ${self.cost:.4f} · ⏱ {secs} с"]
+        return "\n".join(lines)
+
+
+@dataclass
+class Running:
+    task: asyncio.Task
+    progress: Progress
+    message_id: int
+    dirty: bool = True
+
+
+# ---------------------------------------------------------------- бот
+
+
+class CouncilBot:
+    def __init__(
+        self,
+        api: TelegramAPI,
+        config_path: str | Path,
+        *,
+        allowed_users: set[int],
+        llm_factory: Any = None,
+        edit_interval: float = 2.0,
+        mock_delay: float = 0.8,
+    ) -> None:
+        self.api = api
+        self.config_path = Path(config_path)
+        self.allowed = allowed_users
+        self.edit_interval = edit_interval
+        self.mock_delay = mock_delay
+        self.llm_factory = llm_factory or self._default_llm
+        self.catalog = ModelCatalog()
+        self.pending: dict[int, Pending] = {}
+        self.running: dict[int, Running] = {}
+        self.username = ""
+        cfg = self.base_config()
+        self.runs_dir = Path(cfg.runs_dir) if Path(cfg.runs_dir).is_absolute() else self.config_path.parent / cfg.runs_dir
+        self.settings_path = self.runs_dir / "telegram_settings.json"
+        self.settings: dict[int, ChatSettings] = self._load_settings()
+
+    # ------------------------------------------------------------ инфраструктура
+
+    def base_config(self) -> CouncilConfig:
+        return load_config(self.config_path)
+
+    def _load_settings(self) -> dict[int, ChatSettings]:
+        try:
+            raw = json.loads(self.settings_path.read_text(encoding="utf-8"))
+            return {int(k): ChatSettings(**v) for k, v in raw.items()}
+        except (OSError, ValueError, TypeError):
+            return {}
+
+    def _save_settings(self) -> None:
+        try:
+            self.runs_dir.mkdir(parents=True, exist_ok=True)
+            data = {str(k): asdict(v) for k, v in self.settings.items()}
+            self.settings_path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+        except OSError as e:
+            log.warning("не удалось сохранить настройки: %s", e)
+
+    def chat_settings(self, chat_id: int) -> ChatSettings:
+        if chat_id not in self.settings:
+            self.settings[chat_id] = ChatSettings(demo=not os.environ.get("OPENROUTER_API_KEY"))
+        return self.settings[chat_id]
+
+    def _default_llm(self, cfg: CouncilConfig, demo: bool) -> LLMClient:
+        if demo:
+            return MockClient(delay=self.mock_delay)
+        return OpenRouterClient(os.environ["OPENROUTER_API_KEY"], timeout=cfg.timeout_s, max_retries=cfg.max_retries)
+
+    def build_config(self, s: ChatSettings) -> CouncilConfig:
+        base = self.base_config()
+        members = s.members
+        if members is not None:
+            known = {m.name for m in base.members}
+            members = [m for m in members if m in known]  # участника могли удалить из config.yaml
+        return with_overrides(base, members=members, budget=s.budget)
+
+    async def send(self, chat_id: int, text: str, **kw: Any) -> dict[str, Any] | None:
+        """Отправка длинного HTML с разбиением; при ошибке разметки — простым текстом."""
+        parts = split_message(text)
+        msg = None
+        for i, part in enumerate(parts):
+            markup = kw.get("reply_markup") if i == len(parts) - 1 else None
+            try:
+                msg = await self.api.send_message(chat_id, part, reply_markup=markup)
+            except TelegramError as e:
+                if "parse" not in e.description.lower():
+                    raise
+                msg = await self.api.send_message(chat_id, esc(strip_tags(part)), reply_markup=markup)
+        return msg
+
+    async def run(self) -> None:
+        me = await self.api.get_me()
+        self.username = me.get("username", "")
+        try:
+            await self.api.set_commands(COMMANDS)
+        except TelegramError as e:
+            log.warning("setMyCommands: %s", e)
+        log.info("бот @%s запущен", self.username)
+        offset = None
+        while True:
+            try:
+                updates = await self.api.get_updates(offset)
+            except TelegramError as e:
+                log.warning("getUpdates: %s", e)
+                await asyncio.sleep(5)
+                continue
+            for u in updates:
+                offset = u["update_id"] + 1
+                asyncio.create_task(self.handle_update_safe(u))
+            await asyncio.sleep(0)  # дать поработать обработчикам, даже если сервер ответил мгновенно
+
+    async def handle_update_safe(self, update: dict[str, Any]) -> None:
+        try:
+            await self.handle_update(update)
+        except Exception:  # noqa: BLE001
+            log.exception("ошибка обработки update %s", update.get("update_id"))
+
+    async def shutdown(self) -> None:
+        for r in self.running.values():
+            r.task.cancel()
+        await asyncio.gather(*(r.task for r in self.running.values()), return_exceptions=True)
+
+    # ------------------------------------------------------------ входящие
+
+    async def handle_update(self, update: dict[str, Any]) -> None:
+        if "callback_query" in update:
+            await self.on_callback(update["callback_query"])
+        elif "message" in update:
+            await self.on_message(update["message"])
+
+    async def on_message(self, msg: dict[str, Any]) -> None:
+        text = (msg.get("text") or "").strip()
+        chat_id = msg["chat"]["id"]
+        user_id = (msg.get("from") or {}).get("id")
+        private = msg["chat"].get("type") == "private"
+        if not text:
+            return
+        cmd, _, arg = text.partition(" ") if text.startswith("/") else ("", "", text)
+        if cmd and "\n" in cmd:  # "/evaluate\nвопрос..." — команда и текст через перевод строки
+            cmd, _, rest = cmd.partition("\n")
+            arg = rest + (" " + arg if arg else "")
+        cmd = cmd.lower()
+        if "@" in cmd:
+            cmd, _, target = cmd.partition("@")
+            if self.username and target != self.username.lower():
+                return
+        arg = arg.strip()
+
+        if user_id not in self.allowed:
+            if private or cmd in ("/start", "/help"):
+                await self.send(chat_id, "⛔ Доступ к боту закрыт.\n"
+                                f"Ваш Telegram ID: <code>{user_id}</code>\n"
+                                "Владелец бота может добавить его в <code>TELEGRAM_ALLOWED_USERS</code>.")
+            return
+
+        if cmd in ("/start", "/help"):
+            await self.send(chat_id, HELP)
+        elif cmd == "/settings":
+            await self.show_settings(chat_id)
+        elif cmd == "/budget":
+            await self.cmd_budget(chat_id, arg)
+        elif cmd == "/stop":
+            await self.cmd_stop(chat_id)
+        elif cmd == "/evaluate":
+            await self.cmd_evaluate(chat_id, arg)
+        elif cmd == "/ask":
+            if not arg:
+                await self.send(chat_id, "Напишите вопрос после команды: <code>/ask ваш вопрос</code>")
+            else:
+                await self.new_question(chat_id, arg)
+        elif cmd:
+            if private:
+                await self.send(chat_id, "Неизвестная команда. /help — справка.")
+        elif private:
+            await self.new_question(chat_id, arg)
+
+    async def cmd_budget(self, chat_id: int, arg: str) -> None:
+        s = self.chat_settings(chat_id)
+        if not arg:
+            cur = s.budget or self.base_config().max_cost_usd
+            await self.send(chat_id, f"Лимит заседания: <b>${cur:.2f}</b>. Изменить: <code>/budget 0.5</code>")
+            return
+        try:
+            value = float(arg.replace(",", ".").lstrip("$"))
+            if not 0 < value <= 100:
+                raise ValueError
+        except ValueError:
+            await self.send(chat_id, "Укажите число от 0.01 до 100, например <code>/budget 0.5</code>")
+            return
+        s.budget = value
+        self._save_settings()
+        await self.send(chat_id, f"✅ Лимит заседания: <b>${value:.2f}</b>")
+
+    async def cmd_stop(self, chat_id: int) -> None:
+        r = self.running.get(chat_id)
+        if not r:
+            await self.send(chat_id, "Сейчас заседание не идёт.")
+            return
+        r.task.cancel()
+
+    async def cmd_evaluate(self, chat_id: int, arg: str) -> None:
+        text = arg.replace("\r\n", "\n").strip()
+        question, _, rest = text.partition("\n")
+        rest = rest.strip()
+        if "\n---" in rest or rest.startswith("---"):
+            options = [o.strip() for o in rest.split("---") if o.strip()]
+        else:
+            options = [re.sub(r"^\s*(?:[-•*]|\d+[.)])\s+", "", o).strip() for o in rest.split("\n") if o.strip()]
+        if not question or len(options) < 2:
+            await self.send(chat_id, "Формат:\n<code>/evaluate Какую БД выбрать?\nPostgreSQL\nClickHouse\nBigQuery</code>\n"
+                                     "Первая строка — вопрос, дальше минимум 2 варианта (по строке или блоками через ---).")
+            return
+        if len(options) > 26:
+            await self.send(chat_id, "Слишком много вариантов: максимум 26.")
+            return
+        await self.new_question(chat_id, question.strip(), options)
+
+    # ------------------------------------------------------------ карточка вопроса
+
+    async def new_question(self, chat_id: int, question: str, options: list[str] | None = None) -> None:
+        if len(question) < 3:
+            await self.send(chat_id, "Вопрос слишком короткий.")
+            return
+        old = self.pending.get(chat_id)
+        if old and old.card_id:
+            try:
+                await self.api.edit_message(chat_id, old.card_id, "<i>Вопрос заменён новым.</i>")
+            except TelegramError:
+                pass
+        p = Pending(question=question[:20000], options=options)
+        self.pending[chat_id] = p
+        text, markup = await self.card(chat_id, p)
+        msg = await self.send(chat_id, text, reply_markup=markup)
+        p.card_id = msg["message_id"] if msg else None
+
+    async def card(self, chat_id: int, p: Pending) -> tuple[str, dict]:
+        s = self.chat_settings(chat_id)
+        if p.view == "members":
+            return self._members_card(s)
+        mode = "evaluate" if p.options else s.mode
+        lines = ["🏛 <b>Вопрос для совета</b>", esc(p.question[:1500])]
+        if p.options:
+            lines += ["", "<b>Варианты:</b>"] + [f"{chr(65 + i)}. {esc(o[:200])}" for i, o in enumerate(p.options)]
+        problem = None
+        try:
+            cfg = self.build_config(s)
+        except OverrideError as e:
+            cfg, problem = None, str(e)
+        lines.append("")
+        lines.append(f"<b>Режим:</b> {MODE_NAME[mode]}" + (f", раундов: {s.rounds}" if mode == "debate" else ""))
+        if cfg:
+            lines.append("<b>Участники:</b> " + ", ".join(
+                f"{esc(m.name)}{' 🎩' if m.name == cfg.chair else ''}{' 😈' if m.name == cfg.devil_advocate else ''}"
+                for m in cfg.active_members))
+            lines.append("<i>🎩 председатель · 😈 адвокат дьявола</i>")
+            est_line, est_problem = await self._estimate_line(cfg, s, mode, p)
+            lines.append(est_line)
+            problem = problem or est_problem
+        if problem:
+            lines += ["", f"⚠️ {esc(problem)}"]
+        kb: list[list[dict]] = []
+        if not p.options:
+            kb.append([self._btn(("✓ " if s.mode == m else "") + MODE_NAME[m], f"mode:{m}") for m in ("debate", "quick")])
+            if s.mode == "debate":
+                kb.append([self._btn(("✓ " if s.rounds == r else "") + f"{r} раунд" + ("а" if r > 1 else ""), f"rounds:{r}")
+                           for r in (1, 2, 3)])
+        n = len(cfg.active_members) if cfg else 0
+        kb.append([self._btn(f"👥 Участники ({n})", "view:members"),
+                   self._btn(f"🧪 Демо: {'вкл' if s.demo else 'выкл'}", "demo")])
+        kb.append([self._btn("▶️ Начать", "go"), self._btn("✖️ Отмена", "drop")])
+        return "\n".join(lines), {"inline_keyboard": kb}
+
+    def _members_card(self, s: ChatSettings) -> tuple[str, dict]:
+        base = self.base_config()
+        active = set(s.members) if s.members is not None else {m.name for m in base.active_members}
+        rows, row = [], []
+        for m in base.members:
+            row.append(self._btn(("✅ " if m.name in active else "▫️ ") + m.name, f"mem:{m.name}"))
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([self._btn("↩️ Как в config.yaml", "mem:*"), self._btn("« Назад", "view:main")])
+        text = "👥 <b>Участники совета</b>\nОтметьте модели. Нужно минимум столько, сколько требует кворум.\n\n" + "\n".join(
+            f"{'✅' if m.name in active else '▫️'} <b>{esc(m.name)}</b> — <code>{esc(m.model)}</code>" for m in base.members)
+        return text, {"inline_keyboard": rows}
+
+    async def _estimate_line(self, cfg: CouncilConfig, s: ChatSettings, mode: str, p: Pending) -> tuple[str, str | None]:
+        pricing: dict = {}
+        problem = None
+        if not s.demo:
+            if not os.environ.get("OPENROUTER_API_KEY"):
+                problem = "Нет OPENROUTER_API_KEY — включите демо-режим или добавьте ключ."
+            models = await self.catalog.get()
+            if models:
+                pricing = parse_pricing(models)
+                missing = unknown_models(cfg, set(pricing))
+                if missing:
+                    problem = "На OpenRouter нет моделей: " + "; ".join(
+                        m + (f" (возможно: {', '.join(sim)})" if sim else "") for m, sim in missing.items()
+                    ) + ". Исправьте config.yaml или снимите участника."
+        est = estimate(cfg, pricing, mode=mode, rounds=s.rounds,
+                       n_options=len(p.options) if p.options else None, has_criteria=False)
+        if s.demo:
+            line = f"<b>Стоимость:</b> демо-режим, бесплатно ({est.calls} вызовов)"
+        elif pricing:
+            line = f"<b>Стоимость:</b> ≈ ${est.low:.3f} – ${est.high:.3f} ({est.calls} вызовов, лимит ${cfg.max_cost_usd:.2f})"
+        else:
+            line = f"<b>Стоимость:</b> не удалось оценить ({est.calls} вызовов, лимит ${cfg.max_cost_usd:.2f})"
+        return line, problem
+
+    @staticmethod
+    def _btn(text: str, data: str) -> dict[str, str]:
+        return {"text": text, "callback_data": data[:64]}
+
+    async def show_settings(self, chat_id: int) -> None:
+        s = self.chat_settings(chat_id)
+        try:
+            cfg = self.build_config(s)
+            members = ", ".join(m.name for m in cfg.active_members)
+            budget = cfg.max_cost_usd
+        except OverrideError as e:
+            members, budget = f"⚠️ {e}", s.budget or 0
+        await self.send(chat_id, "⚙️ <b>Настройки чата</b>\n"
+                        f"Режим: {MODE_NAME[s.mode]}" + (f", раундов: {s.rounds}" if s.mode == "debate" else "") + "\n"
+                        f"Участники: {esc(members)}\nЛимит: ${budget:.2f}\nДемо-режим: {'вкл' if s.demo else 'выкл'}\n\n"
+                        "Меняются кнопками под вопросом — напишите любой вопрос. Лимит: /budget 0.5")
+
+    # ------------------------------------------------------------ кнопки
+
+    async def on_callback(self, cq: dict[str, Any]) -> None:
+        data = cq.get("data") or ""
+        user_id = cq["from"]["id"]
+        message = cq.get("message") or {}
+        chat_id = message.get("chat", {}).get("id")
+        if user_id not in self.allowed:
+            await self.api.answer_callback(cq["id"], "Нет доступа")
+            return
+        if data == "stop":
+            r = self.running.get(chat_id)
+            if r and r.message_id == message.get("message_id"):
+                r.task.cancel()
+                await self.api.answer_callback(cq["id"], "Останавливаю…")
+            else:
+                await self.api.answer_callback(cq["id"], "Заседание уже завершено")
+            return
+        p = self.pending.get(chat_id)
+        if not p or p.card_id != message.get("message_id"):
+            await self.api.answer_callback(cq["id"], "Этот вопрос уже неактуален")
+            return
+        s = self.chat_settings(chat_id)
+        kind, _, value = data.partition(":")
+        if kind == "go":
+            await self.api.answer_callback(cq["id"])
+            await self.start_session(chat_id, p)
+            return
+        if kind == "drop":
+            self.pending.pop(chat_id, None)
+            await self.api.answer_callback(cq["id"], "Отменено")
+            await self.api.edit_message(chat_id, p.card_id, f"<s>{esc(p.question[:500])}</s>\n<i>Отменено.</i>")
+            return
+        if kind == "mode" and value in ("debate", "quick"):
+            s.mode = value
+        elif kind == "rounds" and value.isdigit():
+            s.rounds = max(1, min(5, int(value)))
+        elif kind == "demo":
+            s.demo = not s.demo
+        elif kind == "view" and value in ("main", "members"):
+            p.view = value
+        elif kind == "mem":
+            base = self.base_config()
+            if value == "*":
+                s.members = None
+            elif value in {m.name for m in base.members}:
+                cur = list(s.members) if s.members is not None else [m.name for m in base.active_members]
+                cur = [x for x in cur if x != value] if value in cur else cur + [value]
+                s.members = [m.name for m in base.members if m.name in cur]  # порядок как в конфиге
+        self._save_settings()
+        await self.api.answer_callback(cq["id"])
+        text, markup = await self.card(chat_id, p)
+        await self.api.edit_message(chat_id, p.card_id, text, reply_markup=markup)
+
+    # ------------------------------------------------------------ заседание
+
+    async def start_session(self, chat_id: int, p: Pending) -> None:
+        if chat_id in self.running:
+            await self.send(chat_id, "⏳ В этом чате уже идёт заседание. Дождитесь его или нажмите /stop.")
+            return
+        s = self.chat_settings(chat_id)
+        try:
+            cfg = self.build_config(s)
+        except OverrideError as e:
+            await self.send(chat_id, f"⚠️ {esc(e)}")
+            return
+        if not s.demo and not os.environ.get("OPENROUTER_API_KEY"):
+            await self.send(chat_id, "⚠️ Нет OPENROUTER_API_KEY. Включите 🧪 демо-режим или добавьте ключ на сервере.")
+            return
+        mode = "evaluate" if p.options else s.mode
+        self.pending.pop(chat_id, None)
+        await self.api.edit_message(chat_id, p.card_id, f"🏛 <b>Вопрос передан совету</b>\n{esc(p.question[:1500])}")
+
+        progress = Progress(question=p.question, mode=mode, rounds=s.rounds,
+                            members=[m.name for m in cfg.active_members], chair=cfg.chair, demo=s.demo)
+        stop_kb = {"inline_keyboard": [[self._btn("⏹ Остановить", "stop")]]}
+        msg = await self.api.send_message(chat_id, progress.render(), reply_markup=stop_kb)
+        client = self.llm_factory(cfg, s.demo)
+
+        def on_event(event: str, **d: Any) -> None:
+            progress.apply(event, d)
+            r = self.running.get(chat_id)
+            if r:
+                r.dirty = True
+
+        async def execute() -> None:
+            updater = asyncio.create_task(self._updater(chat_id, stop_kb))
+            stem = make_stem(p.question)
+            try:
+                council = Council(cfg, client, on_event=on_event)
+                res = await council.run(p.question, options=p.options, mode=mode, rounds=s.rounds)
+                save(res, self.runs_dir, stem=stem)
+                updater.cancel()
+                await self._safe_edit(chat_id, msg["message_id"], progress.render(final="✅ <b>Заседание завершено</b>"))
+                await self.send_result(chat_id, res, stem)
+            except asyncio.CancelledError:
+                updater.cancel()
+                await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⏹ <b>Заседание остановлено</b>"))
+            except CouncilError as e:
+                updater.cancel()
+                await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⚠️ <b>Заседание прервано</b>"))
+                await self.send(chat_id, f"⚠️ {esc(e)}")
+            except Exception as e:  # noqa: BLE001
+                updater.cancel()
+                log.exception("заседание упало")
+                await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⚠️ <b>Внутренняя ошибка</b>"))
+                await self.send(chat_id, f"⚠️ Внутренняя ошибка: {esc(repr(e))[:500]}")
+            finally:
+                self.running.pop(chat_id, None)
+                await client.aclose()
+
+        self.running[chat_id] = Running(task=asyncio.create_task(execute()), progress=progress,
+                                        message_id=msg["message_id"])
+
+    async def _updater(self, chat_id: int, markup: dict) -> None:
+        """Периодически обновляет сообщение с прогрессом (Telegram ограничивает частоту правок)."""
+        while True:
+            await asyncio.sleep(self.edit_interval)
+            r = self.running.get(chat_id)
+            if not r:
+                return
+            r.dirty = False
+            await self._safe_edit(chat_id, r.message_id, r.progress.render(), markup)
+            await self.api.send_typing(chat_id)
+
+    async def _safe_edit(self, chat_id: int, message_id: int, text: str, markup: dict | None = None) -> None:
+        try:
+            await self.api.edit_message(chat_id, message_id, text, reply_markup=markup)
+        except TelegramError as e:
+            log.warning("не удалось обновить сообщение: %s", e)
+
+    async def send_result(self, chat_id: int, res: SessionResult, stem: str) -> None:
+        v = res.verdict
+        win = res.proposals[v.winner]
+        author = lambda l: res.authors.get(l) or "пользователь"  # noqa: E731
+        parts = [f"🏆 <b>Решение совета: вариант {v.winner} — {esc(win.title)}</b> ({esc(author(v.winner))})", "",
+                 md_to_tg(v.final_answer), "", f"<b>Почему:</b> {md_to_tg(v.why)}"]
+        if v.dissent:
+            parts += ["", "<b>Особые мнения:</b>"] + [f"• {md_to_tg(x)}" for x in v.dissent]
+        if v.risks:
+            parts += ["", "<b>Риски:</b>"] + [f"• {md_to_tg(x)}" for x in v.risks]
+        await self.send(chat_id, "\n".join(parts))
+
+        lines = ["📊 <b>Голосование</b>"]
+        for i, r in enumerate(res.tally, 1):
+            avg = f"{r.avg_score:.1f}" if r.avg_score is not None else "—"
+            lines.append(f"{i}. <b>{r.label}</b> {esc(res.proposals[r.label].title[:60])} ({esc(author(r.label))}) — "
+                         f"Борда {r.borda:.2f}, критика {avg}, 1-х мест {r.first_places}/{r.ballots}")
+        lines.append(f"\n💰 ${res.total_cost:.4f} · ⏱ {res.duration_s} с")
+        await self.send(chat_id, "\n".join(lines))
+        try:
+            await self.api.send_document(chat_id, f"{stem}.md", render_markdown(res).encode("utf-8"),
+                                         caption="Полный отчёт: все варианты, критика, бюллетени")
+        except TelegramError as e:
+            log.warning("не удалось отправить отчёт: %s", e)
+
+
+# ---------------------------------------------------------------- запуск
+
+
+def parse_allowed(raw: str | None) -> set[int]:
+    out = set()
+    for part in (raw or "").replace(";", ",").split(","):
+        part = part.strip()
+        if part.lstrip("-").isdigit():
+            out.add(int(part))
+    return out
+
+
+async def run_bot(config_path: str | Path) -> None:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        raise SystemExit("Нет TELEGRAM_BOT_TOKEN: создайте бота у @BotFather и добавьте токен в .env")
+    allowed = parse_allowed(os.environ.get("TELEGRAM_ALLOWED_USERS"))
+    if not allowed:
+        log.warning("TELEGRAM_ALLOWED_USERS пуст: бот никого не пустит, но покажет каждому его Telegram ID")
+    api = TelegramAPI(token)
+    bot = CouncilBot(api, config_path, allowed_users=allowed)
+    try:
+        await bot.run()
+    finally:
+        await bot.shutdown()
+        await api.aclose()

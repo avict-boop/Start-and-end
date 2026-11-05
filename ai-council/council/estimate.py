@@ -125,3 +125,32 @@ def estimate(
         )
         est.members.append(me)
     return est
+
+
+class ModelCatalog:
+    """Кэшированный список моделей OpenRouter (для проверки id и цен)."""
+
+    def __init__(self, ttl: float = 600) -> None:
+        self.ttl = ttl
+        self._ts = 0.0
+        self._models: list[dict[str, Any]] | None = None
+
+    async def get(self) -> list[dict[str, Any]] | None:
+        import logging
+        import os
+        import time
+
+        from .client import OpenRouterClient
+
+        if self._models is not None and time.time() - self._ts < self.ttl:
+            return self._models
+        client = OpenRouterClient(os.environ.get("OPENROUTER_API_KEY", ""), timeout=20)
+        try:
+            models = await client.list_models()
+        except Exception as e:  # noqa: BLE001 — проверка необязательна
+            logging.getLogger("council").warning("не удалось получить список моделей: %r", e)
+            return None
+        finally:
+            await client.aclose()
+        self._models, self._ts = models, time.time()
+        return models

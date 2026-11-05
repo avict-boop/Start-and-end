@@ -234,6 +234,22 @@ def _web(args) -> int:
     return 0
 
 
+def _telegram(args) -> int:
+    import logging
+
+    from .telegram.bot import run_bot
+
+    load_config(args.config)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    console.print("Telegram-бот запущен (Ctrl+C — остановить)")
+    try:
+        asyncio.run(run_bot(args.config))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Бот остановлен[/]")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     load_dotenv(PROJECT_DIR / ".env")
     load_dotenv(".env")
@@ -264,7 +280,12 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--port", type=int, default=8000)
     w.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
 
+    t = sub.add_parser("telegram", help="запустить Telegram-бота")
+    t.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
+
     args = p.parse_args(argv)
+    if args.cmd == "telegram":
+        return _telegram(args)
     if args.cmd == "web":
         return _web(args)
     try:

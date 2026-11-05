@@ -17,11 +17,11 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field
 
 from ..client import OpenRouterClient
-from ..config import CouncilConfig, Mode, load_config
-from ..estimate import estimate, parse_pricing, unknown_models
+from ..config import CouncilConfig, Mode, OverrideError, load_config, with_overrides
+from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models
 from ..mock import MockClient
 from ..report import make_stem, save
 from ..session import Council, CouncilError
@@ -135,7 +135,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6) -> FastAPI:
     config_path = Path(config_path)
     app = FastAPI(title="Совет нейросетей", docs_url="/api/docs")
     runs: dict[str, RunState] = {}
-    models_cache: dict[str, Any] = {"ts": 0.0, "models": None}
+    catalog = ModelCatalog(MODELS_TTL)
 
     def base_config() -> CouncilConfig:
         try:
@@ -148,44 +148,11 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6) -> FastAPI:
         return d if d.is_absolute() else config_path.parent / d
 
     def build_config(req: RunRequest) -> CouncilConfig:
-        data = base_config().model_dump()
-        if req.members is not None:
-            names = {m["name"] for m in data["members"]}
-            unknown = set(req.members) - names
-            if unknown:
-                raise HTTPException(400, f"неизвестные участники: {', '.join(sorted(unknown))}")
-            for m in data["members"]:
-                m["enabled"] = m["name"] in req.members
-        enabled = [m["name"] for m in data["members"] if m["enabled"]]
-        if req.chair:
-            data["chair"] = req.chair
-        elif data["chair"] not in enabled and enabled:
-            data["chair"] = enabled[0]
-        if req.devil_advocate is not None:
-            data["devil_advocate"] = req.devil_advocate or None
-        elif data.get("devil_advocate") not in enabled:
-            data["devil_advocate"] = None
-        if req.budget:
-            data["max_cost_usd"] = req.budget
         try:
-            return CouncilConfig.model_validate(data)
-        except ValidationError as e:
-            msg = "; ".join(err["msg"].removeprefix("Value error, ") for err in e.errors())
-            raise HTTPException(400, msg) from e
-
-    async def get_models() -> list[dict[str, Any]] | None:
-        if models_cache["models"] is not None and time.time() - models_cache["ts"] < MODELS_TTL:
-            return models_cache["models"]
-        client = OpenRouterClient(os.environ.get("OPENROUTER_API_KEY", ""), timeout=20)
-        try:
-            models = await client.list_models()
-        except Exception as e:  # noqa: BLE001
-            log.warning("не удалось получить список моделей: %r", e)
-            return None
-        finally:
-            await client.aclose()
-        models_cache.update(ts=time.time(), models=models)
-        return models
+            return with_overrides(base_config(), members=req.members, chair=req.chair,
+                                  devil_advocate=req.devil_advocate, budget=req.budget)
+        except OverrideError as e:
+            raise HTTPException(400, str(e)) from e
 
     def find_file(sid: str, ext: str) -> Path:
         if not ID_RE.match(sid):
@@ -218,7 +185,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6) -> FastAPI:
         pricing: dict = {}
         missing: dict[str, list[str]] = {}
         if not req.mock:
-            models = await get_models()
+            models = await catalog.get()
             if models is None:
                 warning = "Не удалось получить список моделей OpenRouter — проверка и цены недоступны."
             else:
