@@ -50,7 +50,6 @@ def test_html_and_md_reports():
 
 @pytest.mark.skipif(not PDF_AVAILABLE, reason="нет WeasyPrint/Pango")
 def test_pdf_wide_table_fits_page():
-    import re
     pdf = render_pdf(View(session(WIDE)))
     assert pdf[:5] == b"%PDF-"
     # все блоки текста внутри ширины A4 (595pt) за вычетом полей: проверяем через макет WeasyPrint
