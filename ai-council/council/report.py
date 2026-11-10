@@ -23,7 +23,7 @@ def make_stem(question: str) -> str:
 
 
 def save(res: SessionResult, runs_dir: str | Path, stem: str | None = None,
-         attachments: list[Attachment] | None = None) -> dict[str, Path]:
+         attachments: list[Attachment] | None = None, isolate: bool = False) -> dict[str, Path]:
     """Сохраняет стенограмму, вложения (папка <id>.files) и все отчёты.
 
     Возвращает {"json"|"pdf"|"docx"|"md"|…: путь} (без форматов с ошибкой).
@@ -35,7 +35,8 @@ def save(res: SessionResult, runs_dir: str | Path, stem: str | None = None,
     data = res.to_dict()
     json_path = d / f"{stem}.json"
     json_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    built = Archive(d).build(stem, all_reports(), data=data)
+    arc = Archive(d, isolate=isolate)  # isolate — сайт и бот: вёрстка в отдельном процессе
+    built = arc._build(stem, all_reports()) if isolate else arc.build(stem, all_reports(), data=data)
     paths = {"json": json_path}
     paths.update({fmt: Path(p) for fmt, p in built.items() if not p.startswith("ошибка")})
     return paths

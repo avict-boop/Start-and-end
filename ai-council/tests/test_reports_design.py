@@ -120,3 +120,13 @@ def test_archive_rebuild_after_version_change_keeps_finished_reports(tmp_path, m
     # пока фоновую пересборку ведёт другой процесс, второй её не начинает
     with A._ProcessLock(tmp_path / A.LOCK) as got:
         assert got and Archive(tmp_path).ensure_all(force=True) == (0, 0)
+
+
+def test_isolated_archive_builds_reports_in_a_separate_process(tmp_path):
+    import json
+    (tmp_path / "02-bystryi-otvet.json").write_text(json.dumps(samples.quick_short(), ensure_ascii=False))
+    (tmp_path / ".reports-version").write_text(__import__("council.archive").archive.REPORT_VERSION)
+    arc = Archive(tmp_path, isolate=True)
+    p = arc.report("02-bystryi-otvet", "decision.md")
+    assert p.is_file() and "Решение совета" in p.read_text()
+    assert arc._build("нет-такого", ["md"])["md"].startswith("ошибка")

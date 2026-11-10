@@ -10,6 +10,8 @@ import json
 import logging
 import os
 import re
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -27,7 +29,8 @@ REPORT_VERSION = "10"  # 10 — новое оформление отчётов: 
 MARKER = ".reports-version"  # номер версии; время изменения файла — момент смены версии
 LOCK = ".reports-lock"  # фоновую пересборку ведёт один процесс (сайт и бот делят папку архива)
 URGENT = ".reports-urgent-"  # пока такие файлы есть, фоновая пересборка ждёт: человек ждёт свой отчёт
-URGENT_STALE_S = 600  # файл старше — остался от упавшего процесса, не ждём его
+URGENT_STALE_S = 600
+WORKER_TIMEOUT_S = 900  # сборка всех отчётов одного очень длинного заседания на слабом сервере  # файл старше — остался от упавшего процесса, не ждём его
 ID_RE = re.compile(r"^[\w\-]{1,160}$", re.U)
 MIME = {
     "pdf": "application/pdf",
@@ -78,8 +81,11 @@ def key_of(stem: str) -> str:
 
 
 class Archive:
-    def __init__(self, runs_dir: str | Path) -> None:
+    def __init__(self, runs_dir: str | Path, isolate: bool = False) -> None:
+        """isolate=True — отчёты собираются в отдельном процессе (сайт и бот): тяжёлая вёрстка PDF
+        не подвешивает сервер, а занятая ею память возвращается системе после каждого заседания."""
         self.dir = Path(runs_dir)
+        self.isolate = isolate
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._lock = threading.Lock()
 
@@ -202,6 +208,25 @@ class Archive:
                 result[fmt] = f"ошибка: {e}"
         return result
 
+    def _build(self, stem: str, formats: list[str], background: bool = False) -> dict[str, str]:
+        """Как build(), но при isolate — в отдельном процессе; фоновая сборка — с низким приоритетом."""
+        if not self.isolate:
+            return self.build(stem, formats)
+        nice = (lambda: os.nice(15)) if background and hasattr(os, "nice") else None
+        pkg_root = str(Path(__file__).resolve().parent.parent)
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [pkg_root, os.environ.get("PYTHONPATH")]))}
+        try:
+            p = subprocess.run([sys.executable, "-m", "council.reports_worker", str(self.dir), stem, *formats],
+                               capture_output=True, text=True, check=False, timeout=WORKER_TIMEOUT_S, preexec_fn=nice, env=env,
+                               cwd=pkg_root)
+            if p.returncode == 0:
+                return json.loads(p.stdout.strip().splitlines()[-1])
+            err = (p.stderr.strip().splitlines() or [f"код {p.returncode}"])[-1]
+        except (OSError, subprocess.SubprocessError, ValueError, IndexError) as e:
+            err = str(e) or type(e).__name__
+        log.warning("отчёты %s не собраны: %s", stem, err)
+        return {f: f"ошибка: {err}" for f in formats}
+
     def report(self, stem: str, fmt: str) -> Path:
         """Путь к отчёту; создаёт или обновляет его при необходимости."""
         if fmt not in RENDER:
@@ -219,7 +244,7 @@ class Archive:
         try:
             with self._lock:
                 if not self._fresh(stem, fmt):
-                    res = self.build(stem, [fmt])
+                    res = self._build(stem, [fmt])
                     if res[fmt].startswith("ошибка"):
                         raise RuntimeError(res[fmt])
         finally:
@@ -250,11 +275,16 @@ class Archive:
                     continue
                 res: dict[str, str] = {}
                 try:
-                    for f in need:
-                        self._wait_urgent()
-                        with self._lock:
-                            if not self._fresh(stem, f):
-                                res.update(self.build(stem, [f]))
+                    self._wait_urgent()
+                    if self.isolate:  # отдельный процесс с низким приоритетом: открытый человеком отчёт идёт первым
+                        need = [f for f in need if not self._fresh(stem, f)]
+                        res = self._build(stem, need, background=True) if need else {}
+                    else:
+                        for f in need:
+                            self._wait_urgent()
+                            with self._lock:
+                                if not self._fresh(stem, f):
+                                    res.update(self.build(stem, [f]))
                 except (OSError, ValueError, KeyError) as e:
                     log.warning("заседание %s пропущено: %s", stem, e)
                     failed += 1

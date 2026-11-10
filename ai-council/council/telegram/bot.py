@@ -286,7 +286,7 @@ class CouncilBot:
         self.runs_dir = Path(cfg.runs_dir) if Path(cfg.runs_dir).is_absolute() else self.config_path.parent / cfg.runs_dir
         self.settings_path = self.runs_dir / "telegram_settings.json"
         self.settings: dict[int, ChatSettings] = self._load_settings()
-        self.archive = Archive(self.runs_dir)
+        self.archive = Archive(self.runs_dir, isolate=True)
 
     # ------------------------------------------------------------ инфраструктура
 
@@ -1023,7 +1023,7 @@ class CouncilBot:
                 r = self.running.get(chat_id)
                 if r:
                     r.dirty = True
-                await asyncio.to_thread(save, res, self.runs_dir, stem, atts)
+                await asyncio.to_thread(save, res, self.runs_dir, stem, atts, True)
                 log.info("заседание %s: готово, $%.4f", stem, res.total_cost)
                 updater.cancel()
                 await self._safe_edit(chat_id, msg["message_id"], progress.render(final="✅ <b>Заседание завершено</b>"))

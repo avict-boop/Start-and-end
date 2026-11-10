@@ -220,7 +220,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     def archive() -> Archive:
         d = runs_dir(base_config())
         if d not in archives:
-            archives[d] = Archive(d)
+            archives[d] = Archive(d, isolate=True)
         return archives[d]
 
     UPLOAD_ID = re.compile(r"^[0-9a-f]{16}$")
@@ -529,7 +529,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
                                "compact_proposals": cfg.compact_proposals}
                 st.push({"type": "saving"})
-                await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts)
+                await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts, True)
                 import shutil
                 for uid in req.attachments:  # черновики больше не нужны: файлы уже в архиве заседания
                     shutil.rmtree(uploads_dir() / uid, ignore_errors=True)
