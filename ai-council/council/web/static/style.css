@@ -666,3 +666,8 @@ body.modal-open { overflow: hidden; }
 .tag.dec { background: var(--dec-soft); color: var(--dec); }
 #vTitle::before { content: ""; display: inline-block; width: .62em; height: .62em; margin: 0 .55em .08em .1em; border-radius: 2px;
   background: var(--logo-dec); transform: rotate(45deg); vertical-align: middle; }
+
+/* длинные слова и адреса не вылезают за карточки, колонки и окна */
+.proposal, .proposal .changes, .verdict, .verdict-grid, .fold-body, .modal-body, .fact-block, .ballot, .tbar, .estimate, .arc-item { overflow-wrap: anywhere; min-width: 0; }
+.md a, .md code, .changes a, .lists a { overflow-wrap: anywhere; word-break: break-word; }
+.md td a, .md td code { word-break: break-all; }

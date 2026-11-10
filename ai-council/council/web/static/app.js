@@ -90,12 +90,36 @@ function trapFocus(e, box) {
 
 /* ------------------------------------------------------------ markdown (минимальный, безопасный) */
 
+// длинный адрес показываем коротко: домен и конец пути; полный — в подсказке и по нажатию
+function shortUrl(u) {
+  try {
+    const x = new URL(u);
+    const host = x.hostname.replace(/^www\./, "");
+    const parts = x.pathname.split("/").filter(Boolean);
+    let path = parts.length ? `/${parts.join("/")}` : "";
+    if ((host + path).length > 48) {
+      const last = parts[parts.length - 1] || "";
+      path = parts.length > 1 ? `/…/${last.length > 24 ? `${last.slice(0, 22)}…` : last}` : `/${last.slice(0, 30)}…`;
+    }
+    return host + path + (x.search || x.hash ? (path.endsWith("…") ? "" : "…") : "");
+  } catch { return u.length > 50 ? `${u.slice(0, 48)}…` : u; }
+}
+function linkHtml(url, text) {
+  return `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" title="${esc(url)}">${esc(text)}</a>`;
+}
+
 function inline(s) {
-  return esc(s)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
+  // код и ссылки откладываем, чтобы разметка не задела адреса (в них бывают * и _)
+  const keep = [];
+  const hold = (html) => { keep.push(html); return `\u0001${keep.length - 1}\u0001`; };
+  let t = String(s ?? "")
+    .replace(/`([^`]+)`/g, (_, c) => hold(`<code>${esc(c)}</code>`))
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, txt, u) => hold(linkHtml(u, /^https?:\/\/\S+$/.test(txt.trim()) ? shortUrl(txt.trim()) : txt)))
+    .replace(/https?:\/\/[^\s<>()"'`«»]+[^\s<>()"'`«».,;:!?]/g, (u) => hold(linkHtml(u, shortUrl(u))));
+  t = esc(t)
     .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>")
-    .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<i>$2</i>")
-    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    .replace(/(^|[^*\w])\*([^*\n]+)\*(?!\w)/g, "$1<i>$2</i>");
+  return t.replace(/\u0001(\d+)\u0001/g, (_, i) => keep[+i]);
 }
 
 function md(src) {
