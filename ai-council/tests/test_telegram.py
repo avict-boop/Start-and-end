@@ -287,7 +287,7 @@ def test_reports_and_archive(env):
     asyncio.run(scenario())
     summary = next(b for m, b in reversed(fake.calls) if m == "sendMessage" and "🏆" in b.get("text", ""))
     btn = [b["callback_data"].split(":")[0] + ":" + b["callback_data"].split(":")[1] for row in summary["reply_markup"]["inline_keyboard"] for b in row]
-    assert [b.split(":")[0] + (":" + b.split(":")[1] if b.split(":")[0] in ("res", "rep") else "") for b in btn] == ["res:more", "res:tally", "rep:pdf", "rep:summary.pdf", "fup", "rpt"]
+    assert [b.split(":")[0] + (":" + b.split(":")[1] if b.split(":")[0] in ("res", "rep") else "") for b in btn] == ["res:more", "res:tally", "rep:pdf", "rep:summary.pdf", "rep:decision.pdf", "fup", "rpt"]
     key = summary["reply_markup"]["inline_keyboard"][0][0]["callback_data"].split(":")[2]
     asyncio.run(bot.handle_update(press(f"res:more:{key}", 999)))
     assert "Решение совета: вариант" in fake.texts()[-1] and "Почему:" in fake.texts()[-1]
@@ -300,10 +300,15 @@ def test_reports_and_archive(env):
     kb = [b["callback_data"] for b in rows[0]]
     assert [k.split(":")[1] for k in kb] == ["docx", "md"]
     assert [b["callback_data"].split(":")[1] for b in rows[1]] == ["summary.pdf", "summary.docx", "summary.md"]
+    assert [b["callback_data"].split(":")[1] for b in rows[2]] == ["decision.pdf", "decision.docx", "decision.md"]
+    # кнопка «✅ Решение Word» → документ только с решением совета
+    asyncio.run(bot.handle_update(press(rows[2][1]["callback_data"], 999)))
+    dd = docs(fake)[-1]
+    assert "решение" in dd["filename"] and dd["filename"].endswith(".docx") and "Только решение совета" in dd["_multipart"]
     # кнопка «📌 Итог PDF» → короткий PDF только с решением
     asyncio.run(bot.handle_update(press(rows[1][0]["callback_data"], 999)))
     d2 = docs(fake)[-1]
-    assert d2["filename"].endswith("-итог.pdf") and d2["is_pdf"] and "Только итоговое решение" in d2["_multipart"]
+    assert d2["filename"].endswith("-итог.pdf") and d2["is_pdf"] and "Итоговое решение с обоснованием" in d2["_multipart"]
     # кнопка Word → .docx
     asyncio.run(bot.handle_update(press(kb[0], 999)))
     d = docs(fake)[-1]

@@ -97,6 +97,14 @@ def test_full_mock_session_history_report_delete(client):
     assert client.get(f"/api/sessions/{sid}/report?format=docx&summary=1").content[:2] == b"PK"
     sh = client.get(f"/api/sessions/{sid}/report?format=html&summary=1").text
     assert "итоговое решение" in sh and 'id="voting"' not in sh and "Полный отчёт" in sh
+    # «только решение»: вопрос и ответ, без обоснования и голосования
+    dm = client.get(f"/api/sessions/{sid}/report?format=md&decision=1")
+    assert dm.status_code == 200 and "Итог (демо)" in dm.text and "Почему" not in dm.text and "Голосование" not in dm.text
+    assert "%D1%80%D0%B5%D1%88%D0%B5%D0%BD%D0%B8%D0%B5.md" in dm.headers["content-disposition"]
+    assert client.get(f"/api/sessions/{sid}/report?format=pdf&decision=1").content[:5] == b"%PDF-"
+    assert client.get(f"/api/sessions/{sid}/report?format=docx&decision=1").content[:2] == b"PK"
+    dh = client.get(f"/api/sessions/{sid}/report?format=html&decision=1").text
+    assert "решение совета" in dh and "Почему" not in dh and "Итог</a>" in dh and "decision=1" in dh
     html = client.get(f"/api/sessions/{sid}/report?format=html")
     assert html.status_code == 200 and 'id="proposal-A"' in html.text and "format=docx" in html.text
     assert client.get(f"/api/sessions/{sid}/report?format=exe").status_code == 400

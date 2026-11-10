@@ -909,6 +909,7 @@ class CouncilBot:
         return {"inline_keyboard": [
             [self._btn("📖 Подробнее", f"res:more:{key}"), self._btn("📊 Голосование", f"res:tally:{key}")],
             [self._btn(f"📄 Отчёт {name}", f"rep:{fmt}:{key}"), self._btn(f"📌 Итог {name}", f"rep:summary.{fmt}:{key}")],
+            [self._btn(f"✅ Только решение {name}", f"rep:decision.{fmt}:{key}")],
             [self._btn("💬 Уточнить", f"fup:{key}"), self._btn("🔁 Повторить", f"rpt:{key}")],
         ]}
 
@@ -957,22 +958,26 @@ class CouncilBot:
     # ------------------------------------------------------------ отчёты и архив
 
     def _report_buttons(self, stem: str, skip: str = "") -> list[list[dict]]:
-        """Ряд «полный отчёт» и ряд «только итог» — во всех форматах, кроме уже отправленного."""
+        """Ряды «полный отчёт», «итог» и «только решение» — во всех форматах, кроме уже отправленного."""
         key = key_of(stem)
         full = [self._btn(FORMAT_NAME[f], f"rep:{f}:{key}") for f in available_formats() if f != skip]
         short = [self._btn(f"📌 Итог {FORMAT_NAME[f]}", f"rep:summary.{f}:{key}")
                  for f in available_formats() if f"summary.{f}" != skip]
-        return [row for row in (full, short) if row]
+        decision = [self._btn(f"✅ Решение {FORMAT_NAME[f]}", f"rep:decision.{f}:{key}")
+                    for f in available_formats() if f"decision.{f}" != skip]
+        return [row for row in (full, short, decision) if row]
 
     async def send_report(self, chat_id: int, stem: str, fmt: str | None = None, caption: str | None = None) -> None:
         """Отправляет отчёт файлом (по умолчанию полный PDF, если он доступен) с кнопками других форматов.
 
-        fmt — «pdf» / «docx» / «md» (полный отчёт) или «summary.pdf» и т. п. (только итоговое решение).
+        fmt — «pdf» / «docx» / «md» (полный отчёт) «summary.pdf» и т. п. (итог с обоснованием) или «decision.pdf» и т. п. (только решение).
         """
         fmts = available_formats()
         fmt = fmt or fmts[0]
         if caption is None and fmt.startswith("summary."):
-            caption = "📌 Только итоговое решение — без вариантов, критики и голосования"
+            caption = "📌 Итоговое решение с обоснованием — без вариантов, критики и голосования"
+        elif caption is None and fmt.startswith("decision."):
+            caption = "✅ Только решение совета"
         try:
             path = await asyncio.to_thread(self.archive.report, stem, fmt)
             content = await asyncio.to_thread(path.read_bytes)
@@ -1047,7 +1052,7 @@ class CouncilBot:
             await self.repeat(chat_id, stem)
         elif fmt in all_reports():
             name = FORMAT_NAME[fmt.rsplit(".", 1)[-1]]
-            await self.api.answer_callback(cq["id"], f"Отправляю {'итог, ' if fmt.startswith('summary.') else ''}{name}…")
+            await self.api.answer_callback(cq["id"], f"Отправляю {'итог, ' if fmt.startswith('summary.') else 'решение, ' if fmt.startswith('decision.') else ''}{name}…")
             await self.send_report(chat_id, stem, fmt)
         else:
             await self.api.answer_callback(cq["id"], "Этот формат недоступен")

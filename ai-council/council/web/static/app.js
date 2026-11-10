@@ -419,20 +419,25 @@ $("newBtn").addEventListener("click", () => {
   $("question").focus();
 });
 
-function reportUrl(id, fmt, download, summary) {
-  return `/api/sessions/${encodeURIComponent(id)}/report?format=${fmt}${download ? "&download=1" : ""}${summary ? "&summary=1" : ""}`;
+// part: "" — полный отчёт, "summary" — итог с обоснованием, "decision" — только решение совета
+function reportUrl(id, fmt, download, part) {
+  return `/api/sessions/${encodeURIComponent(id)}/report?format=${fmt}${download ? "&download=1" : ""}${part ? `&${part}=1` : ""}`;
 }
-function formatLinks(id, cls, summary) {
+function formatLinks(id, cls, part) {
   return formats.map((f) => f === "pdf"
-    ? `<a class="${cls}" href="${reportUrl(id, "pdf", false, summary)}" target="_blank" rel="noopener">PDF</a>`
-    : `<a class="${cls}" href="${reportUrl(id, f, true, summary)}">${FORMAT_NAME[f]}</a>`).join("");
+    ? `<a class="${cls}" href="${reportUrl(id, "pdf", false, part)}" target="_blank" rel="noopener">PDF</a>`
+    : `<a class="${cls}" href="${reportUrl(id, f, true, part)}">${FORMAT_NAME[f]}</a>`).join("");
 }
-// две строки: полный отчёт (всё: варианты, критика, голосование) и только итоговое решение
+const REPORT_PARTS = [
+  ["", "Полный отчёт", "Решение, все варианты, критика, голосование, расходы"],
+  ["summary", "Итог", "Итоговое решение с обоснованием, особыми мнениями и рисками"],
+  ["decision", "Только решение", "Только вопрос и ответ совета — без обоснования, вариантов и голосования"],
+];
+// три строки: полный отчёт, итог с обоснованием и только решение совета
 function downloadLinks(id, cls = "button secondary") {
-  return `<div class="dl-row"><span class="dl-label" title="Решение, все варианты, критика, голосование, расходы">Полный отчёт</span>${formatLinks(id, cls, false)}`
-    + `<a class="${cls}" href="${reportUrl(id, "html")}" target="_blank" rel="noopener" title="Полный отчёт в новой вкладке">Открыть ↗</a></div>`
-    + `<div class="dl-row"><span class="dl-label" title="Только итоговое решение: ответ, почему, особые мнения, риски">Только итог</span>${formatLinks(id, cls, true)}`
-    + `<a class="${cls}" href="${reportUrl(id, "html", false, true)}" target="_blank" rel="noopener" title="Итог в новой вкладке">Открыть ↗</a></div>`;
+  return REPORT_PARTS.map(([part, label, hint]) =>
+    `<div class="dl-row"><span class="dl-label" title="${hint}">${label}</span>${formatLinks(id, cls, part)}`
+    + `<a class="${cls}" href="${reportUrl(id, "html", false, part)}" target="_blank" rel="noopener" title="${label} — в новой вкладке">Открыть ↗</a></div>`).join("");
 }
 
 /* ------------------------------------------------------------ история */

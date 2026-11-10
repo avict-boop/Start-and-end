@@ -8,8 +8,22 @@ def _cell(text: object) -> str:
     return str(text if text is not None else "").replace("|", "\\|").replace("\n", " ")
 
 
-def render_md(view: View, summary: bool = False) -> str:
-    """Полный отчёт или (summary=True) только итоговое решение."""
+def render_decision_md(view: View) -> str:
+    """Только решение совета: вопрос и итоговый ответ."""
+    from . import brand
+    v = view
+    b = brand.current()
+    out = ([f"*{b.title}*", ""] if b.title != brand.DEFAULT_TITLE else []) + [f"# {v.title_text}", ""]
+    if v.question_is_long:
+        out += ["**Запрос:**", ""] + [f"> {line}  " if line.strip() else ">" for line in v.question.splitlines()] + [""]
+    out += [v.verdict.get("final_answer", ""), "", "---", f"*{v.date} · участники: {', '.join(v.members)}*"]
+    return "\n".join(out).rstrip() + "\n"
+
+
+def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
+    """Полный отчёт, (summary=True) итоговое решение с обоснованием или (decision=True) только решение."""
+    if decision:
+        return render_decision_md(view)
     v = view
     vd = v.verdict
     w = v.winner

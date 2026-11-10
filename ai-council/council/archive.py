@@ -22,7 +22,7 @@ from .reports.view import MODE_NAME, View
 
 log = logging.getLogger("council.archive")
 
-REPORT_VERSION = "6"  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
+REPORT_VERSION = "7"  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
 MARKER = ".reports-version"
 ID_RE = re.compile(r"^[\w\-]{1,160}$", re.U)
 MIME = {
@@ -31,7 +31,8 @@ MIME = {
     "md": "text/markdown; charset=utf-8",
     "html": "text/html; charset=utf-8",
 }
-# Виды отчёта: «pdf» — полный отчёт, «summary.pdf» — только итоговое решение (то же для docx и md)
+# Виды отчёта: «pdf» — полный отчёт, «summary.pdf» — итог (решение + почему, особые мнения, риски),
+# «decision.pdf» — только решение совета (то же для docx и md)
 RENDER: dict[str, Callable[[View], bytes]] = {
     "pdf": render_pdf,
     "docx": render_docx,
@@ -39,7 +40,11 @@ RENDER: dict[str, Callable[[View], bytes]] = {
     "summary.pdf": lambda v: render_pdf(v, summary=True),
     "summary.docx": lambda v: render_docx(v, summary=True),
     "summary.md": lambda v: render_md(v, summary=True).encode("utf-8"),
+    "decision.pdf": lambda v: render_pdf(v, decision=True),
+    "decision.docx": lambda v: render_docx(v, decision=True),
+    "decision.md": lambda v: render_md(v, decision=True).encode("utf-8"),
 }
+PARTS = ("summary", "decision")  # варианты сокращённого отчёта
 
 
 def available_formats() -> list[str]:
@@ -47,19 +52,20 @@ def available_formats() -> list[str]:
     return [f for f in ("pdf", "docx", "md") if f != "pdf" or PDF_AVAILABLE]
 
 
-def report_kind(fmt: str, summary: bool = False) -> str:
-    return f"summary.{fmt}" if summary else fmt
+def report_kind(fmt: str, summary: bool = False, decision: bool = False) -> str:
+    return f"decision.{fmt}" if decision else (f"summary.{fmt}" if summary else fmt)
 
 
 def all_reports() -> list[str]:
-    """Все файлы отчётов одного заседания: полные и «только итог»."""
+    """Все файлы отчётов одного заседания: полные, «итог» и «только решение»."""
     base = available_formats()
-    return base + [report_kind(f, True) for f in base]
+    return base + [f"{part}.{f}" for part in PARTS for f in base]
 
 
 def download_name(stem: str, kind: str) -> str:
     fmt = kind.rsplit(".", 1)[-1]
-    return f"{stem}-итог.{fmt}" if kind.startswith("summary.") else f"{stem}.{fmt}"
+    suffix = {"summary": "-итог", "decision": "-решение"}.get(kind.split(".", 1)[0] if "." in kind else "", "")
+    return f"{stem}{suffix}.{fmt}"
 
 
 def key_of(stem: str) -> str:
@@ -191,8 +197,8 @@ class Archive:
                         raise RuntimeError(res[fmt])
         return target
 
-    def html(self, stem: str, toolbar: str = "", summary: bool = False) -> str:
-        return render_html(self.view(stem), toolbar=toolbar, summary=summary)
+    def html(self, stem: str, toolbar: str = "", summary: bool = False, decision: bool = False) -> str:
+        return render_html(self.view(stem), toolbar=toolbar, summary=summary, decision=decision)
 
     def ensure_all(self, force: bool = False, progress: Callable[[str, dict], None] | None = None) -> tuple[int, int]:
         """Досоздаёт недостающие и устаревшие отчёты для всех заседаний. Возвращает (создано, ошибок)."""

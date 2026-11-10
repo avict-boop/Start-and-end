@@ -327,8 +327,9 @@ async def _ask(args) -> int:
     with console.status("Готовлю отчёты: PDF, Word и Markdown…", spinner="dots"):
         paths = save(res, runs_dir, attachments=atts)
     console.print(f"\nСтоимость: [bold]${res.total_cost:.4f}[/], время: {res.duration_s} с")
-    for fmt, title in (("pdf", "PDF"), ("docx", "Word"), ("md", "Markdown"), ("summary.pdf", "Только итог (PDF)"),
-                       ("summary.docx", "Только итог (Word)"), ("json", "Стенограмма")):
+    for fmt, title in (("pdf", "PDF"), ("docx", "Word"), ("md", "Markdown"), ("summary.pdf", "Итог (PDF)"),
+                       ("summary.docx", "Итог (Word)"), ("decision.pdf", "Только решение (PDF)"),
+                       ("decision.docx", "Только решение (Word)"), ("json", "Стенограмма")):
         if fmt in paths:
             console.print(f"{title}: {paths[fmt]}")
     return 0

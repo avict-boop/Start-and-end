@@ -326,8 +326,45 @@ def _save(doc) -> bytes:
     return buf.getvalue()
 
 
-def render_docx(view: View, summary: bool = False) -> bytes:
-    """Полный отчёт или (summary=True) только итоговое решение."""
+def render_decision_docx(view: View) -> bytes:
+    """Только решение совета: вопрос и итоговый ответ."""
+    v = view
+    doc = Document()
+    st = doc.styles["Normal"]
+    st.font.name = "Calibri"
+    st.font.size = Pt(10.5)
+    sec = doc.sections[0]
+    sec.left_margin = sec.right_margin = Pt(50)
+    sec.top_margin = sec.bottom_margin = Pt(48)
+    _page_number_footer(doc)
+    _brand_header(doc)
+    doc.core_properties.title = v.title_text
+    doc.core_properties.subject = "Решение «Совета нейросетей»"
+    r = doc.add_paragraph().add_run(brand.current().title.upper() + " · РЕШЕНИЕ СОВЕТА")
+    r.font.size = Pt(8)
+    r.font.color.rgb = MUTED
+    r.bold = True
+    title = _heading(doc, v.title_text, 1)
+    for run in title.runs:
+        run.font.size = Pt(16)
+    if v.question_is_long:
+        r = doc.add_paragraph().add_run("ЗАПРОС")
+        r.bold = True
+        r.font.size = Pt(8)
+        r.font.color.rgb = MUTED
+        add_markdown(doc, v.question, breaks=True)
+        doc.add_paragraph()
+    add_markdown(doc, v.verdict.get("final_answer", ""))
+    note = doc.add_paragraph().add_run(f"{v.date} · участники: {', '.join(v.members)}")
+    note.font.size = Pt(8.5)
+    note.font.color.rgb = MUTED
+    return _save(doc)
+
+
+def render_docx(view: View, summary: bool = False, decision: bool = False) -> bytes:
+    """Полный отчёт, (summary=True) итоговое решение с обоснованием или (decision=True) только решение."""
+    if decision:
+        return render_decision_docx(view)
     v = view
     vd = v.verdict
     w = v.winner

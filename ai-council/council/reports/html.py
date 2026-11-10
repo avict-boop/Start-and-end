@@ -160,8 +160,26 @@ SUMMARY_NOTE = ("Это краткая версия: только итогово
                 "критикой и голосованием скачивается отдельно.")
 
 
-def render_html(view: View, *, toolbar: str = "", summary: bool = False) -> str:
-    """Полный отчёт или (summary=True) только итоговое решение."""
+def render_decision_html(view: View, *, toolbar: str = "") -> str:
+    """Только решение совета: вопрос и итоговый ответ — без обоснования, вариантов, критики и голосования."""
+    v = view
+    b = brand.current()
+    logo = f'<img class="logo" src="{b.logo_data_url}" alt="">' if b.logo_png else ""
+    parts = ['<div class="page">',
+             f'<div class="brand-row">{logo}<div class="brand">{_e(b.title)} · решение совета</div></div>',
+             f"<h1>{_e(v.title_text)}</h1>"]
+    if v.question_is_long:
+        parts.append(f'<div class="query"><div class="query-label">Запрос</div>'
+                     f'<div class="md">{md_to_html(v.question, breaks=True)}</div></div>')
+    parts.append(f'<div class="verdict" id="verdict"><div class="md">{md_to_html(v.verdict.get("final_answer", ""))}</div></div>')
+    parts.append(f'<p class="muted small">{_e(v.date)} · участники: {_e(", ".join(v.members))}</p></div>')
+    return _document(v, "\n".join(parts), toolbar)
+
+
+def render_html(view: View, *, toolbar: str = "", summary: bool = False, decision: bool = False) -> str:
+    """Полный отчёт, (summary=True) итоговое решение с обоснованием или (decision=True) только решение."""
+    if decision:
+        return render_decision_html(view, toolbar=toolbar)
     v = view
     vd = v.verdict
     w = v.winner

@@ -36,8 +36,8 @@ def _fetcher():
     return _no_external
 
 
-def render_pdf(view: View, summary: bool = False) -> bytes:
+def render_pdf(view: View, summary: bool = False, decision: bool = False) -> bytes:
     if not PDF_AVAILABLE:
         raise RuntimeError(f"PDF недоступен: не установлен WeasyPrint или системные библиотеки ({PDF_ERROR})")
-    html = render_html(view, summary=summary)
+    html = render_html(view, summary=summary, decision=decision)
     return weasyprint.HTML(string=html, url_fetcher=_fetcher()).write_pdf()

@@ -530,18 +530,20 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 
     @app.get("/api/sessions/{sid}/report", response_model=None)
     async def report(sid: str, format: str = "pdf", download: bool = False,
-                     summary: bool = False) -> FileResponse | HTMLResponse:
-        """Отчёт заседания. summary=1 — только итоговое решение, без вариантов, критики и голосования."""
+                     summary: bool = False, decision: bool = False) -> FileResponse | HTMLResponse:
+        """Отчёт заседания. summary=1 — итоговое решение с обоснованием, рисками и особыми мнениями;
+        decision=1 — только решение совета (вопрос и ответ)."""
         arch = archive()
         if not arch.exists(sid):
             raise HTTPException(404, "заседание не найдено")
         if format == "html":
-            return HTMLResponse(await asyncio.to_thread(arch.html, sid, report_toolbar(sid, summary), summary))
+            return HTMLResponse(await asyncio.to_thread(arch.html, sid, report_toolbar(sid, summary, decision),
+                                                        summary, decision))
         if format not in MIME:
             raise HTTPException(400, "формат: pdf, docx, md или html")
         if format not in available_formats():
             raise HTTPException(501, "PDF недоступен на этом сервере (нет WeasyPrint) — скачайте DOCX или MD")
-        kind = report_kind(format, summary)
+        kind = report_kind(format, summary, decision)
         try:
             path = await asyncio.to_thread(arch.report, sid, kind)
         except RuntimeError as e:
@@ -550,13 +552,16 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         return FileResponse(path, media_type=MIME[format], filename=download_name(sid, kind),
                             content_disposition_type="inline" if inline else "attachment")
 
-    def report_toolbar(sid: str, summary: bool = False) -> str:
+    def report_toolbar(sid: str, summary: bool = False, decision: bool = False) -> str:
         from urllib.parse import quote
         q = quote(sid)
-        s = "&summary=1" if summary else ""
+        s = "&decision=1" if decision else ("&summary=1" if summary else "")
+        base = f"/api/sessions/{q}/report?format=html"
         links = [f'<a href="/#/s/{q}">← В приложение</a>']
-        links.append(f'<a href="/api/sessions/{q}/report?format=html">Полный отчёт</a>' if summary
-                     else f'<a href="/api/sessions/{q}/report?format=html&summary=1">Только итог</a>')
+        for name, extra, on in (("Полный отчёт", "", not (summary or decision)), ("Итог", "&summary=1", summary and not decision),
+                                ("Только решение", "&decision=1", decision)):
+            if not on:
+                links.append(f'<a href="{base}{extra}">{name}</a>')
         links.append('<span class="sp"></span>')
         names = {"pdf": "PDF", "docx": "Word", "md": "Markdown"}
         links += [f'<a href="/api/sessions/{q}/report?format={f}&download=1{s}">{names[f]}</a>' for f in available_formats()]

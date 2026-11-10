@@ -80,6 +80,18 @@ def test_summary_reports_contain_only_the_decision():
     assert "Голосование" in full and len(text) < len(full)
 
 
+def test_decision_reports_contain_only_the_answer():
+    v = View(session("Итоговый ответ совета."))
+    html = render_html(v, decision=True)
+    assert "Итоговый ответ совета." in html and "решение совета" in html
+    for absent in ("Почему", "Особые мнения", "Риски", 'id="voting"', "Бюллетени", 'id="proposal-A"', "Стоимость"):
+        assert absent not in html
+    md = render_md(v, decision=True)
+    assert "Итоговый ответ совета." in md and "Почему" not in md and "Голосование" not in md
+    text = "\n".join(p.text for p in Document(io.BytesIO(render_docx(v, decision=True))).paragraphs)
+    assert "Итоговый ответ совета." in text and "Почему" not in text and "Голосование" not in text
+
+
 def test_archive_backfills_summary(tmp_path):
     import json
     from council.archive import Archive, all_reports
