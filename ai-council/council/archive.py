@@ -11,6 +11,7 @@ import logging
 import os
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -23,7 +24,10 @@ from .reports.view import MODE_NAME, View
 log = logging.getLogger("council.archive")
 
 REPORT_VERSION = "10"  # 10 — новое оформление отчётов: решение первым, стили Word, PDF/UA  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
-MARKER = ".reports-version"
+MARKER = ".reports-version"  # номер версии; время изменения файла — момент смены версии
+LOCK = ".reports-lock"  # фоновую пересборку ведёт один процесс (сайт и бот делят папку архива)
+URGENT = ".reports-urgent-"  # пока такие файлы есть, фоновая пересборка ждёт: человек ждёт свой отчёт
+URGENT_STALE_S = 600  # файл старше — остался от упавшего процесса, не ждём его
 ID_RE = re.compile(r"^[\w\-]{1,160}$", re.U)
 MIME = {
     "pdf": "application/pdf",
@@ -152,18 +156,34 @@ class Archive:
         return next((s for s in self.stems() if key_of(s) == key), None)
 
     # ------------------------------------------------------------ отчёты
-    def _marker_ok(self) -> bool:
+    def _version_time(self) -> float | None:
+        """Когда включилась текущая версия отчётов; None — архив ещё не переведён на неё."""
         try:
-            return (self.dir / MARKER).read_text().strip() == REPORT_VERSION
+            m = self.dir / MARKER
+            return m.stat().st_mtime if m.read_text().strip() == REPORT_VERSION else None
+        except OSError:
+            return None
+
+    def _fresh(self, stem: str, fmt: str) -> bool:
+        """Отчёт собран текущей версией и после последнего изменения стенограммы."""
+        vt = self._version_time()
+        try:
+            rt = self.path(stem, fmt).stat().st_mtime
+            return vt is not None and rt >= vt and rt >= self.path(stem, "json").stat().st_mtime
         except OSError:
             return False
 
-    def _fresh(self, stem: str, fmt: str) -> bool:
-        rp, jp = self.path(stem, fmt), self.path(stem, "json")
-        try:
-            return self._marker_ok() and rp.stat().st_mtime >= jp.stat().st_mtime
-        except OSError:
-            return False
+    def _wait_urgent(self) -> None:
+        """Фоновая пересборка уступает процессор отчёту, который сейчас ждёт человек."""
+        while True:
+            now = time.time()
+            try:
+                busy = [p for p in self.dir.glob(URGENT + "*") if now - p.stat().st_mtime < URGENT_STALE_S]
+            except OSError:
+                busy = []
+            if not busy:
+                return
+            time.sleep(0.5)
 
     def build(self, stem: str, formats: list[str] | None = None, data: dict | None = None) -> dict[str, str]:
         """Создаёт отчёты. Возвращает {формат: путь или 'ошибка: …'}."""
@@ -189,40 +209,64 @@ class Archive:
         if not self.exists(stem):
             raise KeyError(stem)
         target = self.path(stem, fmt)
-        if not self._fresh(stem, fmt):
+        if self._fresh(stem, fmt):
+            return target
+        flag = self.dir / f"{URGENT}{os.getpid()}-{threading.get_ident()}"
+        try:
+            flag.touch()
+        except OSError:
+            flag = None
+        try:
             with self._lock:
                 if not self._fresh(stem, fmt):
                     res = self.build(stem, [fmt])
                     if res[fmt].startswith("ошибка"):
                         raise RuntimeError(res[fmt])
+        finally:
+            if flag is not None:
+                flag.unlink(missing_ok=True)
         return target
 
     def html(self, stem: str, toolbar: str = "", summary: bool = False, decision: bool = False) -> str:
         return render_html(self.view(stem), toolbar=toolbar, summary=summary, decision=decision)
 
     def ensure_all(self, force: bool = False, progress: Callable[[str, dict], None] | None = None) -> tuple[int, int]:
-        """Досоздаёт недостающие и устаревшие отчёты для всех заседаний. Возвращает (создано, ошибок)."""
-        force = force or not self._marker_ok()
-        built = failed = 0
-        for stem in self.stems():
-            need = [f for f in all_reports() if force or not self.path(stem, f).is_file()
-                    or self.path(stem, f).stat().st_mtime < self.path(stem, "json").stat().st_mtime]
-            if not need:
-                continue
-            try:
-                res = self.build(stem, need)
-            except (OSError, ValueError, KeyError) as e:
-                log.warning("заседание %s пропущено: %s", stem, e)
-                failed += 1
-                continue
-            bad = [f for f, r in res.items() if r.startswith("ошибка")]
-            failed += bool(bad)
-            built += 1
-            if progress:
-                progress(stem, res)
-        if self.dir.is_dir():
-            (self.dir / MARKER).write_text(REPORT_VERSION)
-        return built, failed
+        """Досоздаёт недостающие и устаревшие отчёты для всех заседаний. Возвращает (создано, ошибок).
+
+        Пока пересборка идёт, уже пересобранные отчёты считаются свежими, а отчёт, который открыл человек,
+        собирается вне очереди. Если пересборку уже ведёт другой процесс (сайт или бот), второй не запускается."""
+        if not self.dir.is_dir():
+            return 0, 0
+        with _ProcessLock(self.dir / LOCK) as got:
+            if not got:
+                log.info("отчёты архива уже пересобирает другой процесс")
+                return 0, 0
+            if force or self._version_time() is None:
+                (self.dir / MARKER).write_text(REPORT_VERSION)  # с этого момента всё собранное раньше — устарело
+            built = failed = 0
+            for stem in self.stems():
+                need = [f for f in all_reports() if not self._fresh(stem, f)]
+                if not need:
+                    continue
+                res: dict[str, str] = {}
+                try:
+                    for f in need:
+                        self._wait_urgent()
+                        with self._lock:
+                            if not self._fresh(stem, f):
+                                res.update(self.build(stem, [f]))
+                except (OSError, ValueError, KeyError) as e:
+                    log.warning("заседание %s пропущено: %s", stem, e)
+                    failed += 1
+                    continue
+                if not res:
+                    continue
+                bad = [f for f, r in res.items() if r.startswith("ошибка")]
+                failed += bool(bad)
+                built += 1
+                if progress:
+                    progress(stem, res)
+            return built, failed
 
     def ensure_all_in_background(self, force: bool = False) -> threading.Thread:
         def run() -> None:
@@ -301,3 +345,29 @@ class Archive:
                 pass
         self._cache.pop(stem, None)
         return removed
+
+
+class _ProcessLock:
+    """Неблокирующая блокировка файла между процессами; где её нет (Windows) — всегда «получена»."""
+
+    def __init__(self, path: Path) -> None:
+        self.path, self.fh = path, None
+
+    def __enter__(self) -> bool:
+        try:
+            import fcntl
+        except ImportError:
+            return True
+        try:
+            self.fh = open(self.path, "a")  # закрывается в __exit__
+            fcntl.flock(self.fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            if self.fh:
+                self.fh.close()
+                self.fh = None
+            return False
+
+    def __exit__(self, *exc: object) -> None:
+        if self.fh:
+            self.fh.close()  # закрытие файла снимает блокировку

@@ -93,3 +93,30 @@ def test_all_samples_build_in_every_format(tmp_path):
     text = (tmp_path / "03-nichya-i-sboi.md").read_text()
     assert "Ничья за первое место" in text and "Председатель выбрал не лидера" in render_html(View(samples.tie_deviation(), "x"))
     assert re.search(r"Уточнение к заседанию «Как назвать кофейню", (tmp_path / "06-utochnenie.md").read_text())
+
+
+def test_archive_rebuild_after_version_change_keeps_finished_reports(tmp_path, monkeypatch):
+    import os
+    import time
+
+    from council import archive as A
+    arc = Archive(tmp_path)
+    for name in ("02-bystryi-otvet", "06-utochnenie"):
+        (tmp_path / f"{name}.json").write_text(__import__("json").dumps(samples.SAMPLES[name](), ensure_ascii=False))
+    (tmp_path / A.MARKER).write_text("старая")
+    calls = []
+    monkeypatch.setattr(A, "RENDER", {k: (lambda v, k=k: calls.append(k) or b"x") for k in A.RENDER})
+    assert not arc._fresh("02-bystryi-otvet", "md")
+    built, failed = arc.ensure_all()
+    assert (built, failed) == (2, 0) and len(calls) == 2 * len(all_reports())
+    calls.clear()
+    assert arc.ensure_all() == (0, 0) and not calls  # готовое не пересобирается
+    arc.report("06-utochnenie", "md")
+    assert not calls  # отчёт, собранный в фоне, отдаётся сразу
+    # отчёт старше смены версии — устарел
+    old = time.time() - 3600
+    os.utime(tmp_path / "02-bystryi-otvet.md", (old, old))
+    assert not arc._fresh("02-bystryi-otvet", "md")
+    # пока фоновую пересборку ведёт другой процесс, второй её не начинает
+    with A._ProcessLock(tmp_path / A.LOCK) as got:
+        assert got and Archive(tmp_path).ensure_all(force=True) == (0, 0)
