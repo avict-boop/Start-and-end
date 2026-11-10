@@ -766,7 +766,8 @@ function render(s) {
   $("sCost").textContent = money(s.cost);
   $("cancelBtn").hidden = finished;
   $("sError").hidden = !s.error;
-  $("sError").textContent = s.error ? `Заседание прервано: ${s.error}` : "";
+  $("sError").innerHTML = s.error ? `Заседание прервано: ${esc(s.error)}<br><a href="/api/sessions/${encodeURIComponent(s.id)}/diagnostics">🧾 Скачать журнал для разбора</a>` : "";
+  $("diagLink").href = `/api/sessions/${encodeURIComponent(s.id)}/diagnostics`;
 
   // таймлайн
   const skip = new Set(s.mode === "quick" ? ["critique", "revision"] : s.mode === "evaluate" ? ["proposal", "revision"] : []);

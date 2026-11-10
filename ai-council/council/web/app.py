@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -33,6 +33,7 @@ from ..session import Council, CouncilError
 from .auth import BasicAuth
 
 log = logging.getLogger("council.web")
+from ..diagnostics import bundle, list_failed, save_events, save_failed, setup_logging, stamp  # noqa: E402
 STATIC = Path(__file__).parent / "static"
 ID_RE = re.compile(r"^[\w\-]{1,120}$", re.U)
 MODELS_TTL = 600
@@ -140,7 +141,7 @@ class RunState:
         self._changed = asyncio.Event()
 
     def push(self, event: dict[str, Any]) -> None:
-        self.events.append(event)
+        self.events.append(stamp(event))
         self._changed.set()
         self._changed = asyncio.Event()
 
@@ -159,6 +160,11 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     config_path = Path(config_path)
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        try:
+            setup_logging(runs_dir(base_config()), "web")
+        except HTTPException:
+            pass
+        log.info("веб-интерфейс запущен")
         # отчёты PDF/DOCX/MD для заседаний, проведённых до обновления программы
         archive().ensure_all_in_background()
         cleanup_uploads()
@@ -451,7 +457,17 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         def on_event(event: str, **data: Any) -> None:
             st.push({"type": event, **jsonable(data)})
 
+        council: Council | None = None
+
+        def keep_failed(status: str, error: str) -> None:
+            """Прерванное заседание тоже сохраняется — с событиями и частичной стенограммой, для разбора."""
+            save_failed(runs_dir(cfg), sid, question=req.question, status=status, error=error, events=st.events,
+                        transcript=council.transcript if council else [], stats=council.stats if council else {},
+                        request={"mode": req.mode, "members": [m.name for m in cfg.active_members], "chair": cfg.chair})
+
         async def execute() -> None:
+            nonlocal council
+            log.info("заседание %s: старт (%s, участников %d)", sid, req.mode, len(cfg.active_members))
             try:
                 council = Council(cfg, client, on_event=on_event, vision=vision)
                 for w in att_warnings:
@@ -472,17 +488,28 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 st.status = "done"
                 st.push({"type": "done", "id": sid, "total_cost": res.total_cost, "duration_s": res.duration_s,
                          "stats": jsonable(res.stats)})
+                log.info("заседание %s: готово, $%.4f, %s с", sid, res.total_cost, res.duration_s)
+                failures = {n: s.failures for n, s in res.stats.items() if s.failures}
+                if failures:
+                    log.warning("заседание %s: сбои участников: %s", sid, failures)
             except asyncio.CancelledError:
                 st.status = "cancelled"
                 st.push({"type": "error", "message": "Заседание остановлено пользователем"})
+                log.info("заседание %s: остановлено пользователем", sid)
+                await asyncio.to_thread(keep_failed, "cancelled", "остановлено пользователем")
             except CouncilError as e:
                 st.status = "error"
                 st.push({"type": "error", "message": str(e)})
+                log.warning("заседание %s прервано: %s", sid, e)
+                await asyncio.to_thread(keep_failed, "error", str(e))
             except Exception as e:  # noqa: BLE001
                 log.exception("заседание %s упало", sid)
                 st.status = "error"
                 st.push({"type": "error", "message": f"внутренняя ошибка: {e!r}"})
+                import traceback
+                await asyncio.to_thread(keep_failed, "crash", traceback.format_exc())
             finally:
+                await asyncio.to_thread(save_events, runs_dir(cfg), sid, st.events)
                 await client.aclose()
 
         finished = [r for r in runs.values() if r.status != "running"]
@@ -491,6 +518,40 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         runs[sid] = st
         st.task = asyncio.create_task(execute())
         return {"id": sid}
+
+    # ------------------------------------------------------------ диагностика
+
+    def diag_response(stem: str | None) -> Response:
+        cfg = base_config()
+        data = bundle(runs_dir(cfg), config_path, stem=stem, control_dir=config_path.parent / "control")
+        name = f"diagnostics-{stem or time.strftime('%Y%m%d-%H%M%S')}.zip"
+        ascii_name = f"diagnostics-{(stem or '')[:15] or time.strftime('%Y%m%d-%H%M%S')}.zip"  # дата и время заседания
+        from urllib.parse import quote
+        return Response(data, media_type="application/zip",
+                        headers={"Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"})
+
+    @app.get("/api/diagnostics")
+    async def diagnostics() -> Response:
+        """Журналы программы и прерванные заседания одним архивом — для разбора ошибок."""
+        return await asyncio.to_thread(diag_response, None)
+
+    @app.get("/api/diagnostics/failed")
+    async def failed_sessions() -> dict[str, Any]:
+        return {"items": await asyncio.to_thread(list_failed, runs_dir(base_config()))}
+
+    @app.get("/api/sessions/{sid}/diagnostics")
+    async def session_diagnostics(sid: str) -> Response:
+        """Пакет для разбора одного заседания: журнал событий, стенограмма с сырыми ответами, журналы программы."""
+        if not re.fullmatch(r"[\w\-]{1,160}", sid):
+            raise HTTPException(400, "неверный id")
+        st = runs.get(sid)
+        if st is not None and st.status == "running":
+            await asyncio.to_thread(save_events, runs_dir(base_config()), sid, st.events)
+        d = runs_dir(base_config())
+        if not (st or (d / f"{sid}.json").exists() or (d / f"{sid}.events.jsonl").exists()
+                or (d / "failed" / f"{sid}.json").exists()):
+            raise HTTPException(404, "заседание не найдено")
+        return await asyncio.to_thread(diag_response, sid)
 
     @app.get("/api/sessions")
     async def list_sessions(q: str = "", mode: str = "") -> dict[str, Any]:

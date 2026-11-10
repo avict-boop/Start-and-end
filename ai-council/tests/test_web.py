@@ -124,7 +124,7 @@ def test_history_replay_from_file(client, tmp_path):
     app2 = create_app(tmp_path / "config.yaml", mock_delay=0)
     with TestClient(app2) as c2:
         replay = read_events(c2, sid)
-    pick = lambda evs, t: next(e for e in evs if e["type"] == t)  # noqa: E731
+    pick = lambda evs, t: {k: v for k, v in next(e for e in evs if e["type"] == t).items() if k != "ts"}  # noqa: E731
     assert pick(replay, "verdict") == pick(live, "verdict")
     assert pick(replay, "tally")["rows"] == pick(live, "tally")["rows"]
     assert pick(replay, "proposals")["proposals"] == pick(live, "proposals")["proposals"]

@@ -326,6 +326,12 @@ async function renderSystem(first) {
     ${sys.log ? `<details ${running || st.state === "failed" ? "open" : ""}><summary class="small">Журнал</summary><pre class="sys-log">${esc(sys.log)}</pre></details>` : ""}
     <p class="muted small">Обновление: программа скачивает новую версию, пересобирается и перезапускается (обычно 1–5 минут).
       Ваши настройки, отчёты и архив сохраняются. Идущие заседания прервутся — обновляйте, когда совет не заседает.</p>
+    <h2 style="margin-top:1.2rem">Журналы для разбора ошибок</h2>
+    <p class="muted small">Журнал программы и прерванные заседания одним архивом — его можно прислать для разбора.
+      Ключи и пароли в журналах скрываются; вопросы и ответы моделей — внутри. Журнал отдельного заседания —
+      в его «Журнале событий».</p>
+    <a class="button secondary" href="/api/diagnostics">🧾 Скачать журналы программы</a>
+    <div id="failedList" class="small" style="margin-top:.6rem"></div>
     <h2 style="margin-top:1.2rem">Резервные копии настроек</h2>
     <p class="muted small">Перед каждым сохранением прежняя версия config.yaml сохраняется — можно вернуть.</p>
     <div id="backups"><button type="button" class="link" id="showBackups">Показать копии</button></div>`;
@@ -333,6 +339,7 @@ async function renderSystem(first) {
   $("sysUpdate").addEventListener("click", () => requestAction("update"));
   $("sysRestart").addEventListener("click", () => requestAction("restart"));
   $("showBackups").addEventListener("click", showBackups);
+  loadFailed();
   if (first && v && !SET.check) checkVersion(false);
   if (running && !SET.poll) startPolling();
   if (!running && SET.poll && !SET.restarting) { clearInterval(SET.poll); SET.poll = null; }
@@ -390,6 +397,19 @@ function startPolling() {
       if (SET.tab === "system" && view === "settings") $("sysBox").innerHTML = '<div class="set-notice warn">⏳ Программа перезапускается… страница обновится сама.</div>';
     }
   }, 3000);
+}
+
+async function loadFailed() {
+  try {
+    const r = await api("/api/diagnostics/failed");
+    const box = $("failedList");
+    if (!box) return;
+    const st = { error: "ошибка", crash: "сбой программы", cancelled: "остановлено" };
+    box.innerHTML = r.items.length ? `<b>Прерванные заседания</b><ul class="backups">${r.items.map((f) => `<li>
+      ${esc(f.saved_at.replace("T", " ").slice(0, 16))} · ${esc(st[f.status] || f.status)} · ${esc(f.question.slice(0, 80))}
+      <div class="muted">${esc(f.error.slice(0, 160))}</div>
+      <a href="/api/sessions/${encodeURIComponent(f.id)}/diagnostics">журнал</a></li>`).join("")}</ul>` : "";
+  } catch { /* не важно */ }
 }
 
 async function showBackups() {

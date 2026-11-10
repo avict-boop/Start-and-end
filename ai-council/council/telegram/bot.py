@@ -32,6 +32,7 @@ from ..reports.view import short_title
 from .format import esc, md_to_tg, split_message, strip_tags
 
 log = logging.getLogger("council.telegram")
+from ..diagnostics import bundle, save_events, save_failed, setup_logging, stamp  # noqa: E402
 
 STAGES = [("framing", "Постановка"), ("proposal", "Предложения"), ("critique", "Критика"),
           ("revision", "Доработка"), ("vote", "Голосование"), ("factcheck", "Факты"), ("verdict", "Вердикт")]
@@ -46,6 +47,7 @@ COMMANDS = [
     ("cancel", "отменить уточнение или вопрос"),
     ("stats", "статистика: расходы и успехи моделей"),
     ("stop", "остановить идущее заседание"),
+    ("logs", "журнал для разбора ошибок"),
     ("help", "как пользоваться"),
 ]
 HELP = """<b>Совет нейросетей</b>
@@ -60,6 +62,7 @@ HELP = """<b>Совет нейросетей</b>
 • 📎 Файлы: пришлите фото, скриншот или документ (PDF, Word, Excel, текст) — с подписью-вопросом или перед вопросом. Убрать вложения: /clear
 • /archive — архив всех заседаний: отчёты в PDF, Word и Markdown. Поиск: <code>/archive кофейня</code>
 • /stop — остановить заседание.
+• /logs — журнал для разбора ошибок (последнее заседание и журнал программы) одним архивом.
 
 После заседания придут решение, итоги голосования и полный отчёт в PDF. Кнопки под ним: другие форматы и «📌 Итог» — короткий документ только с итоговым решением."""
 FORMAT_NAME = {"pdf": "PDF", "docx": "Word", "md": "Markdown"}
@@ -245,6 +248,7 @@ class CouncilBot:
     ) -> None:
         self.api = api
         self.config_path = Path(config_path)
+        self.last_stem: dict[int, str] = {}   # последнее заседание чата (для /logs)
         self.allowed = allowed_users
         self.edit_interval = edit_interval
         self.mock_delay = mock_delay
@@ -435,6 +439,8 @@ class CouncilBot:
             await self.cmd_evaluate(chat_id, arg)
         elif cmd == "/stats":
             await self.cmd_stats(chat_id)
+        elif cmd == "/logs":
+            await self.cmd_logs(chat_id)
         elif cmd == "/cancel":
             had = self.followup_wait.pop(chat_id, None) or self.pending.pop(chat_id, None)
             await self.send(chat_id, "Отменено." if had else "Нечего отменять.")
@@ -542,6 +548,19 @@ class CouncilBot:
             self._album_replied.add(group)
         await self.send(chat_id, f"📎 Принял «{esc(att.name)}» (всего вложений: {len(draft)}).{warn}\n"
                                  "Теперь напишите вопрос — или пришлите ещё файлы. Убрать вложения: /clear")
+
+    async def cmd_logs(self, chat_id: int) -> None:
+        """Пакет для разбора ошибок: последнее заседание чата (журнал событий, стенограмма) и журнал программы."""
+        stem = self.last_stem.get(chat_id)
+        data = await asyncio.to_thread(bundle, self.runs_dir, self.config_path, stem=stem,
+                                       control_dir=self.config_path.parent / "control")
+        name = f"diagnostics-{stem or time.strftime('%Y%m%d-%H%M%S')}.zip"
+        caption = ("🧾 Журнал для разбора" + (" последнего заседания" if stem else "") +
+                   ": события по моделям, сырые ответы, ошибки программы. Ключи скрыты, вопросы и ответы — внутри.")
+        try:
+            await self.api.send_document(chat_id, name, data, caption=caption, mime="application/zip")
+        except TelegramError as e:
+            await self.send(chat_id, f"⚠️ Telegram не принял файл: {esc(e.description)}")
 
     async def cmd_stats(self, chat_id: int) -> None:
         from ..stats import compute, fmt_duration
@@ -872,7 +891,12 @@ class CouncilBot:
         msg = await self.api.send_message(chat_id, progress.render(), reply_markup=stop_kb)
         client = self.llm_factory(cfg, s.demo)
 
+        stem = make_stem(p.question)
+        events: list[dict[str, Any]] = []
+        council_ref: dict[str, Council] = {}
+
         def on_event(event: str, **d: Any) -> None:
+            events.append(stamp({"type": event, **d}))
             progress.apply(event, d)
             r = self.running.get(chat_id)
             if r:
@@ -880,7 +904,6 @@ class CouncilBot:
 
         async def execute() -> None:
             updater = asyncio.create_task(self._updater(chat_id, stop_kb))
-            stem = make_stem(p.question)
             try:
                 atts = p.attachments
                 history: list[dict] = []
@@ -892,6 +915,8 @@ class CouncilBot:
                     await self.send(chat_id, f"⚠️ {esc(w)}")
                 vision = vision_map(cfg, None if s.demo else await self.catalog.get())
                 council = Council(cfg, client, on_event=on_event, vision=vision)
+                council_ref["c"] = council
+                log.info("заседание %s: старт (чат %s, %s, участников %d)", stem, chat_id, mode, len(cfg.active_members))
                 res = await council.run(p.question, options=p.options, mode=mode, rounds=s.rounds, attachments=atts,
                                         history=history, followup_of=p.parent)
                 res.request = {"question": p.question, "mode": mode, "rounds": s.rounds, "criteria": [],
@@ -903,24 +928,39 @@ class CouncilBot:
                 if r:
                     r.dirty = True
                 await asyncio.to_thread(save, res, self.runs_dir, stem, atts)
+                log.info("заседание %s: готово, $%.4f", stem, res.total_cost)
                 updater.cancel()
                 await self._safe_edit(chat_id, msg["message_id"], progress.render(final="✅ <b>Заседание завершено</b>"))
                 await self.send_result(chat_id, res, stem)
             except asyncio.CancelledError:
                 updater.cancel()
+                keep("cancelled", "остановлено пользователем")
                 await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⏹ <b>Заседание остановлено</b>"))
             except CouncilError as e:
                 updater.cancel()
+                log.warning("заседание %s прервано: %s", stem, e)
+                keep("error", str(e))
                 await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⚠️ <b>Заседание прервано</b>"))
-                await self.send(chat_id, f"⚠️ {esc(e)}")
+                await self.send(chat_id, f"⚠️ {esc(e)}\n\n<i>/logs — журнал для разбора</i>")
             except Exception as e:  # noqa: BLE001
                 updater.cancel()
-                log.exception("заседание упало")
+                log.exception("заседание %s упало", stem)
+                import traceback
+                keep("crash", traceback.format_exc())
                 await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⚠️ <b>Внутренняя ошибка</b>"))
-                await self.send(chat_id, f"⚠️ Внутренняя ошибка: {esc(repr(e))[:500]}")
+                await self.send(chat_id, f"⚠️ Внутренняя ошибка: {esc(repr(e))[:500]}\n\n<i>/logs — журнал для разбора</i>")
             finally:
                 self.running.pop(chat_id, None)
+                self.last_stem[chat_id] = stem
+                save_events(self.runs_dir, stem, events)
                 await client.aclose()
+
+        def keep(status: str, error: str) -> None:
+            """Прерванное заседание сохраняется с событиями и частичной стенограммой — для разбора."""
+            c = council_ref.get("c")
+            save_failed(self.runs_dir, stem, question=p.question, status=status, error=error, events=events,
+                        transcript=c.transcript if c else [], stats=c.stats if c else {},
+                        request={"mode": mode, "members": [m.name for m in cfg.active_members], "chair": cfg.chair})
 
         self.running[chat_id] = Running(task=asyncio.create_task(execute()), progress=progress,
                                         message_id=msg["message_id"])
@@ -1162,6 +1202,8 @@ async def run_bot(config_path: str | Path) -> None:
         log.warning("TELEGRAM_ALLOWED_USERS пуст: бот никого не пустит, но покажет каждому его Telegram ID")
     api = TelegramAPI(token, base_url=os.environ.get("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/"))
     bot = CouncilBot(api, config_path, allowed_users=allowed)
+    setup_logging(bot.runs_dir, "bot")
+    log.info("бот запущен")
     try:
         await bot.run()
     finally:

@@ -525,3 +525,4 @@ label.check.small:has(#factCheck) { display: flex; gap: .45rem; align-items: cen
   .w-model { min-width: 11rem; }
   .set-tabs button { padding: .45rem .5rem; font-size: .88rem; }
 }
+.diag-link { display: inline-block; margin: .3rem 0 .5rem; font-size: .85rem; }

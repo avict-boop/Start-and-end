@@ -252,6 +252,8 @@ async def _ask(args) -> int:
         if cfg.devil_advocate not in wanted:
             cfg.devil_advocate = None
     cfg = type(cfg).model_validate(cfg.model_dump())  # перепроверка после изменений
+    from .diagnostics import setup_logging
+    setup_logging(_runs_dir(cfg), "cli", console=False)
 
     question = args.question
     if question == "-":

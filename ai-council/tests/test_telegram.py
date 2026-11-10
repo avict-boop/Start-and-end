@@ -524,3 +524,19 @@ def test_long_question_split_by_telegram_is_joined(env):
         await finish(bot)
 
     asyncio.run(scenario())
+
+
+def test_logs_command_sends_diagnostics(env):
+    bot, fake, tmp = env
+
+    async def scenario():
+        await bot.handle_update(msg("Как назвать кофейню у университета?"))
+        await bot.handle_update(press("go", bot.pending[CHAT].card_id))
+        await finish(bot)
+        await bot.handle_update(msg("/logs"))
+
+    asyncio.run(scenario())
+    d = docs(fake)[-1]
+    assert d["filename"].startswith("diagnostics-") and d["filename"].endswith(".zip")
+    assert "Журнал для разбора последнего заседания" in d["_multipart"]
+    assert list((tmp / "runs").glob("*.events.jsonl"))

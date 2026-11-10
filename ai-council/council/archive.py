@@ -294,5 +294,10 @@ class Archive:
                 removed = True
             except (OSError, KeyError):
                 pass
+        for extra in (self.dir / f"{stem}.events.jsonl", self.dir / "failed" / f"{stem}.json"):  # журналы для разбора
+            try:
+                extra.unlink()
+            except OSError:
+                pass
         self._cache.pop(stem, None)
         return removed
