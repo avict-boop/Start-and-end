@@ -110,7 +110,7 @@ function md(src) {
     let m;
     if (!line.trim()) { i++; continue; }
     if ((m = line.match(/^\u0000(\d+)\u0000$/))) { out.push(`<pre><code>${esc(code[+m[1]])}</code></pre>`); i++; continue; }
-    if ((m = line.match(/^#{1,6}\s+(.*)$/))) { out.push(`<h4>${inline(m[1])}</h4>`); i++; continue; }
+    if ((m = line.match(/^#{1,6}\s+(.*)$/))) { out.push(`<h3 class="mdh">${inline(m[1])}</h3>`); i++; continue; }
     if (/^\s*\|/.test(line) && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || "")) {
       const cells = (l) => l.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
       const head = cells(line);
@@ -1160,10 +1160,12 @@ function renderActivity(s) {
 
   // строка «что сейчас»
   const bar = $("stageBar").parentElement;
-  bar.classList.remove("done");
+  bar.classList.remove("done", "stopped");
   if (s.error) {
-    $("stageNow").innerHTML = `<b>Заседание прервано</b>`;
+    const at = plan.find(([k]) => !s.doneStages.has(k));
+    $("stageNow").innerHTML = at ? `<b>Остановлено на этапе «${esc(at[1])}»</b> <span class="muted">· пройдено ${doneN} из ${plan.length}</span>` : "<b>Остановлено</b>";
     bar.classList.remove("indeterminate");
+    bar.classList.add("stopped");
   } else if (s.saving) {
     $("stageNow").innerHTML = `<b>Готовлю отчёты</b> <span class="muted">· PDF, Word и Markdown</span>`;
     bar.classList.add("indeterminate");
@@ -1633,7 +1635,7 @@ async function openStats() {
       </div>
     </div>`;
 }
-$("statsBtn").addEventListener("click", openStats);
+$("statsBtn").addEventListener("click", async () => { await openStats(); markAllScroll($("statsBody")); });
 
 /* ------------------------------------------------------------ уведомления и заголовок вкладки */
 
@@ -1791,6 +1793,8 @@ function markScroll(el) {
   const max = el.scrollWidth - el.clientWidth;
   el.classList.toggle("more-right", max > 1 && el.scrollLeft < max - 1);
   el.classList.toggle("more-left", max > 1 && el.scrollLeft > 1);
+  // прокручиваемую таблицу можно листать и с клавиатуры (стрелками после Tab)
+  if (max > 1) { el.tabIndex = 0; if (!el.getAttribute("aria-label")) el.setAttribute("aria-label", "Таблица, прокручивается вбок"); } else el.removeAttribute("tabindex");
 }
 function markAllScroll(root = document) { for (const el of root.querySelectorAll(".md-table, .table-wrap")) markScroll(el); }
 document.addEventListener("scroll", (e) => { if (e.target.classList && (e.target.classList.contains("md-table") || e.target.classList.contains("table-wrap"))) markScroll(e.target); }, true);
@@ -1811,7 +1815,7 @@ function route() {
   } else if (location.hash === "#/archive") {
     if (view !== "archive") openArchive();
   } else if (location.hash === "#/stats") {
-    if (view !== "stats") openStats();
+    if (view !== "stats") openStats().then(() => markAllScroll($("statsBody")));
   } else if (location.hash.startsWith("#/settings")) {
     if (view !== "settings" && window.openSettings) window.openSettings();
   }

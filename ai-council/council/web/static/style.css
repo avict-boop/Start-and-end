@@ -19,7 +19,7 @@
   --ok: #13773f;  --ok-soft: #e3f3ea;
   --warn: #8a5200; --warn-soft: #fcf1da;
   --bad: #b8283a; --bad-soft: #fce8ea;
-  --gold: #a87c00; --gold-line: #d9b44a; --gold-soft: #fbf4dc;
+  --gold: #866200; --gold-line: #d9b44a; --gold-soft: #fbf4dc;
   --radius: 14px; --radius-sm: 10px;
   --shadow: 0 1px 2px rgb(30 25 10 / .05), 0 4px 18px rgb(30 25 10 / .05);
   --shadow-pop: 0 12px 40px rgb(20 15 5 / .18);
@@ -330,6 +330,7 @@ a.s-att:hover, button.s-att:hover { border-color: var(--accent); }
 .progress { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; position: relative; margin: .7rem 0 .4rem; }
 .progress > i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent); border-radius: 3px; transition: width .5s; }
 .progress.done > i { background: var(--ok); }
+.progress.stopped > i { background: var(--bad); }
 .progress.indeterminate > i { animation: slide 1.6s ease-in-out infinite; }
 @keyframes slide { 0% { left: -30%; width: 30%; } 100% { left: 100%; width: 30%; } }
 .steps { list-style: none; margin: .6rem 0 0; padding: 0; }
@@ -386,7 +387,7 @@ a.s-att:hover, button.s-att:hover { border-color: var(--accent); }
 .verdict h2 { font-size: 1.35rem; margin: 0 0 .25rem; overflow-wrap: anywhere; }
 .v-sub { font-size: .92rem; margin-bottom: .8rem; }
 .answer { font-size: 1.02rem; line-height: 1.65; }
-.answer h4 { font-size: 1.05rem; }
+.answer h3 { font-size: 1.05rem; }
 .v-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1.1rem; padding-top: 1.1rem; border-top: 1px solid var(--line); }
 @media (max-width: 560px) { .v-actions > .btn.primary { flex: 1 1 100%; } .v-actions > .btn, .v-actions > .menu-wrap { flex: 1; } .v-actions .menu-wrap > .btn { width: 100%; } }
 .menu-wrap { position: relative; }
@@ -556,6 +557,7 @@ body.modal-open { overflow: hidden; }
   box-shadow: var(--shadow-pop); min-width: 0; }
 .modal-head { display: flex; justify-content: space-between; gap: 1rem; padding: 1rem 1.2rem .7rem 1.4rem; border-bottom: 1px solid var(--line); }
 .modal-titles { min-width: 0; }
+.modal-head .icon-btn { align-self: flex-start; flex: none; }
 .modal-head h2 { font-size: 1.25rem; margin: 0 0 .2rem; overflow-wrap: anywhere; }
 .tabs { display: flex; gap: .2rem; padding: 0 1rem; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }

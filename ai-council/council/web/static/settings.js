@@ -79,7 +79,7 @@ function renderSettings() {
       <p class="muted small">Модель — id на OpenRouter (начните вводить, появятся подсказки: дата выхода и цена за 1M токенов вход/выход).
         Изменения действуют со следующего заседания.</p>
       <div class="table-wrap"><table class="table set-members">
-        <thead><tr><th>Вкл.</th><th>Имя</th><th>Модель</th><th>Глубина рассуждений</th><th></th></tr></thead>
+        <thead><tr><th>Вкл.</th><th>Имя</th><th>Модель</th><th>Глубина рассуждений</th><th><span class="sr-only">Удалить</span></th></tr></thead>
         <tbody>${d.members.map((m, i) => `<tr class="${m.enabled ? "" : "off"}">
           <td class="c-on"><label class="switch small" title="Участвует в заседаниях"><input type="checkbox" data-mi="${i}" data-f="enabled" ${m.enabled ? "checked" : ""} ${ro} aria-label="${esc(m.name)} участвует"><span class="sw" aria-hidden="true"></span></label></td>
           <td class="c-name" data-th="Имя"><input type="text" data-mi="${i}" data-f="name" value="${esc(m.name)}" ${m._new ? "" : "readonly"} ${ro} class="w-name" aria-label="Имя участника"></td>
@@ -157,6 +157,7 @@ function renderSettings() {
   }
   $("setBody").innerHTML = html;
   bindSettings();
+  requestAnimationFrame(() => markAllScroll($("setBody")));
   if (SET.tab === "system") renderSystem(true);
   if (SET.tab === "members" && SET.upgrades) renderUpgrades();
 }
