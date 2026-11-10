@@ -10,22 +10,38 @@ from statistics import mean
 
 from .schemas import CritiqueSet
 
-_decoder = json.JSONDecoder()
+# strict=False: модели часто ставят обычные переводы строк внутри длинных строк — это не ошибка по смыслу.
+_decoder = json.JSONDecoder(strict=False)
+_TRAILING_COMMA = re.compile(r",(\s*[}\]])")
+
+
+def _first_object(chunk: str) -> dict | None:
+    for m in re.finditer(r"\{", chunk):
+        try:
+            obj, _ = _decoder.raw_decode(chunk, m.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
 
 
 def extract_json(text: str) -> dict:
-    """Достаёт первый JSON-объект из ответа модели (учитывая ```json``` и мусор вокруг)."""
-    fence = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.S)
+    """Достаёт первый JSON-объект из ответа модели.
+
+    Терпимо к типичным вольностям моделей: ```json```-обёртка, текст до и после,
+    переводы строк внутри строк, лишняя запятая перед } или ].
+    """
+    fence = re.search(r"```(?:json|JSON)?\s*(\{.*\})\s*```", text, re.S)
     candidates = [fence.group(1)] if fence else []
     candidates.append(text)
     for chunk in candidates:
-        for m in re.finditer(r"\{", chunk):
-            try:
-                obj, _ = _decoder.raw_decode(chunk, m.start())
-            except json.JSONDecodeError:
-                continue
-            if isinstance(obj, dict):
+        for variant in (chunk, _TRAILING_COMMA.sub(r"\1", chunk)):
+            obj = _first_object(variant)
+            if obj is not None:
                 return obj
+    if text.count("{") > text.count("}"):
+        raise ValueError("JSON-объект оборван (похоже, ответ обрезан по лимиту токенов)")
     raise ValueError("в ответе не найден корректный JSON-объект")
 
 

@@ -19,7 +19,7 @@ class MockClient:
         self.delay = delay
         self.calls: list[dict[str, Any]] = []
 
-    async def complete(self, model, messages, *, temperature, max_tokens, meta=None) -> Completion:
+    async def complete(self, model, messages, *, temperature, max_tokens, reasoning_effort=None, meta=None) -> Completion:
         meta = meta or {}
         self.calls.append({"model": model, "meta": meta})
         await asyncio.sleep(self.delay)

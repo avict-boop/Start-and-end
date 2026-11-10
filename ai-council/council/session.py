@@ -148,23 +148,33 @@ class Council:
             devil=member.name == self.cfg.devil_advocate and stage in {"proposal", "critique", "revision"},
             chair=member.name == self.cfg.chair and stage in {"framing", "verdict"},
         )
-        messages = [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}]
+        base_messages = [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}]
+        messages = list(base_messages)
         meta = {"stage": stage, "member": member.name, **(meta or {})}
+        max_tokens = member.max_tokens or self.cfg.max_tokens
+        effort = member.reasoning_effort or self.cfg.reasoning_effort
         error = ""
         for attempt in range(self.cfg.json_retries + 1):
             if self.total_cost >= self.cfg.max_cost_usd:
                 raise BudgetExceeded(
                     f"достигнут лимит бюджета ${self.cfg.max_cost_usd:.2f} (потрачено ${self.total_cost:.4f})"
                 )
-            async with self._sem:
-                comp = await self.client.complete(
-                    member.model,
-                    messages,
-                    temperature=member.temperature if member.temperature is not None else self.cfg.temperature,
-                    max_tokens=member.max_tokens or self.cfg.max_tokens,
-                    meta=meta,
-                )
+            try:
+                async with self._sem:
+                    comp = await self.client.complete(
+                        member.model,
+                        messages,
+                        temperature=member.temperature if member.temperature is not None else self.cfg.temperature,
+                        max_tokens=max_tokens,
+                        reasoning_effort=None if effort == "none" else effort,
+                        meta=meta,
+                    )
+            except ProviderError as e:
+                if e.spent is not None:  # неудачные попытки тоже стоят денег
+                    self._account(member, e.spent)
+                raise
             self._account(member, comp)
+            max_tokens = max(max_tokens, comp.max_tokens or 0)  # клиент мог уже увеличить лимит
             entry = {
                 "stage": stage,
                 "member": member.name,
@@ -180,12 +190,20 @@ class Council:
                     obj = check(obj)
             except ValueError as e:  # pydantic.ValidationError тоже ValueError
                 error = str(e).splitlines()[0][:500] if str(e) else repr(e)
+                if comp.finish_reason in ("length", "max_tokens", "MAX_TOKENS"):
+                    # Ответ обрезан по лимиту: повторяем тот же запрос с вдвое большим лимитом,
+                    # не пересылая обрывок (он только тратит токены).
+                    error = f"ответ обрезан на лимите {max_tokens} токенов ({error})"
+                    max_tokens = min(max_tokens * 2, self.cfg.max_tokens_cap)
+                    messages = list(base_messages)
+                else:
+                    messages += [
+                        {"role": "assistant", "content": comp.text},
+                        {"role": "user", "content": prompts.fix_json(error)},
+                    ]
                 entry["error"] = error
+                entry["finish_reason"] = comp.finish_reason
                 self.transcript.append(entry)
-                messages += [
-                    {"role": "assistant", "content": comp.text},
-                    {"role": "user", "content": prompts.fix_json(error)},
-                ]
                 continue
             entry["parsed"] = obj.model_dump()
             self.transcript.append(entry)

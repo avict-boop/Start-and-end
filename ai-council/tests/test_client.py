@@ -56,3 +56,47 @@ def test_client_error_is_not_retried():
 def test_empty_content_exhausts_retries():
     with pytest.raises(ProviderError, match="пустой ответ"):
         asyncio.run(make(lambda r: httpx.Response(200, json=ok_body(""))).complete("m", [], temperature=0, max_tokens=1))
+
+
+def test_reasoning_model_empty_answer_gets_more_tokens():
+    """Случай gpt-5: рассуждения съели весь лимит, content пустой, finish_reason=length."""
+    bodies = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        bodies.append(body)
+        if len(bodies) == 1:
+            return httpx.Response(200, json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                                             "usage": {"prompt_tokens": 100, "completion_tokens": 4000, "cost": 0.04}})
+        return httpx.Response(200, json=ok_body('{"ok": 1}'))
+
+    comp = asyncio.run(make(handler).complete("openai/gpt-5", [], temperature=0, max_tokens=4000,
+                                              reasoning_effort="low"))
+    assert comp.text == '{"ok": 1}'
+    assert [b["max_tokens"] for b in bodies] == [4000, 8000]
+    assert bodies[0]["reasoning"] == {"effort": "low"}
+    assert comp.cost == pytest.approx(0.04 + 0.0123)  # неудачная попытка тоже учтена
+    assert comp.max_tokens == 8000
+
+
+def test_persistent_empty_answer_reports_spent_cost():
+    def handler(req):
+        return httpx.Response(200, json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                                         "usage": {"cost": 0.01}})
+
+    c = OpenRouterClient("k", transport=httpx.MockTransport(handler), max_retries=2, retry_base_delay=0,
+                         max_tokens_cap=8000)
+    with pytest.raises(ProviderError, match="лимит") as e:
+        asyncio.run(c.complete("m", [], temperature=0, max_tokens=4000))
+    assert e.value.spent.cost == pytest.approx(0.03)
+
+
+def test_no_reasoning_param_when_disabled():
+    seen = {}
+
+    def handler(req):
+        seen.update(json.loads(req.content))
+        return httpx.Response(200, json=ok_body("x"))
+
+    asyncio.run(make(handler).complete("m", [], temperature=0, max_tokens=10))
+    assert "reasoning" not in seen

@@ -171,3 +171,52 @@ def test_load_dotenv(tmp_path, monkeypatch):
     (tmp_path / ".env").write_text('# c\nA1=plain  # comment\nA2="quoted # not comment"\nexport A3=x:y\nA4=override\n')
     load_dotenv(tmp_path / ".env")
     assert (os.environ["A1"], os.environ["A2"], os.environ["A3"], os.environ["A4"]) == ("plain", "quoted # not comment", "x:y", "keep")
+
+
+def test_extract_json_tolerates_model_quirks():
+    # перевод строки внутри строки (частая вольность Gemini) и лишняя запятая
+    assert extract_json('```json\n{"summary": "строка 1\nстрока 2", "pros": ["a", "b",],}\n```') == \
+        {"summary": "строка 1\nстрока 2", "pros": ["a", "b"]}
+    with pytest.raises(ValueError, match="обрезан"):
+        extract_json('{"title": "Вариант", "summary": "длинный текст без конца')
+
+
+class TruncatedOnce(MockClient):
+    """Первый ответ на proposal обрезан по лимиту (finish_reason=length)."""
+
+    def __init__(self):
+        super().__init__(delay=0)
+        self.proposal_calls = []
+
+    async def complete(self, model, messages, **kw):
+        meta = kw.get("meta") or {}
+        if meta.get("stage") == "proposal":
+            self.proposal_calls.append((model, kw["max_tokens"], len(messages)))
+            if sum(1 for m, *_ in self.proposal_calls if m == model) == 1:
+                return Completion(text='{"title": "Обрыв", "summary": "текст', model=model,
+                                  finish_reason="length", cost=0.002)
+        return await super().complete(model, messages, **kw)
+
+
+def test_truncated_json_is_retried_with_bigger_limit():
+    client = TruncatedOnce()
+    cfg = make_cfg(max_tokens=1000, reasoning_effort="medium")
+    res = run(Council(cfg, client).run("Q", mode="quick", criteria=["x"]))
+    assert len(res.proposals) == 4
+    first, second = [c for c in client.proposal_calls if c[0] == "m/a"]
+    assert (first[1], second[1]) == (1000, 2000)   # лимит удвоен
+    assert second[2] == first[2] == 2              # обрывок не пересылается обратно
+    errors = [e for e in res.transcript if e.get("error")]
+    assert errors and "обрезан" in errors[0]["error"] and errors[0]["finish_reason"] == "length"
+
+
+def test_failed_attempts_cost_is_counted():
+    class Expensive(MockClient):
+        async def complete(self, model, messages, **kw):
+            if model == "m/b":
+                raise ProviderError("m/b: пустой ответ", spent=Completion(text="", cost=0.05))
+            return await super().complete(model, messages, **kw)
+
+    res = run(Council(make_cfg(), Expensive(delay=0)).run("Q", mode="quick", criteria=["x"]))
+    # b упал дважды — на предложении и на голосовании; обе неудачи стоили денег
+    assert res.stats["b"].cost == pytest.approx(0.10) and len(res.stats["b"].failures) == 2

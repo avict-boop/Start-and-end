@@ -219,7 +219,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             if not key:
                 raise HTTPException(400, "нет OPENROUTER_API_KEY: добавьте ключ в .env и перезапустите сервер "
                                          "или включите демо-режим")
-            client = OpenRouterClient(key, timeout=cfg.timeout_s, max_retries=cfg.max_retries)
+            client = OpenRouterClient(key, timeout=cfg.timeout_s, max_retries=cfg.max_retries,
+                            max_tokens_cap=cfg.max_tokens_cap)
         sid = make_stem(req.question)
         while sid in runs or (runs_dir(cfg) / f"{sid}.json").exists():
             sid += "-1"

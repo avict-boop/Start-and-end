@@ -75,7 +75,8 @@ def _make_client(cfg, mock: bool, *, need_key: bool = True):
             "файл .env (см. .env.example) или в переменную окружения. Для пробного прогона без ключа: --mock"
         )
         sys.exit(2)
-    return OpenRouterClient(key, timeout=cfg.timeout_s, max_retries=cfg.max_retries)
+    return OpenRouterClient(key, timeout=cfg.timeout_s, max_retries=cfg.max_retries,
+                            max_tokens_cap=cfg.max_tokens_cap)
 
 
 async def _preflight(client, cfg, args, *, mode, rounds, options, criteria) -> int | None:

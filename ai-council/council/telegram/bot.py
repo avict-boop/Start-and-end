@@ -208,7 +208,8 @@ class CouncilBot:
     def _default_llm(self, cfg: CouncilConfig, demo: bool) -> LLMClient:
         if demo:
             return MockClient(delay=self.mock_delay)
-        return OpenRouterClient(os.environ["OPENROUTER_API_KEY"], timeout=cfg.timeout_s, max_retries=cfg.max_retries)
+        return OpenRouterClient(os.environ["OPENROUTER_API_KEY"], timeout=cfg.timeout_s, max_retries=cfg.max_retries,
+                            max_tokens_cap=cfg.max_tokens_cap)
 
     def build_config(self, s: ChatSettings) -> CouncilConfig:
         base = self.base_config()
