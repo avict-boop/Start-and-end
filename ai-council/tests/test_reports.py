@@ -114,7 +114,7 @@ def test_reports_show_agreement_and_pairwise():
     assert v.agreement["level"] == "low"  # противоположные бюллетени — считается и для старых заседаний
     html = render_html(v)
     assert "Согласие совета" in html and "Низкое согласие совета" in html and "Попарно" in html
-    assert "A выше B: при равном балле Борда решило жребий (метка)" in html
+    assert "A выше B: при равенстве по баллу Борда решило жребий" in html  # старое заседание — по Борда
     md = render_md(v)
     assert "| Попарно |" in md and "Низкое согласие" in md
     text = "\n".join(p.text for p in Document(io.BytesIO(render_docx(v))).paragraphs)

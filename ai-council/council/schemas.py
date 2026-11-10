@@ -59,6 +59,28 @@ def _pick(d: dict, *names: str) -> Any:
     return None
 
 
+def _first_line(text: str) -> str:
+    """Первая содержательная строка без разметки Markdown — как название."""
+    for ln in text.splitlines():
+        ln = re.sub(r"^[#>\-\s]+", "", ln)
+        ln = re.sub(r"^\*\*[^*]{1,60}:\*\*\s*(?=\S)", "", ln)   # «**Раздел:** текст» -> «текст»
+        ln = re.sub(r"^[*\s]+", "", ln)
+        ln = re.sub(r"[*_`]+", "", ln).strip()
+        if ln:
+            return (ln[:77] + "…") if len(ln) > 80 else ln
+    return "Вариант"
+
+
+def _title_from(sections: dict) -> str:
+    """Ответ прислан разделами {"краткий_вывод": "...", ...}: название — начало первого раздела, а не имя ключа."""
+    for v in sections.values():
+        t = _first_line(to_text(v))
+        if t and t != "Вариант":
+            return t
+    k = next(iter(sections), "")
+    return str(k).replace("_", " ").strip().capitalize() or "Вариант"
+
+
 def _unwrap(data: Any, required: tuple[str, ...]) -> Any:
     """{"proposal": {...нужные поля...}} -> {...}."""
     if isinstance(data, dict) and not any(k in data for k in required) and len(data) == 1:
@@ -117,22 +139,24 @@ class Proposal(BaseModel):
         if not isinstance(data, dict):
             return data
         data = dict(data)
+        sections: dict = {}
         if data.get("summary") in (None, "", [], {}):
             alt = _pick(data, *TEXT_ALIASES)
             if alt is not None:
                 data["summary"] = alt
             else:
                 # разделы ответа лежат прямо на верхнем уровне — собираем их в текст
-                extra = {k: v for k, v in data.items() if k not in KNOWN_PROPOSAL}
-                if extra:
-                    data["summary"] = extra
+                sections = {k: v for k, v in data.items() if k not in KNOWN_PROPOSAL}
+                if sections:
+                    data["summary"] = sections
+        if isinstance(data.get("summary"), dict) and not sections:
+            sections = data["summary"]
         if data.get("title") in (None, "", [], {}):
             alt = _pick(data, "name", "heading", "option_title", "headline")
             if alt is not None:
                 data["title"] = alt
         if data.get("title") in (None, "", [], {}) and data.get("summary") not in (None, "", [], {}):
-            first = next((ln for ln in to_text(data["summary"]).splitlines() if ln.strip()), "")
-            data["title"] = re.sub(r"^[#*\-\s]+|[*]+$", "", first).strip()[:80] or "Вариант"
+            data["title"] = _title_from(sections) if sections else _first_line(to_text(data["summary"]))
         if "reasoning" not in data:
             alt = _pick(data, "rationale", "justification", "why")
             if alt is not None:
@@ -169,6 +193,7 @@ class Revision(Proposal):
     changes: str = ""
     comparison: str = ""                                  # честное сравнение своего варианта с чужими
     borrowed: list[str] = Field(default_factory=list)     # что взято у других (с меткой варианта)
+    not_accepted: list[str] = Field(default_factory=list)  # какую критику не принял и почему
     position: str = "improved"                            # kept | improved | switched (нормализуется в session)
 
     @field_validator("changes", "comparison", "position", mode="before")
@@ -176,7 +201,7 @@ class Revision(Proposal):
     def _rtext(cls, v: Any) -> str:
         return to_text(v)
 
-    @field_validator("borrowed", mode="before")
+    @field_validator("borrowed", "not_accepted", mode="before")
     @classmethod
     def _rlist(cls, v: Any) -> list[str]:
         return to_list(v)
@@ -316,6 +341,7 @@ class Verdict(BaseModel):
     why: str
     dissent: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+    deviation: str = ""   # если победитель не лидер голосования — причина (fact | risk | process) и пояснение
 
     @model_validator(mode="before")
     @classmethod
@@ -332,7 +358,7 @@ class Verdict(BaseModel):
             data["why"] = _pick(data, "reasoning", "rationale", "justification") or ""
         return data
 
-    @field_validator("winner", "final_answer", "why", mode="before")
+    @field_validator("winner", "final_answer", "why", "deviation", mode="before")
     @classmethod
     def _text(cls, v: Any) -> str:
         return to_text(v)

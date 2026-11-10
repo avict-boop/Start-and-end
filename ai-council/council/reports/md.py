@@ -71,6 +71,8 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
         ]
     if v.agreement_low:
         out.insert(out.index(vd.get("final_answer", "")), f"> ⚠️ **Низкое согласие совета:** {v.agreement_line}\n")
+    if v.deviation_line:
+        out.insert(out.index(vd.get("final_answer", "")), f"> ⚖️ **{v.deviation_line}**\n")
     if vd.get("why"):
         out += ["### Почему", "", vd["why"], ""]
     if vd.get("dissent"):
@@ -95,15 +97,15 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
                 "критикой и голосованием скачивается отдельно.*"]
         return "\n".join(out).rstrip() + "\n"
 
-    out += ["## Голосование", "", "| # | Вариант | Автор | Борда (0–1) | Попарно | Оценка критики | 1-х мест |",
-            "|---|---|---|---|---|---|---|"]
+    out += ["## Голосование", "", "| # | Вариант | Автор | Шульце | Борда (0–1) | Попарно | Оценка критики | 1-х мест |",
+            "|---|---|---|---|---|---|---|---|"]
     for i, r in enumerate(v.tally, 1):
         l = r.get("label", "")
         avg = r.get("avg_score")
         name = f"**{l}: {_cell(v.title(l))}**" if l == w else f"{l}: {_cell(v.title(l))}"
-        out.append(f"| {i} | {name} | {v.author(l)} | {float(r.get('borda') or 0):.2f} | {v.pairwise_str(r)} | "
+        out.append(f"| {i} | {name} | {v.author(l)} | {v.schulze_str(r, len(v.tally))} | {float(r.get('borda') or 0):.2f} | {v.pairwise_str(r)} | "
                    f"{'—' if avg is None else f'{avg:.1f}'} | {r.get('first_places', 0)}/{r.get('ballots', 0)} |")
-    out += ["", "*Порядок: балл Борда; при равенстве — попарное сравнение (побед минус поражений), затем оценка критики.*"]
+    out += ["", f"*{v.order_note}*"]
     out += [f"- {n}" for n in v.tie_notes]
     if v.position_line:
         out += [f"*{v.position_line}.*"]
@@ -136,6 +138,8 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
             out += ["**Сравнение с другими вариантами.** " + p["comparison"], ""]
         if p.get("borrowed") and v.revised(l):
             out += ["**Взято у других:**", "", *[f"- {x}" for x in p["borrowed"]], ""]
+        if p.get("not_accepted") and v.revised(l):
+            out += ["**Что не принято из критики и почему:**", "", *[f"- {x}" for x in p["not_accepted"]], ""]
         if p.get("changes"):
             pos = v.position(l)
             out += [f"> **Что изменено после критики{f' ({v.POSITION_NAME.get(pos, pos)})' if pos else ''}:** {p['changes']}", ""]

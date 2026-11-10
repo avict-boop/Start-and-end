@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import string
 import time
 from dataclasses import dataclass, field
@@ -358,12 +359,19 @@ class Council:
 
     ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}
     FILE_STAGES = {"proposal", "revision", "verdict"}  # здесь модели пишут содержательный ответ
+    VOTE_DOC_CHARS = 20_000  # документы до такого объёма передаются и на голосование
 
     def can_see(self, member: MemberConfig) -> bool:
         return self.vision.get(member.model) is not False
 
     def _with_attachments(self, member: MemberConfig, stage: str, prompt: str) -> str | list[dict[str, Any]]:
         """Добавляет к запросу вложения: текст документов и картинки (или их описание для «незрячих»)."""
+        if stage == "vote":
+            # голосующие видят и документы, если они небольшие (большие — дорого, их уже разобрали на критике)
+            docs = [a for a in self.attachments if a.kind == "document"]
+            if docs and sum(len(a.text) for a in docs) <= self.VOTE_DOC_CHARS:
+                return documents_block(self.attachments) + "\n\n" + prompt
+            return prompt
         if not (self.attachments or self.history) or stage not in self.ATTACHMENT_STAGES:
             return prompt
         sees = self.can_see(member)
@@ -602,11 +610,21 @@ class Council:
         notes = _critique_notes(critiques)
         valid = list(proposals)
 
+        leader = rows[0].label
+        follow = self.cfg.chair_follows_vote
+
         def check_verdict(v: Verdict) -> Verdict:
             w = normalize_label(v.winner)
             if w not in valid:
-                raise ValueError(f"winner должен быть одной из меток {valid}, получено '{v.winner}'")
-            return v.model_copy(update={"winner": w})
+                raise ValueError(f"winner must be one of the labels {valid}, got '{v.winner}'")
+            deviation = v.deviation.strip()
+            if w == leader:
+                deviation = ""
+            elif follow and not re.match(r"^\W*(fact|risk|process)\b", deviation, re.I):
+                raise ValueError(
+                    f"the winner must be the voting leader {leader}; choosing {w} requires 'deviation' that starts with "
+                    f"fact, risk or process and explains the specific reason, otherwise set winner to {leader}")
+            return v.model_copy(update={"winner": w, "deviation": deviation})
 
         try:
             verdict = await self._ask(
@@ -615,7 +633,7 @@ class Council:
                 prompts.verdict(refined, criteria, proposals, tally_text(rows), notes, question,
                                 (f"{agree['level']} (mean Kendall tau between ballots = {agree['tau']:.2f}; "
                                  "1 = identical rankings, 0 = unrelated)") if agree else "",
-                                prompts.factcheck_block(facts), ballot_notes),
+                                prompts.factcheck_block(facts), ballot_notes, leader=leader, follow_vote=follow),
                 Verdict,
                 check=check_verdict,
                 meta={"labels": valid, "leader": rows[0].label},

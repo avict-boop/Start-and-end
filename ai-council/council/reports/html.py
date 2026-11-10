@@ -276,6 +276,8 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
             f'<span class="muted small">({_e(v.author(w))})</span></h2>')
     if v.agreement_low:
         add(f'<div class="agree-warn">⚠️ Низкое согласие совета: {_e(v.agreement_line)}</div>')
+    if v.deviation_line:
+        add(f'<div class="agree-warn">⚖️ {_e(v.deviation_line)}</div>')
     add(f'<div class="md">{md_to_html(vd.get("final_answer", ""))}</div>')
     if vd.get("why"):
         add(f'<h3>Почему</h3><div class="md">{md_to_html(vd["why"])}</div>')
@@ -292,7 +294,7 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
 
     # Голосование
     add('<h2 id="voting">Голосование</h2>')
-    add('<table><thead><tr><th>#</th><th>Вариант</th><th>Автор</th><th>Борда (0–1)</th>'
+    add('<table><thead><tr><th>#</th><th>Вариант</th><th>Автор</th><th>Шульце</th><th>Борда (0–1)</th>'
         '<th>Попарно</th><th>Оценка критики</th><th>1-х мест</th></tr></thead><tbody>')
     for i, r in enumerate(v.tally, 1):
         l = r.get("label", "")
@@ -301,13 +303,13 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
         add(f'<tr class="{"win" if l == w else ""}"><td class="num">{i}</td>'
             f'<td><a href="#proposal-{_e(l)}"><span class="label">{_e(l)}</span></a> {_e(v.title(l))}</td>'
             f"<td>{_e(v.author(l))}</td>"
+            f'<td class="num">{v.schulze_str(r, len(v.tally))}</td>'
             f'<td class="num"><span class="bar" style="width:{borda * 60:.0f}px"></span>{borda:.2f}</td>'
             f'<td class="num">{v.pairwise_str(r)}</td>'
             f'<td class="num">{"—" if avg is None else f"{avg:.1f}"}</td>'
             f'<td class="num">{r.get("first_places", 0)}/{r.get("ballots", 0)}</td></tr>')
     add("</tbody></table>")
-    add('<p class="muted small">Порядок: балл Борда; при равенстве — попарное сравнение (кто выше в большинстве '
-        'общих бюллетеней: побед минус поражений), затем оценка критики.'
+    add(f'<p class="muted small">{_e(v.order_note)}'
         + (f" Согласие совета: {_e(v.agreement_line)}." if v.agreement_line else "") + "</p>")
     for note in v.tie_notes:
         add(f'<p class="muted small">• {_e(note)}</p>')
@@ -352,6 +354,8 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
             add(f'<h4>Сравнение с другими вариантами</h4><div class="md">{md_to_html(p["comparison"])}</div>')
         if p.get("borrowed") and v.revised(l):
             add("<h4>Взято у других</h4>" + _list(p["borrowed"]))
+        if p.get("not_accepted") and v.revised(l):
+            add("<h4>Что не принято из критики и почему</h4>" + _list(p["not_accepted"]))
         if p.get("changes"):
             pos = v.position(l)
             add('<div class="box"><b>Что изменено после критики'

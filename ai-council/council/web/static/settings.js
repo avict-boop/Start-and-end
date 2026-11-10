@@ -91,6 +91,8 @@ function renderSettings() {
       </div>
       <label class="check small"><input type="checkbox" id="sChairProposes" ${d.chair_proposes ? "checked" : ""} ${ro}>
         Председатель тоже предлагает свой вариант (по умолчанию — только ставит задачу, оценивает и пишет итог)</label>
+      <label class="check small"><input type="checkbox" id="sChairFollows" ${d.chair_follows_vote ? "checked" : ""} ${ro}>
+        Председатель следует голосованию: другой вариант — только при опровергнутых фактах, серьёзном риске или если лидер не отвечает на вопрос</label>
       <h2 style="margin-top:1.4rem">Более новые модели</h2>
       <p class="muted small">Сравнение моделей совета с каталогом OpenRouter: что вышло новее того же семейства и у того же разработчика.</p>
       <button type="button" class="secondary" id="checkUpgrades">Проверить, есть ли модели новее</button>
@@ -179,6 +181,7 @@ function bindSettings() {
   on("sChair", "change", (e) => { d.chair = e.target.value; setDirty(); });
   on("sDevil", "change", (e) => { d.devil_advocate = e.target.value || null; setDirty(); });
   on("sChairProposes", "change", (e) => { d.chair_proposes = e.target.checked; setDirty(); });
+  on("sChairFollows", "change", (e) => { d.chair_follows_vote = e.target.checked; setDirty(); });
   on("checkUpgrades", "click", checkUpgrades);
   const bindVal = (id, fn) => on(id, id.startsWith("f") && $(id) && $(id).type === "checkbox" ? "change" : "input", (e) => { fn(e.target); setDirty(); });
   bindVal("sMode", (t) => { d.mode = t.value; });

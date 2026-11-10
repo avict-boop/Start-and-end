@@ -115,13 +115,14 @@ def _on_event(event: str, **d) -> None:
             console.print(f"  [bold]{label}[/] → {p.title}")
     elif event == "tally":
         t = Table(title="Итоги голосования")
-        for col in ("#", "Вариант", "Автор", "Борда", "Попарно", "Критика", "1-х мест"):
+        for col in ("#", "Вариант", "Автор", "Шульце", "Борда", "Попарно", "Критика", "1-х мест"):
             t.add_column(col)
         for i, r in enumerate(d["rows"], 1):
             t.add_row(
                 str(i),
                 r.label,
                 d["authors"].get(r.label) or "пользователь",
+                f"{r.schulze} из {len(d['rows']) - 1}",
                 f"{r.borda:.2f}",
                 f"{r.pairwise:+.0f}",
                 f"{r.avg_score:.1f}" if r.avg_score is not None else "—",

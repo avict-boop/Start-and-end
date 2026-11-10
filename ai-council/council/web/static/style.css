@@ -476,6 +476,7 @@ body.modal-open { overflow: hidden; }
 .agree-warn { background: color-mix(in srgb, #e9a23b 14%, transparent); border: 1px solid color-mix(in srgb, #e9a23b 55%, transparent);
   border-radius: 8px; padding: .45rem .7rem; margin: .4rem 0 .8rem; font-size: .9rem; }
 #tallyNote { margin: .6rem 0 0; line-height: 1.5; }
+label.check.small:has(#sChairFollows), label.check.small:has(#sChairProposes) { display: flex; gap: .45rem; align-items: center; margin: .2rem 0; }
 label.check.small:has(#chairProposes) { display: flex; gap: .45rem; align-items: center; margin: -.2rem 0 .8rem; color: var(--muted); }
 .flags { margin-top: .6rem; padding: .45rem .7rem; border-radius: 8px; border: 1px dashed color-mix(in srgb, #e9a23b 60%, transparent); }
 .facts { margin-top: 1rem; border-top: 1px solid var(--line, #e4e4ee); padding-top: .4rem; }

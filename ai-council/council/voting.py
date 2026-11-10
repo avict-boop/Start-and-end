@@ -105,7 +105,8 @@ class TallyRow:
     first_places: int
     ballots: int
     pairwise: float = 0.0  # попарные сравнения (Копленд): побед минус поражений над другими вариантами
-    tie_break: str = ""    # чем решена ничья по Борда с вариантом ниже: pairwise | critique | label
+    tie_break: str = ""    # чем решена ничья по Шульце с вариантом ниже: borda | pairwise | label
+    schulze: int = 0       # скольких соперников вариант побеждает по методу Шульце (сильнейшие пути)
 
 
 EPS = 1e-9
@@ -132,16 +133,45 @@ def pairwise_scores(candidates: list[str], ballots: dict[str, list[str]]) -> dic
     return score
 
 
+def pairwise_matrix(candidates: list[str], ballots: dict[str, list[str]]) -> dict[tuple[str, str], int]:
+    """d[X, Y] — в скольких бюллетенях X стоит выше Y (учитываются только бюллетени, где есть оба)."""
+    pos = [{l: i for i, l in enumerate(r)} for r in ballots.values()]
+    return {(x, y): sum(1 for p in pos if x in p and y in p and p[x] < p[y])
+            for x in candidates for y in candidates if x != y}
+
+
+def schulze_wins(candidates: list[str], ballots: dict[str, list[str]]) -> dict[str, int]:
+    """Метод Шульце: для каждого варианта — скольких соперников он побеждает.
+
+    Сила прямой победы X над Y — d[X,Y], если d[X,Y] > d[Y,X], иначе 0. Сила пути — его самое слабое звено,
+    p[X,Y] — сильнейший путь из X в Y. X выше Y, если p[X,Y] > p[Y,X]. Это отношение транзитивно,
+    поэтому число побеждённых соперников задаёт порядок. Метод выбирает победителя Кондорсе, если он есть
+    (вариант, который выигрывает у каждого один на один), и устойчив к похожим вариантам («клонам»).
+    """
+    d = pairwise_matrix(candidates, ballots)
+    p = {(x, y): (d[x, y] if d[x, y] > d[y, x] else 0) for x in candidates for y in candidates if x != y}
+    for k in candidates:
+        for i in candidates:
+            if i == k:
+                continue
+            for j in candidates:
+                if j in (i, k):
+                    continue
+                p[i, j] = max(p[i, j], min(p[i, k], p[k, j]))
+    return {x: sum(1 for y in candidates if y != x and p[x, y] > p[y, x]) for x in candidates}
+
+
 def tally(
     candidates: list[str],
     ballots: dict[str, list[str]],
     critiques: dict[str, CritiqueSet],
 ) -> list[TallyRow]:
-    """Нормированный подсчёт Борда: в каждом бюллетене 1-е место = 1, последнее = 0.
+    """Итоги голосования.
 
-    Нормировка нужна, потому что участник не голосует за себя и бюллетени имеют разную длину.
-    При равенстве Борда решают попарные сравнения (кто выше в большинстве общих бюллетеней),
-    затем средняя оценка критики, затем метка.
+    Порядок: метод Шульце (кто выигрывает в прямых сравнениях); при равенстве — нормированный балл Борда
+    (1-е место в бюллетене = 1, последнее = 0, среднее по бюллетеням; нормировка нужна, потому что участник
+    не голосует за себя и бюллетени разной длины), затем попарный счёт Копленда, затем метка (метки случайны —
+    это жребий). Средняя оценка критики в порядке не участвует: она дана версиям до последней доработки.
     """
     points: dict[str, list[float]] = {c: [] for c in candidates}
     firsts = {c: 0 for c in candidates}
@@ -159,6 +189,7 @@ def tally(
             if r.label in scores and r.scores:
                 scores[r.label].append(mean(r.scores.values()))
     pair = pairwise_scores(candidates, ballots)
+    sch = schulze_wins(candidates, ballots)
 
     rows = [
         TallyRow(
@@ -168,18 +199,23 @@ def tally(
             first_places=firsts[c],
             ballots=len(points[c]),
             pairwise=pair[c],
+            schulze=sch[c],
         )
         for c in candidates
     ]
-    rows.sort(key=lambda r: (-round(r.borda, 9), -r.pairwise, -(r.avg_score or 0), r.label))
+    rows.sort(key=lambda r: (-r.schulze, -round(r.borda, 9), -r.pairwise, r.label))
     for a, b in zip(rows, rows[1:]):
-        if abs(a.borda - b.borda) < EPS:
-            a.tie_break = ("pairwise" if a.pairwise != b.pairwise else
-                           "critique" if (a.avg_score or 0) != (b.avg_score or 0) else "label")
+        if a.schulze == b.schulze:
+            a.tie_break = ("borda" if abs(a.borda - b.borda) >= EPS else
+                           "pairwise" if a.pairwise != b.pairwise else "label")
     return rows
 
 
-TIE_NAME = {"pairwise": "попарное сравнение", "critique": "оценка критики", "label": "жребий (метка)"}
+TIE_NAME = {"borda": "балл Борда", "pairwise": "попарный счёт", "critique": "оценка критики",
+            "label": "жребий (метки вариантов случайны)"}
+ORDER_NOTE = ("Порядок: метод Шульце — кто выигрывает в прямых сравнениях (сколько соперников побеждает); "
+              "при равенстве — балл Борда, затем попарный счёт, затем жребий. "
+              "Оценка критики показана для сведения и на порядок не влияет: она дана версиям до доработки.")
 
 
 def agreement(ballots: dict[str, list[str]]) -> dict | None:
@@ -231,8 +267,8 @@ def tally_text(rows: list[TallyRow]) -> str:
     for i, r in enumerate(rows, 1):
         avg = f"{r.avg_score:.1f}" if r.avg_score is not None else "—"
         tie = f", tie broken by {r.tie_break}" if r.tie_break else ""
-        lines.append(f"{i}. {r.label}: borda={r.borda:.2f}, pairwise={r.pairwise:+.0f}, critique={avg}, "
-                     f"first places={r.first_places}/{r.ballots}{tie}")
+        lines.append(f"{i}. {r.label}: schulze wins={r.schulze}, borda={r.borda:.2f}, pairwise={r.pairwise:+.0f}, "
+                     f"critique={avg} (pre-revision, info only), first places={r.first_places}/{r.ballots}{tie}")
     return "\n".join(lines)
 
 

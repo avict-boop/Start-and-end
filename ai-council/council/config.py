@@ -58,6 +58,9 @@ class CouncilConfig(BaseModel):
     # Предлагает ли председатель свой вариант. False — председатель только ставит задачу, критикует,
     # голосует и пишет итог (нет конфликта «автор и судья»). Если без него вариантов меньше кворума — предлагает.
     chair_proposes: bool = False
+    # Председатель следует голосованию: победитель — лидер подсчёта; выбрать другой вариант можно только
+    # по названной причине (опровергнутые факты у лидера, неприемлемый риск, лидер не отвечает на вопрос).
+    chair_follows_vote: bool = True
     devil_advocate: str | None = None
     runs_dir: str = "runs"
     branding: BrandingConfig = Field(default_factory=BrandingConfig)

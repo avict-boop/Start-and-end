@@ -497,8 +497,9 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
             rr.font.size = Pt(9)
     else:
         _heading(doc, f"Решение совета: вариант {w} — {v.title(w)} ({v.author(w)})" if w else "Решение совета", 1)
-    if v.agreement_low:
-        wr = doc.add_paragraph().add_run(f"⚠️ Низкое согласие совета: {v.agreement_line}")
+    for warn in ([f"⚠️ Низкое согласие совета: {v.agreement_line}"] if v.agreement_low else []) + \
+            ([f"⚖️ {v.deviation_line}"] if v.deviation_line else []):
+        wr = doc.add_paragraph().add_run(warn)
         wr.bold = True
         wr.font.color.rgb = RGBColor(0x7A, 0x4A, 0x00)
     add_markdown(doc, vd.get("final_answer", ""))
@@ -522,24 +523,24 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
 
     # Голосование
     _heading(doc, "Голосование", 1)
-    t = doc.add_table(rows=1, cols=7)
+    t = doc.add_table(rows=1, cols=8)
     t.style = "Table Grid"
-    for j, h in enumerate(["#", "Вариант", "Автор", "Борда (0–1)", "Попарно", "Оценка критики", "1-х мест"]):
+    for j, h in enumerate(["#", "Вариант", "Автор", "Шульце", "Борда (0–1)", "Попарно", "Оценка критики", "1-х мест"]):
         t.cell(0, j).paragraphs[0].add_run(h).bold = True
         _shade(t.cell(0, j), "F2F2F8")
     for i, row in enumerate(v.tally, 1):
         l = row.get("label", "")
         avg = row.get("avg_score")
         cells = t.add_row().cells
-        vals = [str(i), f"{l}: {v.title(l)}", v.author(l), f"{float(row.get('borda') or 0):.2f}", v.pairwise_str(row),
+        vals = [str(i), f"{l}: {v.title(l)}", v.author(l), v.schulze_str(row, len(v.tally)),
+                f"{float(row.get('borda') or 0):.2f}", v.pairwise_str(row),
                 "—" if avg is None else f"{avg:.1f}", f"{row.get('first_places', 0)}/{row.get('ballots', 0)}"]
         for c, val in zip(cells, vals):
             c.paragraphs[0].add_run(val).bold = (l == w) or None
             if l == w:
                 _shade(c, "FFF6D8")
-    _widths(t, [0.8, 5.6, 2.4, 2.0, 1.8, 2.0, 1.4])
-    note = doc.add_paragraph().add_run("Порядок: балл Борда; при равенстве — попарное сравнение (побед минус поражений), "
-                                       "затем оценка критики." + (f" Согласие совета: {v.agreement_line}." if v.agreement_line else ""))
+    _widths(t, [0.8, 4.8, 2.2, 1.6, 1.8, 1.6, 1.8, 1.4])
+    note = doc.add_paragraph().add_run(v.order_note + (f" Согласие совета: {v.agreement_line}." if v.agreement_line else ""))
     note.font.size = Pt(8.5)
     note.font.color.rgb = MUTED
     for tn in v.tie_notes + ([v.position_line + "."] if v.position_line else []):
@@ -595,6 +596,9 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
         if p.get("borrowed") and v.revised(l):
             _heading(doc, "Взято у других", 3)
             _bullets(doc, p["borrowed"])
+        if p.get("not_accepted") and v.revised(l):
+            _heading(doc, "Что не принято из критики и почему", 3)
+            _bullets(doc, p["not_accepted"])
         if p.get("changes"):
             par = doc.add_paragraph()
             _shade(par, "F6F6FA")

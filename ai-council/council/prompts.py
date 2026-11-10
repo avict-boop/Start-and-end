@@ -170,6 +170,7 @@ Do this in order:
 1. Compare honestly: where is each other proposal stronger than yours, and where is yours stronger? Be specific.
 2. Revise: fix the real weaknesses named by critics or revealed by the comparison, keep what is strong, and take
    specific ideas from other proposals when they make yours better (say which ideas and from which label).
+   List the criticism you do not accept and why: disagreement stated openly is more useful than silent agreement.
 3. Keep your independence: change your core approach only if a specific argument, fact or piece of evidence shows
    it is wrong or clearly inferior — name it. That others agree with each other is not a reason by itself, and do
    not change things just to please critics. If another proposal is clearly better overall, you may rebuild yours
@@ -181,6 +182,7 @@ JSON format:
   "confidence": 0.0-1.0,
   "comparison": "where other proposals are stronger than yours and where yours is stronger",
   "borrowed": ["idea taken from another proposal (label)"],
+  "not_accepted": ["critique you did NOT accept, and why (keep real disagreements visible)"],
   "position": "kept | improved | switched",
   "changes": "what you changed and why; if position changed, the specific argument that convinced you"}}
 "position": kept — same approach, only small fixes; improved — same core approach, substantially strengthened;
@@ -216,8 +218,22 @@ def verdict(
     agreement: str = "",
     facts: str = "",
     ballot_notes: str = "",
+    leader: str = "",
+    follow_vote: bool = False,
 ) -> str:
     labels = ", ".join(proposals)
+    if follow_vote and leader:
+        winner_rule = (
+            f'- "winner": the council\'s decision is the voting leader, proposal {leader}. Keep it as the winner.\n'
+            f'  You may name a different winner ({labels}) ONLY for one of these reasons, and then fill "deviation":\n'
+            f'    fact: the fact-check refuted claims that are central to {leader};\n'
+            f'    risk: {leader} carries a serious risk named in the critique that the others avoid;\n'
+            f'    process: {leader} does not answer the question or ignores explicit requirements of the request.\n'
+            '  "deviation" format: "<fact|risk|process>: specific explanation with references". Taste, style or\n'
+            '  "slightly better" is not a reason. If you keep the leader, leave "deviation" empty.')
+    else:
+        winner_rule = (f'- "winner": the label of the best proposal ({labels}). The vote is strong evidence; if you pick\n'
+                       '  differently, justify it in "why" and fill "deviation" with the reason.')
     agree = f"\nCouncil agreement on the ranking: {agreement}\n" if agreement else ""
     if ballot_notes:
         agree += f"\nBallot check: {ballot_notes}\n"
@@ -235,14 +251,14 @@ Final proposals:
 
 {proposals_block(proposals)}
 
-Voting results (Borda score 0..1 where 1 is the maximum; pairwise = wins minus losses in head-to-head comparisons; average critique score 1..10; first-place votes):
+Voting results, in final order (schulze wins = how many rivals the proposal beats by the Schulze method, which decides the order; borda = Borda score 0..1, 1 is the maximum, first tie-break; pairwise = wins minus losses in head-to-head comparisons; critique = average critique score 1..10 given to the version BEFORE revision, for information only; first-place votes):
 {tally_text}
 {agree}
 Key critique points:
 {critique_notes or "(no critique round)"}
 
 Write the council's final verdict.
-- "winner": the label of the best proposal ({labels}). The vote is strong evidence; if you pick differently, justify it in "why".
+{winner_rule}
 - "final_answer": the complete, ready-to-use final answer for the user, based on the winner and improved with the best ideas from other proposals (markdown allowed). {FORMAT_RULE} Do not drop requested sections even if the proposals skipped them — write them yourself.
 - If you mention voting numbers anywhere, copy them exactly as given above; do not estimate or round them differently.
 - If agreement is low, say in "why" that the council was divided and what the main split is.
@@ -251,7 +267,7 @@ Write the council's final verdict.
 - "risks": main risks and how to mitigate them.
 
 JSON format:
-{{"winner": "A", "final_answer": "...", "why": "...", "dissent": ["..."], "risks": ["..."]}}"""
+{{"winner": "A", "final_answer": "...", "why": "...", "dissent": ["..."], "risks": ["..."], "deviation": ""}}"""
 
 
 FACTCHECK_SYSTEM = """You are an independent fact-checker for an expert council of AI models. Use web search.

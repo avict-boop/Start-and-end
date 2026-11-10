@@ -22,6 +22,7 @@ TOKENS = {
 FACT_CHECKER = "факт-чек"  # как в session.FACT_CHECKER
 HIGH_FACTOR = 2.5
 ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}  # как в session.Council
+VOTE_DOC_CHARS = 20_000  # как Council.VOTE_DOC_CHARS
 
 
 @dataclass
@@ -142,7 +143,8 @@ def estimate(
         for stage, n in plan[member.name]:
             ib, ip, ob, op = TOKENS[stage]
             me.calls += 1
-            me.prompt_tokens += ib + ip * n + (att if stage in ATTACHMENT_STAGES else 0)
+            on_vote = stage == "vote" and 0 < doc_tokens * 3 <= VOTE_DOC_CHARS  # небольшие документы — и на голосование
+            me.prompt_tokens += ib + ip * n + (att if stage in ATTACHMENT_STAGES else doc_tokens if on_vote else 0)
             me.completion_tokens += min(ob + op * n, member.max_tokens or cfg.max_tokens)
         if member.name == describer:
             me.calls += 1

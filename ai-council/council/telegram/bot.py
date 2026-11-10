@@ -989,6 +989,8 @@ class CouncilBot:
             lines += ["", f"{icon} Согласие совета: {esc(v.agreement_line)}"]
         if v.fact_line:
             lines.append(f"🔎 Факты: {esc(v.fact_line)}")
+        if v.deviation_line:
+            lines.append(f"⚖️ {esc(v.deviation_line[:400])}")
         if v.ballot_flags:
             lines.append(f"⚠️ Бюллетеней против общего мнения: {len(v.ballot_flags)}. {esc(v.robust_note)}")
         lines += ["", f"💰 ${v.cost:.4f} · ⏱ {v.duration} · вариантов: {len(v.proposals)}"]
@@ -1021,7 +1023,8 @@ class CouncilBot:
             lab = r.get("label", "")
             avg = r.get("avg_score")
             lines.append(f"{i}. <b>{lab}</b> {esc(v.title(lab)[:60])} ({esc(v.author(lab))}) — "
-                         f"Борда {float(r.get('borda') or 0):.2f}, попарно {v.pairwise_str(r)}, "
+                         + (f"Шульце {v.schulze_str(r, len(v.tally))}, " if v.by_schulze else "")
+                         + f"Борда {float(r.get('borda') or 0):.2f}, попарно {v.pairwise_str(r)}, "
                          f"критика {'—' if avg is None else f'{avg:.1f}'}, "
                          f"1-х мест {r.get('first_places', 0)}/{r.get('ballots', 0)}")
         lines += [f"• {esc(n)}" for n in v.tie_notes]

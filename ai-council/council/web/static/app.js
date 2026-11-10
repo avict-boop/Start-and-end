@@ -943,8 +943,12 @@ function renderVerdict(s) {
   const p = s.proposals[v.winner];
   $("vTitle").textContent = `Вариант ${v.winner}${p ? ` — ${p.title}` : ""} (${authorOf(s, v.winner)})`;
   const low = s.agreement && s.agreement.level === "low";
-  $("vAgreeWarn").hidden = !low;
-  $("vAgreeWarn").textContent = low ? `⚠️ Низкое согласие совета (τ = ${s.agreement.tau.toFixed(2)}): ${AGREE_HINT.low}` : "";
+  const lead = s.tally && s.tally[0] && s.tally[0].label;
+  const dev = lead && v.winner && v.winner !== lead
+    ? `⚖️ Председатель выбрал не лидера голосования: победитель ${v.winner}, лидер подсчёта — ${lead}.${(v.deviation || v.why) ? ` Причина: ${v.deviation || v.why}` : ""}` : "";
+  const warns = [low ? `⚠️ Низкое согласие совета (τ = ${s.agreement.tau.toFixed(2)}): ${AGREE_HINT.low}` : "", dev].filter(Boolean);
+  $("vAgreeWarn").hidden = !warns.length;
+  $("vAgreeWarn").innerHTML = warns.map(esc).join("<br>");
   $("vAnswer").innerHTML = md(v.final_answer);
   $("vFacts").hidden = !s.facts || !Object.keys(s.facts).length;
   $("vFacts").innerHTML = s.facts ? factsHtml(s) : "";
@@ -963,7 +967,7 @@ const AGREE_HINT = {
   medium: "модели частично расходятся в оценке вариантов",
   low: "мнения совета разошлись — относитесь к решению осторожно и посмотрите особые мнения",
 };
-const TIE_NAME = { pairwise: "попарное сравнение", critique: "оценка критики", label: "жребий (метка)" };
+const TIE_NAME = { borda: "балл Борда", pairwise: "попарный счёт", critique: "оценка критики", label: "жребий (метки случайны)" };
 
 const POSITION_NAME = { kept: "позиция сохранена", improved: "доработан в рамках своего подхода", switched: "подход сменён" };
 const FLAG_NAME = { against: "порядок почти обратный общему мнению",
@@ -1007,20 +1011,23 @@ function renderTally(s) {
   $("tallySec").hidden = !s.tally && !ballots.length;
   const win = s.verdict && s.verdict.winner;
   if (s.tally) {
-    $("tally").innerHTML = `<thead><tr><th>#</th><th>Вариант</th><th>Автор</th><th>Борда</th><th title="Попарные сравнения: побед минус поражений">Попарно</th><th>Критика</th><th>1-х мест</th></tr></thead><tbody>${
+    const sch = s.tally[0] && s.tally[0].schulze != null;
+    $("tally").innerHTML = `<thead><tr><th>#</th><th>Вариант</th><th>Автор</th>${sch ? '<th title="Метод Шульце: скольких соперников вариант побеждает в прямых сравнениях — определяет порядок">Шульце</th>' : ""}<th>Борда</th><th title="Попарные сравнения: побед минус поражений">Попарно</th><th>Критика</th><th>1-х мест</th></tr></thead><tbody>${
       s.tally.map((r, i) => `<tr class="${r.label === win ? "winner" : ""}">
         <td class="num">${i + 1}</td>
         <td><span class="lbl">${esc(r.label)}</span> ${esc((s.proposals[r.label] || {}).title || "")}</td>
         <td>${esc(authorOf(s, r.label))}</td>
+        ${sch ? `<td class="num">${r.schulze} из ${s.tally.length - 1}</td>` : ""}
         <td class="num"><div style="display:flex;gap:.5rem;align-items:center"><div class="bar"><i style="width:${(r.borda * 100).toFixed(0)}%"></i></div>${r.borda.toFixed(2)}</div></td>
         <td class="num">${r.pairwise == null ? "—" : (r.pairwise > 0 ? "+" : "") + r.pairwise}</td>
         <td class="num">${r.avg_score == null ? "—" : r.avg_score.toFixed(1)}</td>
         <td class="num">${r.first_places}/${r.ballots}</td></tr>`).join("")}</tbody>`;
     const ties = s.tally.slice(0, -1).map((r, i) => r.tie_break
-      ? `${esc(r.label)} выше ${esc(s.tally[i + 1].label)}: при равном балле Борда решило ${TIE_NAME[r.tie_break] || r.tie_break}` : "").filter(Boolean);
+      ? `${esc(r.label)} выше ${esc(s.tally[i + 1].label)}: при равенстве ${sch ? "по Шульце" : "по баллу Борда"} решило ${TIE_NAME[r.tie_break] || r.tie_break}` : "").filter(Boolean);
     const a = s.agreement;
     $("tallyNote").innerHTML = (a ? `<b>Согласие совета: ${AGREE_NAME[a.level]}</b> (τ = ${a.tau.toFixed(2)}) — ${AGREE_HINT[a.level]}.<br>` : "")
-      + "Порядок: балл Борда; при равенстве — попарное сравнение, затем оценка критики."
+      + (sch ? "Порядок: метод Шульце — кто выигрывает в прямых сравнениях; при равенстве — балл Борда, затем попарный счёт, затем жребий. Оценка критики — для сведения: она дана версиям до доработки."
+        : "Порядок: балл Борда; при равенстве — попарное сравнение, затем оценка критики.")
       + ties.map((t) => `<br>• ${t}`).join("") + positionsHtml(s) + flagsHtml(s);
   } else {
     $("tally").innerHTML = "";
@@ -1383,6 +1390,7 @@ function proposalHtml(p, s, label) {
   if (p.risks && p.risks.length) parts.push(`<h3>Риски</h3><ul>${p.risks.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`);
   if (p.comparison) parts.push(`<h3>Сравнение с другими вариантами</h3><div class="section">${md(p.comparison)}</div>`);
   if (p.borrowed && p.borrowed.length) parts.push(`<h3>Взято у других</h3><ul>${p.borrowed.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`);
+  if (p.not_accepted && p.not_accepted.length) parts.push(`<h3>Что не принято из критики и почему</h3><ul>${p.not_accepted.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`);
   if (p.changes) parts.push(`<div class="changes"><b>Что изменено после критики${POSITION_NAME[p.position] && p.comparison !== undefined ? ` (${POSITION_NAME[p.position]})` : ""}:</b> ${inline(p.changes)}</div>`);
   if (p.confidence != null && s.authors[label] != null) parts.push(`<p class="muted small">Уверенность автора: ${Math.round(p.confidence * 100)}%</p>`);
   return parts.join("");

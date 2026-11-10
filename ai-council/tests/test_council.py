@@ -277,7 +277,7 @@ def test_short_title_and_query_formatting():
 # ---------------------------------------------------------------- пакет улучшений логики
 
 
-def test_pairwise_breaks_borda_ties_before_critique():
+def test_condorcet_cycle_ignores_critique_score():
     # цикл Кондорсе: все равны и по Борда, и попарно — тогда решает оценка критики
     ballots = {"x": ["C", "A", "B"], "y": ["A", "B", "C"], "z": ["B", "C", "A"]}
     crit = {"x": CritiqueSet.model_validate({"reviews": [{"label": "A", "scores": {"k": 2}},
@@ -286,8 +286,9 @@ def test_pairwise_breaks_borda_ties_before_critique():
     by = {r.label: r for r in rows}
     assert by["A"].borda == by["B"].borda == by["C"].borda == 0.5  # цикл Кондорсе: все равны по Борда
     assert by["A"].pairwise == by["B"].pairwise == by["C"].pairwise == 0  # и попарно тоже (A>B, B>C, C>A)
-    assert [r.label for r in rows] == ["B", "A", "C"]  # дальше решает критика: B 9 > A 2 > C (нет)
-    assert rows[0].tie_break == "critique"
+    assert all(r.schulze == 0 for r in rows)  # и по Шульце никто никого не побеждает
+    assert [r.label for r in rows] == ["A", "B", "C"]  # оценка критики (у B выше) на порядок не влияет — жребий
+    assert rows[0].tie_break == "label"
 
     ballots = {"x": ["A", "B"], "y": ["B", "A"], "z": ["A", "C"], "w": ["C", "B"]}
     rows = tally(["A", "B", "C"], ballots, crit)
@@ -302,7 +303,8 @@ def test_pairwise_decides_equal_borda():
     by = {r.label: r for r in rows}
     assert abs(by["A"].borda - by["D"].borda) < 1e-9
     assert by["D"].pairwise > by["A"].pairwise
-    assert [r.label for r in rows] == ["B", "D", "A"] and by["D"].tie_break == "pairwise"
+    assert [r.label for r in rows] == ["B", "D", "A"]  # D выше A уже по Шульце (прямая победа 2:1)
+    assert by["D"].schulze > by["A"].schulze and by["D"].tie_break == ""
 
 
 def test_agreement_levels():
@@ -544,3 +546,73 @@ def test_readable_validation_error():
     except ValidationError as e:
         msg = readable_error(e)
     assert "field 'title'" in msg and "field 'summary'" in msg and "validation errors for" not in msg
+
+
+# ---------------------------------------------------------------- пакет 3
+
+
+def test_schulze_picks_condorcet_winner_over_borda():
+    # 3 бюллетеня A>B>C, 2 бюллетеня B>C>A: по Борда лидер B (0.7 против 0.6),
+    # но A побеждает каждого один на один (3:2) — это победитель Кондорсе, Шульце ставит его первым
+    ballots = {**{f"x{i}": ["A", "B", "C"] for i in range(3)}, **{f"y{i}": ["B", "C", "A"] for i in range(2)}}
+    rows = tally(["A", "B", "C"], ballots, {})
+    by = {r.label: r for r in rows}
+    assert by["B"].borda > by["A"].borda
+    assert [r.label for r in rows] == ["A", "B", "C"] and by["A"].schulze == 2
+
+
+def test_schulze_resists_clones():
+    # клоны B1, B2 сторонников B: по Борда «команда» клонов поднимается, по Шульце победитель Кондорсе A остаётся
+    ballots = {**{f"x{i}": ["A", "B1", "B2", "C"] for i in range(3)}, **{f"y{i}": ["B1", "B2", "C", "A"] for i in range(2)}}
+    rows = tally(["A", "B1", "B2", "C"], ballots, {})
+    assert rows[0].label == "A"
+
+
+def test_chair_must_follow_vote_or_name_a_reason():
+    class Chair(MockClient):
+        def __init__(self, replies):
+            super().__init__(delay=0)
+            self.replies = replies
+
+        async def complete(self, model, messages, **kw):
+            meta = kw.get("meta") or {}
+            if meta.get("stage") == "verdict" and self.replies:
+                other = next(l for l in meta["labels"] if l != meta["leader"])
+                self.calls.append({"model": model, "meta": meta})
+                text = json.dumps({"winner": other, "final_answer": "итог", "why": "мне больше нравится",
+                                   "deviation": self.replies.pop(0)}, ensure_ascii=False)
+                return Completion(text=text, model=model, cost=0.001)
+            return await super().complete(model, messages, **kw)
+
+    # без причины — модель возвращают к лидеру голосования (второй ответ — по mock: лидер)
+    client = Chair([""])
+    res = run(Council(make_cfg(), client, seed=1).run("Q", mode="quick", criteria=["x"]))
+    assert res.verdict.winner == res.tally[0].label and res.verdict.deviation == ""
+    errs = [e for e in res.transcript if e["stage"] == "verdict" and e.get("error")]
+    assert errs and "voting leader" in errs[0]["error"]
+    # с названной причиной — отступление принято и видно в отчёте
+    client = Chair(["fact: у лидера опровергнут ключевой факт о налоге"])
+    res = run(Council(make_cfg(), client, seed=1).run("Q", mode="quick", criteria=["x"]))
+    assert res.verdict.winner != res.tally[0].label and res.verdict.deviation.startswith("fact")
+    from council.reports.view import View
+    v = View(res.to_dict())
+    assert "опровергнутые факты у лидера" in v.deviation_line and "налоге" in v.deviation_line
+    # с выключенным правилом председатель свободен (но отступление всё равно отмечается)
+    client = Chair([""])
+    res = run(Council(make_cfg(chair_follows_vote=False), client, seed=1).run("Q", mode="quick", criteria=["x"]))
+    assert res.verdict.winner != res.tally[0].label and View(res.to_dict()).deviation_line
+
+
+def test_revision_lists_not_accepted_critique():
+    res = run(Council(make_cfg(), MockClient(delay=0), seed=1).run("Вопрос?"))
+    revised = [p for l, p in res.proposals.items() if p is not res.initial_proposals[l]]
+    assert revised and all(p.not_accepted for p in revised)
+    from council.reports.html import render_html
+    from council.reports.view import View
+    assert "Что не принято из критики и почему" in render_html(View(res.to_dict()))
+
+
+def test_title_from_sectioned_answer():
+    from council.schemas import Proposal
+    p = Proposal.model_validate({"краткий_вывод": "**Итог:** Схема в целом верна, но есть 3 проблемы", "таблица": "..."})
+    assert p.title == "Схема в целом верна, но есть 3 проблемы"

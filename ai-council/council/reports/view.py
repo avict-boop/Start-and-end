@@ -266,6 +266,47 @@ class View:
         u = str(u or "").strip()
         return u if u.lower().startswith(("http://", "https://")) else ""
 
+    @property
+    def by_schulze(self) -> bool:
+        """Заседание посчитано методом Шульце (новые) или по Борда (старые)."""
+        return bool(self.tally) and "schulze" in self.tally[0]
+
+    @property
+    def order_note(self) -> str:
+        from ..voting import ORDER_NOTE
+        if self.by_schulze:
+            return ORDER_NOTE
+        return "Порядок: балл Борда; при равенстве — попарное сравнение, затем оценка критики (как считалось до перехода на метод Шульце)."
+
+    @staticmethod
+    def schulze_str(row: dict, total: int) -> str:
+        """«3 из 4» — скольких соперников вариант побеждает по Шульце."""
+        return "—" if row.get("schulze") is None else f"{row['schulze']} из {max(total - 1, 0)}"
+
+    @property
+    def deviation(self) -> dict | None:
+        """Председатель назвал победителем не лидера голосования: лидер, победитель, причина."""
+        w = self.winner
+        if not w or not self.tally:
+            return None
+        lead = self.tally[0].get("label")
+        if not lead or lead == w:
+            return None
+        reason = (self.verdict.get("deviation") or "").strip() or (self.verdict.get("why") or "").strip()
+        kind = reason.split(":", 1)[0].strip().lower() if ":" in reason else ""
+        names = {"fact": "опровергнутые факты у лидера", "risk": "серьёзный риск у лидера",
+                 "process": "лидер не отвечает на вопрос или нарушает требования запроса"}
+        text = reason.split(":", 1)[1].strip() if kind in names else reason
+        return {"leader": lead, "winner": w, "kind": names.get(kind, ""), "text": text}
+
+    @property
+    def deviation_line(self) -> str:
+        dv = self.deviation
+        if not dv:
+            return ""
+        head = f"Председатель выбрал не лидера голосования: победитель {dv['winner']}, лидер подсчёта — {dv['leader']}"
+        return head + (f". Причина: {dv['kind']}" if dv["kind"] else "") + (f" — {dv['text']}" if dv["text"] else "")
+
     @staticmethod
     def pairwise_str(row: dict) -> str:
         """Попарный счёт (побед минус поражений) или «—» для старых заседаний."""
@@ -276,7 +317,8 @@ class View:
         """Пояснения, чем решены ничьи по баллу Борда."""
         from ..voting import TIE_NAME
         rows = self.tally
-        return [f"{a.get('label')} выше {b.get('label')}: при равном балле Борда решило "
+        basis = "по Шульце" if self.by_schulze else "по баллу Борда"
+        return [f"{a.get('label')} выше {b.get('label')}: при равенстве {basis} решило "
                 f"{TIE_NAME.get(a['tie_break'], a['tie_break'])}"
                 for a, b in zip(rows, rows[1:]) if a.get("tie_break")]
 

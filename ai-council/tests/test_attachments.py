@@ -88,7 +88,9 @@ def test_models_get_images_or_descriptions():
     assert isinstance(seen, list) and seen[1]["type"] == "image_url" and "Бюджет 1 млн" in seen[0]["text"]
     blind = by[("m/c", "proposal")]
     assert isinstance(blind, str) and "cannot see" in blind and "таблица с цифрами" in blind and "Бюджет 1 млн" in blind
-    assert isinstance(by[("m/a", "vote")], str) and "Бюджет 1 млн" not in by[("m/a", "vote")]  # голосование без вложений
+    vote = by[("m/a", "vote")]
+    assert isinstance(vote, str) and "Бюджет 1 млн" in vote  # небольшие документы видны и на голосовании
+    assert "image_url" not in vote  # а картинки — нет (дорого)
     assert [a["name"] for a in res.to_dict()["attachments"]] == ["график.png", "бриф.docx"]
 
 
@@ -108,3 +110,15 @@ def test_estimate_counts_attachments():
     rich = estimate(cfg, {}, mode="quick", rounds=1, doc_tokens=5000, images=2, vision=vision)
     assert rich.calls == plain.calls + 1  # + описание картинок
     assert all(r.prompt_tokens > p.prompt_tokens for r, p in zip(rich.members, plain.members))
+
+
+
+def test_large_documents_are_not_sent_to_vote():
+    from council.session import Council as C
+    cfg = CouncilConfig.model_validate({"chair": "a", "members": [{"name": n, "model": f"m/{n}"} for n in "ab"]})
+    client = Recorder()
+    big = load_attachment(("Большой отчёт. " * 3000).encode(), "big.txt")
+    assert len(big.text) > C.VOTE_DOC_CHARS
+    asyncio.run(Council(cfg, client).run("Q?", mode="quick", criteria=["x"], attachments=[big]))
+    by = {(m, st): c for m, st, c in client.msgs}
+    assert "Большой отчёт" in str(by[("m/a", "proposal")]) and "Большой отчёт" not in str(by[("m/a", "vote")])
