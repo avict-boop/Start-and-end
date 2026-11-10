@@ -3,7 +3,8 @@ name = "ai-council"
 version = "0.1.0"
 description = "Совет нейросетей: несколько LLM предлагают, критикуют и голосуют за лучший вариант"
 requires-python = ">=3.10"
-dependencies = ["httpx>=0.27", "pydantic>=2.6", "pyyaml>=6.0", "rich>=13.0", "fastapi>=0.110", "uvicorn>=0.29"]
+dependencies = ["httpx>=0.27", "pydantic>=2.6", "pyyaml>=6.0", "rich>=13.0", "fastapi>=0.110", "uvicorn>=0.29",
+                "markdown>=3.5", "python-docx>=1.1", "weasyprint>=62"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
@@ -12,7 +13,7 @@ dev = ["pytest>=8"]
 council = "council.cli:main"
 
 [tool.setuptools]
-packages = ["council", "council.web", "council.telegram"]
+packages = ["council", "council.web", "council.telegram", "council.reports"]
 
 [tool.setuptools.package-data]
 "council.web" = ["static/*"]

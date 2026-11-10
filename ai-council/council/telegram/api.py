@@ -97,9 +97,11 @@ class TelegramAPI:
         except TelegramError as e:  # устаревший callback — не страшно
             log.debug("answerCallbackQuery: %s", e)
 
-    async def send_document(self, chat_id: int, filename: str, content: bytes, caption: str | None = None) -> None:
-        await self.call("sendDocument", files={"document": (filename, content, "text/markdown")},
-                        chat_id=chat_id, caption=caption, parse_mode="HTML" if caption else None)
+    async def send_document(self, chat_id: int, filename: str, content: bytes, caption: str | None = None,
+                            *, mime: str = "application/octet-stream", reply_markup: dict | None = None) -> None:
+        await self.call("sendDocument", files={"document": (filename, content, mime)},
+                        chat_id=chat_id, caption=caption, parse_mode="HTML" if caption else None,
+                        reply_markup=reply_markup)
 
     async def send_typing(self, chat_id: int) -> None:
         try:

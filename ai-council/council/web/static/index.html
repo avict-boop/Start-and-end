@@ -12,7 +12,8 @@
   <div class="brand"><span class="logo" aria-hidden="true"></span>Совет нейросетей</div>
   <div class="topbar-right">
     <span id="keyStatus" class="pill"></span>
-    <button id="newBtn" class="ghost" type="button">+ Новое заседание</button>
+    <button id="archiveBtn" class="ghost" type="button">Архив</button>
+    <button id="newBtn" class="ghost" type="button">+ Новое<span class="hide-sm">&nbsp;заседание</span></button>
   </div>
 </header>
 
@@ -93,8 +94,9 @@
     </form>
 
     <section class="card history">
-      <h2>История</h2>
+      <h2>Последние заседания</h2>
       <ul id="history"><li class="muted">Пока пусто</li></ul>
+      <button id="allArchiveBtn" type="button" class="link" hidden>Весь архив →</button>
     </section>
   </aside>
 
@@ -109,6 +111,25 @@
         <li><b>Вердикт.</b> Председатель сводит лучшее в итоговое решение.</li>
       </ol>
       <p class="muted">Заполните форму слева. Без ключа OpenRouter попробуйте демо-режим.</p>
+    </section>
+
+    <section id="archive" class="card" hidden>
+      <div class="archive-head">
+        <div>
+          <h1>Архив заседаний</h1>
+          <div id="archiveCount" class="muted small"></div>
+        </div>
+        <div class="archive-filters">
+          <input id="archiveSearch" type="search" placeholder="Поиск по вопросу, решению, участникам…" aria-label="Поиск">
+          <select id="archiveMode" aria-label="Режим">
+            <option value="">Все режимы</option>
+            <option value="debate">Дебаты</option>
+            <option value="quick">Быстрый</option>
+            <option value="evaluate">Оценка вариантов</option>
+          </select>
+        </div>
+      </div>
+      <div id="archiveList" class="archive-list"></div>
     </section>
 
     <div id="session" hidden>
@@ -142,7 +163,7 @@
             <div class="eyebrow">Решение совета</div>
             <h2 id="vTitle"></h2>
           </div>
-          <a id="reportLink" class="button secondary" hidden>Скачать отчёт (.md)</a>
+          <div id="downloads" class="downloads" hidden></div>
         </div>
         <div id="vAnswer" class="md"></div>
         <div class="verdict-grid">
@@ -174,6 +195,22 @@
       </section>
     </div>
   </main>
+</div>
+
+<div id="modal" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="mTitle">
+  <div class="modal-box">
+    <header class="modal-head">
+      <div class="modal-titles">
+        <div class="eyebrow" id="mEyebrow"></div>
+        <h2 id="mTitle"></h2>
+        <div id="mSub" class="muted small"></div>
+      </div>
+      <button id="mClose" type="button" class="ghost icon" aria-label="Закрыть">✕</button>
+    </header>
+    <nav id="mTabs" class="tabs" role="tablist"></nav>
+    <div id="mBody" class="modal-body md"></div>
+    <footer id="mFoot" class="modal-foot"></footer>
+  </div>
 </div>
 
 <script src="/static/app.js"></script>

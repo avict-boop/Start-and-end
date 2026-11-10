@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import dataclasses
 import json
 import logging
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -23,6 +24,7 @@ from ..client import OpenRouterClient
 from ..config import CouncilConfig, Mode, OverrideError, load_config, with_overrides
 from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models
 from ..mock import MockClient
+from ..archive import MIME, Archive, available_formats
 from ..report import make_stem, save
 from ..session import Council, CouncilError
 from .auth import BasicAuth
@@ -134,7 +136,13 @@ class RunState:
 
 def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: str | None = None) -> FastAPI:
     config_path = Path(config_path)
-    app = FastAPI(title="Совет нейросетей", docs_url="/api/docs")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        # отчёты PDF/DOCX/MD для заседаний, проведённых до обновления программы
+        archive().ensure_all_in_background()
+        yield
+
+    app = FastAPI(title="Совет нейросетей", docs_url="/api/docs", lifespan=lifespan)
     runs: dict[str, RunState] = {}
     catalog = ModelCatalog(MODELS_TTL)
 
@@ -154,6 +162,14 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                   devil_advocate=req.devil_advocate, budget=req.budget)
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
+
+    archives: dict[Path, Archive] = {}
+
+    def archive() -> Archive:
+        d = runs_dir(base_config())
+        if d not in archives:
+            archives[d] = Archive(d)
+        return archives[d]
 
     def find_file(sid: str, ext: str) -> Path:
         if not ID_RE.match(sid):
@@ -238,7 +254,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 council = Council(cfg, client, on_event=on_event)
                 res = await council.run(req.question, criteria=req.clean_criteria, options=opts,
                                         context=req.context or None, mode=req.mode, rounds=rounds)
-                save(res, runs_dir(cfg), stem=sid)
+                await asyncio.to_thread(save, res, runs_dir(cfg), sid)
                 st.status = "done"
                 st.push({"type": "done", "id": sid, "total_cost": res.total_cost, "duration_s": res.duration_s,
                          "stats": jsonable(res.stats)})
@@ -263,26 +279,15 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         return {"id": sid}
 
     @app.get("/api/sessions")
-    async def list_sessions() -> list[dict[str, Any]]:
-        items: dict[str, dict[str, Any]] = {}
-        d = runs_dir(base_config())
-        for path in sorted(d.glob("*.json"), reverse=True)[:100] if d.is_dir() else []:
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                v = data["verdict"]
-                items[path.stem] = {
-                    "id": path.stem, "question": data["question"], "mode": data["mode"],
-                    "started_at": data.get("started_at"), "status": "done",
-                    "winner": data["proposals"].get(v["winner"], {}).get("title"),
-                    "cost": data.get("total_cost_usd"),
-                }
-            except (OSError, ValueError, KeyError, AttributeError):
-                continue
-        for st in runs.values():
-            if st.status != "done" or st.id not in items:
-                items[st.id] = {"id": st.id, "question": st.question, "status": st.status,
-                                "started_at": None, "winner": None, "cost": None, "mode": None}
-        return sorted(items.values(), key=lambda x: x["id"], reverse=True)
+    async def list_sessions(q: str = "", mode: str = "") -> dict[str, Any]:
+        items = await asyncio.to_thread(archive().list, q, mode)
+        known = {i["id"] for i in items}
+        running = [{"id": st.id, "question": st.question, "status": st.status, "date": "", "mode": None,
+                    "mode_name": "", "winner": "", "winner_title": "", "winner_author": "", "cost": None,
+                    "members": [], "proposals": 0}
+                   for st in runs.values() if st.id not in known and (not q or q.casefold() in st.question.casefold())]
+        return {"items": sorted(running, key=lambda x: x["id"], reverse=True) + items,
+                "formats": available_formats(), "total": len(items) + len(running)}
 
     @app.get("/api/sessions/{sid}/events")
     async def stream(sid: str, request: Request) -> StreamingResponse:
@@ -327,10 +332,33 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         st.task.cancel()
         return {"ok": True}
 
-    @app.get("/api/sessions/{sid}/report")
-    async def report(sid: str) -> FileResponse:
-        path = find_file(sid, "md")
-        return FileResponse(path, media_type="text/markdown; charset=utf-8", filename=path.name)
+    @app.get("/api/sessions/{sid}/report", response_model=None)
+    async def report(sid: str, format: str = "pdf", download: bool = False) -> FileResponse | HTMLResponse:
+        arch = archive()
+        if not arch.exists(sid):
+            raise HTTPException(404, "заседание не найдено")
+        if format == "html":
+            return HTMLResponse(await asyncio.to_thread(arch.html, sid, report_toolbar(sid)))
+        if format not in MIME:
+            raise HTTPException(400, "формат: pdf, docx, md или html")
+        if format not in available_formats():
+            raise HTTPException(501, "PDF недоступен на этом сервере (нет WeasyPrint) — скачайте DOCX или MD")
+        try:
+            path = await asyncio.to_thread(arch.report, sid, format)
+        except RuntimeError as e:
+            raise HTTPException(500, f"не удалось создать отчёт: {e}") from e
+        inline = format == "pdf" and not download
+        return FileResponse(path, media_type=MIME[format], filename=path.name,
+                            content_disposition_type="inline" if inline else "attachment")
+
+    def report_toolbar(sid: str) -> str:
+        from urllib.parse import quote
+        q = quote(sid)
+        links = [f'<a href="/#/s/{q}">← В приложение</a>', '<span class="sp"></span>']
+        names = {"pdf": "PDF", "docx": "Word", "md": "Markdown"}
+        links += [f'<a href="/api/sessions/{q}/report?format={f}&download=1">{names[f]}</a>' for f in available_formats()]
+        links.append('<button onclick="window.print()">Печать</button>')
+        return '<div class="toolbar noprint">' + "".join(links) + "</div>"
 
     @app.delete("/api/sessions/{sid}")
     async def delete(sid: str) -> dict[str, Any]:
@@ -338,13 +366,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         if st and st.status == "running":
             raise HTTPException(409, "сначала остановите заседание")
         runs.pop(sid, None)
-        removed = 0
-        for ext in ("json", "md"):
-            try:
-                find_file(sid, ext).unlink()
-                removed += 1
-            except HTTPException:
-                pass
+        removed = archive().delete(sid) if ID_RE.match(sid) else False
         if not removed and st is None:
             raise HTTPException(404, "заседание не найдено")
         return {"ok": True}

@@ -192,9 +192,11 @@ async def _ask(args) -> int:
     runs_dir = Path(cfg.runs_dir)
     if not runs_dir.is_absolute():
         runs_dir = PROJECT_DIR / runs_dir
-    json_path, md_path = save(res, runs_dir)
+    paths = save(res, runs_dir)
     console.print(f"\nСтоимость: [bold]${res.total_cost:.4f}[/], время: {res.duration_s} с")
-    console.print(f"Отчёт: {md_path}\nСтенограмма: {json_path}")
+    for fmt, title in (("pdf", "PDF"), ("docx", "Word"), ("md", "Markdown"), ("json", "Стенограмма")):
+        if fmt in paths:
+            console.print(f"{title}: {paths[fmt]}")
     return 0
 
 
@@ -233,6 +235,35 @@ def _web(args) -> int:
                       "и любой сможет тратить ваш баланс OpenRouter. Задайте WEB_PASSWORD в .env.[/]")
     console.print(f"Совет нейросетей: [bold]http://{args.host}:{args.port}[/]  (Ctrl+C — остановить)")
     uvicorn.run(create_app(args.config), host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
+def _runs_dir(cfg) -> Path:
+    d = Path(cfg.runs_dir)
+    return d if d.is_absolute() else PROJECT_DIR / d
+
+
+def _archive_cmd(args) -> int:
+    from .archive import Archive, available_formats
+    from .reports.pdf import PDF_AVAILABLE, PDF_ERROR
+
+    arch = Archive(_runs_dir(load_config(args.config)))
+    if args.cmd == "reports":
+        if not PDF_AVAILABLE:
+            console.print(f"[yellow]PDF недоступен ({PDF_ERROR}); будут созданы {', '.join(available_formats())}[/]")
+        built, failed = arch.ensure_all(force=args.force, progress=lambda stem, res: console.print(
+            f"  {stem}: " + ", ".join(f if not r.startswith("ошибка") else f"[red]{f} ✗[/]" for f, r in res.items())))
+        console.print(f"Готово: обновлено {built} заседаний, с ошибками {failed}. Папка: {arch.dir}")
+        return 1 if failed else 0
+    items = arch.list(args.search)
+    t = Table(title=f"Архив заседаний ({len(items)})")
+    for col in ("Дата", "Вопрос", "Решение", "Режим", "$"):
+        t.add_column(col)
+    for s in items:
+        t.add_row(s["date"], s["question"][:70], f"{s['winner']}: {s['winner_title'][:40]}", s["mode_name"],
+                  f"{s['cost']:.3f}")
+    console.print(t)
+    console.print(f"Отчёты лежат рядом со стенограммами: {arch.dir}")
     return 0
 
 
@@ -282,12 +313,22 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--port", type=int, default=8000)
     w.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
 
+    ar = sub.add_parser("archive", help="архив заседаний (список, поиск)")
+    ar.add_argument("search", nargs="?", default="", help="текст для поиска по вопросам и решениям")
+    ar.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
+
+    rp = sub.add_parser("reports", help="создать недостающие отчёты PDF/DOCX/MD для всех заседаний архива")
+    rp.add_argument("--force", action="store_true", help="пересобрать все отчёты заново")
+    rp.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
+
     t = sub.add_parser("telegram", help="запустить Telegram-бота")
     t.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
 
     args = p.parse_args(argv)
     if args.cmd == "telegram":
         return _telegram(args)
+    if args.cmd in ("archive", "reports"):
+        return _archive_cmd(args)
     if args.cmd == "web":
         return _web(args)
     try:

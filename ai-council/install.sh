@@ -725,6 +725,8 @@ case "\${1:-help}" in
   start)   dc up -d ;;
   update)  git -C "$INSTALL_DIR" pull -q --ff-only --autostash && dc build -q && dc up -d --force-recreate && echo "Обновлено." ;;
   ask)     shift; docker compose run --rm bot python -m council ask "\$@" ;;
+  archive) shift; docker compose run --rm bot python -m council archive "\$@" ;;
+  reports) shift; docker compose run --rm bot python -m council reports "\$@" ;;
   config)  "\${EDITOR:-nano}" config.yaml && echo "Сохранено: изменения подхватятся со следующего заседания." ;;
   password)
     read -r -s -p "Новый пароль веб-интерфейса (от 10 символов): " p1 && echo
@@ -743,7 +745,8 @@ ai-council — управление «Советом нейросетей»
   update         обновить программу     reconfigure           заново пройти настройку
   config         участники и модели     password              сменить пароль веб-интерфейса
   access         адреса и пароли        backup                копия всех отчётов
-  ask "вопрос"   заседание из консоли
+  ask "вопрос"   заседание из консоли   archive [поиск]       список заседаний
+  reports [--force]  создать недостающие отчёты PDF/Word/MD для всего архива
 HELP
   ;;
 esac

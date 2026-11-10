@@ -17,6 +17,7 @@ def client(tmp_path, monkeypatch):
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
     with TestClient(create_app(path, mock_delay=0)) as c:
+        c.app_state_runs = cfg["runs_dir"]
         yield c
 
 
@@ -55,6 +56,11 @@ def test_bad_requests(client, body):
     assert r.status_code == 400 and r.json()["detail"]
 
 
+def tmp_runs(client):
+    from pathlib import Path
+    return Path(client.app_state_runs)
+
+
 def test_full_mock_session_history_report_delete(client):
     r = client.post("/api/sessions", json={"question": "Как назвать кофейню?", "mock": True, "rounds": 1,
                                            "members": ["a", "b", "c"], "chair": "b", "devil_advocate": ""})
@@ -74,11 +80,24 @@ def test_full_mock_session_history_report_delete(client):
     assert [e["type"] for e in tail] == ["done"]
 
     hist = client.get("/api/sessions").json()
-    assert hist[0]["id"] == sid and hist[0]["status"] == "done" and hist[0]["winner"]
-    rep = client.get(f"/api/sessions/{sid}/report")
-    assert rep.status_code == 200 and "Решение совета" in rep.text
+    first = hist["items"][0]
+    assert first["id"] == sid and first["status"] == "done" and first["winner"] and first["winner_title"]
+    assert set(hist["formats"]) >= {"docx", "md"}
+    md = client.get(f"/api/sessions/{sid}/report?format=md")
+    assert md.status_code == 200 and "Решение совета" in md.text and "attachment" in md.headers["content-disposition"]
+    docx = client.get(f"/api/sessions/{sid}/report?format=docx")
+    assert docx.status_code == 200 and docx.content[:2] == b"PK"  # docx — это zip
+    pdf = client.get(f"/api/sessions/{sid}/report?format=pdf")
+    assert pdf.status_code == 200 and pdf.content[:5] == b"%PDF-" and "inline" in pdf.headers["content-disposition"]
+    html = client.get(f"/api/sessions/{sid}/report?format=html")
+    assert html.status_code == 200 and 'id="proposal-A"' in html.text and "format=docx" in html.text
+    assert client.get(f"/api/sessions/{sid}/report?format=exe").status_code == 400
+    # поиск по архиву
+    assert client.get("/api/sessions?q=кофейню").json()["total"] == 1
+    assert client.get("/api/sessions?q=несуществующее").json()["total"] == 0
     assert client.delete(f"/api/sessions/{sid}").json() == {"ok": True}
     assert client.get(f"/api/sessions/{sid}/report").status_code == 404
+    assert not list((tmp_runs(client)).glob(f"{sid}.*"))  # удалены и стенограмма, и все отчёты
 
 
 def test_history_replay_from_file(client, tmp_path):

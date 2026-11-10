@@ -25,7 +25,15 @@ class FakeTelegram:
         if request.headers.get("content-type", "").startswith("application/json"):
             body = json.loads(request.content or b"{}")
         else:
-            body = {"_multipart": request.content[:200].decode("utf-8", "replace")}
+            raw = request.content
+            body = {"_multipart": raw.decode("utf-8", "replace")}
+            import re as _re
+            fn = _re.search(rb'filename="([^"]+)"', raw)
+            body["filename"] = fn.group(1).decode("utf-8", "replace") if fn else ""
+            body["is_pdf"] = b"%PDF-" in raw
+            body["is_docx"] = b"PK\x03\x04" in raw
+            mk = _re.search(rb'name="reply_markup"\r\n\r\n(.*?)\r\n--', raw, _re.S)
+            body["reply_markup"] = json.loads(mk.group(1)) if mk else None
         self.calls.append((method, body))
         if self.fail.get(method):
             f = self.fail[method]
@@ -258,3 +266,70 @@ def test_run_retries_when_telegram_unavailable(env, monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(bot.run())
     assert sum(m == "getMe" for m, _ in fake.calls) == 5 and 5 in sleeps  # был повтор на уровне бота
+
+
+def docs(fake):
+    return [b for m, b in fake.calls if m == "sendDocument"]
+
+
+def test_reports_and_archive(env):
+    bot, fake, tmp = env
+
+    async def scenario():
+        await bot.handle_update(msg("Какой язык программирования учить первым?"))
+        await bot.handle_update(press("go", bot.pending[CHAT].card_id))
+        await finish(bot)
+
+    asyncio.run(scenario())
+    d = docs(fake)[-1]
+    assert d["filename"].endswith(".pdf") and d["is_pdf"]
+    kb = [b["callback_data"] for row in d["reply_markup"]["inline_keyboard"] for b in row]
+    assert [k.split(":")[1] for k in kb] == ["docx", "md"]
+    # кнопка Word → .docx
+    asyncio.run(bot.handle_update(press(kb[0], 999)))
+    d = docs(fake)[-1]
+    assert d["filename"].endswith(".docx") and d["is_docx"]
+    # архив: список и выбор заседания
+    asyncio.run(bot.handle_update(msg("/archive")))
+    arc = fake.last("sendMessage")
+    assert "Архив заседаний" in arc["text"] and "язык программирования" in arc["text"]
+    ses = [b for b in buttons(arc) if b.startswith("ses:")]
+    assert len(ses) == 1
+    asyncio.run(bot.handle_update(press(ses[0], 999)))
+    d = docs(fake)[-1]
+    assert d["is_pdf"] and "язык программирования" in d["_multipart"]
+    # поиск
+    asyncio.run(bot.handle_update(msg("/archive кофейня")))
+    assert "Ничего не найдено" in fake.last("sendMessage")["text"]
+    # посторонний не получает отчёты
+    n = len(docs(fake))
+    asyncio.run(bot.handle_update(press(ses[0], 999, user=STRANGER)))
+    assert len(docs(fake)) == n and fake.last("answerCallbackQuery")["text"] == "Нет доступа"
+
+
+def test_archive_pages_and_backfill(env):
+    bot, fake, tmp = env
+    import shutil
+
+    async def one(q):
+        await bot.handle_update(msg(q))
+        await bot.handle_update(press("go", bot.pending[CHAT].card_id))
+        await finish(bot)
+
+    async def scenario():
+        await one("Первый вопрос для архива")
+    asyncio.run(scenario())
+    runs = tmp / "runs"
+    src = next(runs.glob("*.json"))
+    for i in range(10):  # «старые» заседания: только стенограммы, без отчётов
+        shutil.copy(src, runs / f"20200101-0000{i:02d}-old-{i}.json")
+    asyncio.run(bot.handle_update(msg("/archive")))
+    arc = fake.last("sendMessage")
+    assert "страница 1 из 2" in arc["text"] and "arc:1" in buttons(arc)
+    asyncio.run(bot.handle_update(press("arc:1", 777)))
+    assert "страница 2 из 2" in fake.last("editMessageText")["text"]
+    built, failed = bot.archive.ensure_all()
+    # 10 «старых» + 1 свежее: при первом запуске версии отчётов ещё нет, поэтому пересобирается всё
+    assert built == 11 and failed == 0
+    assert bot.archive.ensure_all() == (0, 0)  # повторно — ничего не делает
+    assert all((runs / f"20200101-0000{i:02d}-old-{i}.{ext}").is_file() for i in range(10) for ext in ("pdf", "docx", "md"))

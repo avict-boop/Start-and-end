@@ -21,7 +21,8 @@ from ..client import LLMClient, OpenRouterClient
 from ..config import CouncilConfig, OverrideError, load_config, with_overrides
 from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models
 from ..mock import MockClient
-from ..report import make_stem, render_markdown, save
+from ..archive import MIME, Archive, available_formats, key_of
+from ..report import make_stem, save
 from ..session import Council, CouncilError, SessionResult
 from .api import TelegramAPI, TelegramError
 from .format import esc, md_to_tg, split_message, strip_tags
@@ -36,6 +37,7 @@ COMMANDS = [
     ("evaluate", "выбрать из ваших вариантов"),
     ("settings", "режим, раунды, участники, демо"),
     ("budget", "лимит стоимости, напр. /budget 0.5"),
+    ("archive", "архив заседаний и отчёты"),
     ("stop", "остановить идущее заседание"),
     ("help", "как пользоваться"),
 ]
@@ -47,9 +49,12 @@ HELP = """<b>Совет нейросетей</b>
 • <code>/evaluate</code> — выбор из готовых вариантов: первая строка — вопрос, дальше по варианту на строку (или блоки через <code>---</code>).
 • /settings — режим, раунды, участники, демо-режим. Настройки запоминаются для чата.
 • /budget 0.5 — лимит стоимости одного заседания в $.
+• /archive — архив всех заседаний: отчёты в PDF, Word и Markdown. Поиск: <code>/archive кофейня</code>
 • /stop — остановить заседание.
 
-После заседания придут решение, итоги голосования и полный отчёт файлом."""
+После заседания придут решение, итоги голосования и полный отчёт в PDF (по кнопкам — Word и Markdown)."""
+FORMAT_NAME = {"pdf": "PDF", "docx": "Word", "md": "Markdown"}
+ARCHIVE_PAGE = 8
 
 
 # ---------------------------------------------------------------- состояние
@@ -175,10 +180,12 @@ class CouncilBot:
         self.pending: dict[int, Pending] = {}
         self.running: dict[int, Running] = {}
         self.username = ""
+        self.archive_query: dict[int, str] = {}
         cfg = self.base_config()
         self.runs_dir = Path(cfg.runs_dir) if Path(cfg.runs_dir).is_absolute() else self.config_path.parent / cfg.runs_dir
         self.settings_path = self.runs_dir / "telegram_settings.json"
         self.settings: dict[int, ChatSettings] = self._load_settings()
+        self.archive = Archive(self.runs_dir)
 
     # ------------------------------------------------------------ инфраструктура
 
@@ -234,6 +241,7 @@ class CouncilBot:
         return msg
 
     async def run(self) -> None:
+        self.archive.ensure_all_in_background()  # отчёты для заседаний, проведённых до обновления
         delay = 5
         while True:
             try:
@@ -318,6 +326,9 @@ class CouncilBot:
             await self.cmd_stop(chat_id)
         elif cmd == "/evaluate":
             await self.cmd_evaluate(chat_id, arg)
+        elif cmd == "/archive":
+            self.archive_query[chat_id] = arg
+            await self.show_archive(chat_id, arg, 0)
         elif cmd == "/ask":
             if not arg:
                 await self.send(chat_id, "Напишите вопрос после команды: <code>/ask ваш вопрос</code>")
@@ -492,6 +503,10 @@ class CouncilBot:
         if user_id not in self.allowed:
             await self.api.answer_callback(cq["id"], "Нет доступа")
             return
+        kind0, _, rest0 = data.partition(":")
+        if kind0 in ("arc", "ses", "rep"):
+            await self.on_archive_callback(cq, chat_id, message.get("message_id"), kind0, rest0)
+            return
         if data == "stop":
             r = self.running.get(chat_id)
             if r and r.message_id == message.get("message_id"):
@@ -573,7 +588,7 @@ class CouncilBot:
             try:
                 council = Council(cfg, client, on_event=on_event)
                 res = await council.run(p.question, options=p.options, mode=mode, rounds=s.rounds)
-                save(res, self.runs_dir, stem=stem)
+                await asyncio.to_thread(save, res, self.runs_dir, stem)
                 updater.cancel()
                 await self._safe_edit(chat_id, msg["message_id"], progress.render(final="✅ <b>Заседание завершено</b>"))
                 await self.send_result(chat_id, res, stem)
@@ -632,11 +647,90 @@ class CouncilBot:
                          f"Борда {r.borda:.2f}, критика {avg}, 1-х мест {r.first_places}/{r.ballots}")
         lines.append(f"\n💰 ${res.total_cost:.4f} · ⏱ {res.duration_s} с")
         await self.send(chat_id, "\n".join(lines))
+        await self.send_report(chat_id, stem, caption="📄 Полный отчёт: все варианты, критика, бюллетени")
+
+    # ------------------------------------------------------------ отчёты и архив
+
+    def _report_buttons(self, stem: str, skip: str = "") -> list[list[dict]]:
+        key = key_of(stem)
+        row = [self._btn(FORMAT_NAME[f], f"rep:{f}:{key}") for f in available_formats() if f != skip]
+        return [row] if row else []
+
+    async def send_report(self, chat_id: int, stem: str, fmt: str | None = None, caption: str | None = None) -> None:
+        """Отправляет отчёт файлом (по умолчанию PDF, если он доступен) с кнопками других форматов."""
+        fmts = available_formats()
+        fmt = fmt or fmts[0]
         try:
-            await self.api.send_document(chat_id, f"{stem}.md", render_markdown(res).encode("utf-8"),
-                                         caption="Полный отчёт: все варианты, критика, бюллетени")
+            path = await asyncio.to_thread(self.archive.report, stem, fmt)
+            content = await asyncio.to_thread(path.read_bytes)
+        except (KeyError, RuntimeError, OSError) as e:
+            await self.send(chat_id, f"⚠️ Не удалось подготовить отчёт: {esc(e)}")
+            return
+        kb = self._report_buttons(stem, skip=fmt)
+        try:
+            await self.api.send_document(chat_id, path.name, content, caption=caption,
+                                         mime=MIME[fmt].split(";")[0],
+                                         reply_markup={"inline_keyboard": kb} if kb else None)
         except TelegramError as e:
             log.warning("не удалось отправить отчёт: %s", e)
+            await self.send(chat_id, f"⚠️ Telegram не принял файл отчёта: {esc(e.description)}")
+
+    async def show_archive(self, chat_id: int, query: str, page: int, edit_id: int | None = None) -> None:
+        items = await asyncio.to_thread(self.archive.list, query)
+        pages = max(1, (len(items) + ARCHIVE_PAGE - 1) // ARCHIVE_PAGE)
+        page = max(0, min(page, pages - 1))
+        chunk = items[page * ARCHIVE_PAGE:(page + 1) * ARCHIVE_PAGE]
+        head = "🗂 <b>Архив заседаний</b>" + (f" · поиск «{esc(query)}»" if query else "")
+        if not items:
+            text = head + ("\nНичего не найдено." if query else "\nПока пусто — задайте первый вопрос.")
+            kb: list[list[dict]] = []
+        else:
+            lines = [head, f"<i>Всего: {len(items)} · страница {page + 1} из {pages}</i>", ""]
+            for i, it in enumerate(chunk, page * ARCHIVE_PAGE + 1):
+                win = f"🏆 {esc(it['winner'])}: {esc(it['winner_title'][:50])}" if it["winner"] else ""
+                lines.append(f"<b>{i}.</b> {esc(it['question'][:110])}\n    <i>{esc(it['date'])}</i> · {win}")
+            lines += ["", "Нажмите номер, чтобы получить отчёт."]
+            text = "\n".join(lines)
+            nums = [self._btn(str(i), f"ses:{it['key']}") for i, it in enumerate(chunk, page * ARCHIVE_PAGE + 1)]
+            kb = [nums[:4], nums[4:]] if len(nums) > 4 else [nums]
+            nav = []
+            if page > 0:
+                nav.append(self._btn("‹ Новее", f"arc:{page - 1}"))
+            if page < pages - 1:
+                nav.append(self._btn("Старше ›", f"arc:{page + 1}"))
+            if nav:
+                kb.append(nav)
+        markup = {"inline_keyboard": kb}
+        if edit_id:
+            await self.api.edit_message(chat_id, edit_id, text, reply_markup=markup)
+        else:
+            await self.send(chat_id, text, reply_markup=markup)
+
+    async def on_archive_callback(self, cq: dict, chat_id: int, message_id: int | None, kind: str, rest: str) -> None:
+        if kind == "arc":
+            await self.api.answer_callback(cq["id"])
+            page = int(rest) if rest.isdigit() else 0
+            await self.show_archive(chat_id, self.archive_query.get(chat_id, ""), page, edit_id=message_id)
+            return
+        fmt, _, key = rest.partition(":") if kind == "rep" else ("", "", rest)
+        stem = await asyncio.to_thread(self.archive.find_key, key)
+        if not stem:
+            await self.api.answer_callback(cq["id"], "Заседание не найдено (возможно, удалено)")
+            return
+        if kind == "ses":
+            await self.api.answer_callback(cq["id"], "Готовлю отчёт…")
+            s = await asyncio.to_thread(self.archive.summary, stem)
+            caption = None
+            if s:
+                win = f"\n🏆 {esc(s['winner'])}: {esc(s['winner_title'][:80])} ({esc(s['winner_author'])})" if s["winner"] else ""
+                caption = (f"<b>{esc(s['question'][:300])}</b>\n<i>{esc(s['date'])} · {esc(s['mode_name'])} · "
+                           f"${s['cost']:.4f}</i>{win}")[:1000]
+            await self.send_report(chat_id, stem, caption=caption)
+        elif fmt in available_formats():
+            await self.api.answer_callback(cq["id"], f"Отправляю {FORMAT_NAME[fmt]}…")
+            await self.send_report(chat_id, stem, fmt)
+        else:
+            await self.api.answer_callback(cq["id"], "Этот формат недоступен")
 
 
 # ---------------------------------------------------------------- запуск
