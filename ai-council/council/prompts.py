@@ -79,15 +79,6 @@ def _proposal_block(label: str, p: Proposal) -> str:
     return "\n".join(lines)
 
 
-MAX_OTHER_CHARS = 8000  # сколько символов чужого варианта показывать на доработке
-
-
-def _clip(p: Proposal) -> Proposal:
-    if len(p.summary) <= MAX_OTHER_CHARS:
-        return p
-    return p.model_copy(update={"summary": p.summary[:MAX_OTHER_CHARS] + " …(truncated)"})
-
-
 def proposals_block(proposals: dict[str, Proposal]) -> str:
     return "\n\n".join(_proposal_block(label, p) for label, p in proposals.items())
 
@@ -158,7 +149,7 @@ def revision(
     original: str | None = None,
 ) -> str:
     fb = json.dumps(feedback, ensure_ascii=False, indent=1) if feedback else "(no feedback received)"
-    others_full = "\n\n".join(_proposal_block(l, _clip(p)) for l, p in others.items())
+    others_full = "\n\n".join(_proposal_block(l, p) for l, p in others.items())  # целиком, без обрезки
     return f"""Question for the council:
 {question}
 {_original(question, original)}

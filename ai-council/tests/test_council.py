@@ -468,7 +468,7 @@ def test_revision_sees_full_other_proposals_and_compares():
     others = {"B": Proposal(title="Другой", summary=long), "C": Proposal(title="Третий", summary="x" * 9000)}
     txt = prompts.revision("Q", ["Цена"], "A", Proposal(title="Мой", summary="s"), [], others, None)
     assert "КОНЕЦ_ВАРИАНТА" in txt  # чужой вариант виден целиком, а не первые 400 символов
-    assert "…(truncated)" in txt    # но очень длинный — обрезан
+    assert "x" * 9000 in txt and "truncated" not in txt  # даже очень длинный — без обрезки
     assert "Compare honestly" in txt and '"position": "kept | improved | switched"' in txt
     assert "That others agree with each other is not a reason by itself" in txt
 
