@@ -1,0 +1,20 @@
+<svg font-family="DejaVu Sans, Arial, sans-serif" width="490" height="96" viewBox="0 0 490 96" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="b" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z" fill="#2b3a67"></path></marker></defs>
+  <g font-size="8.6" text-anchor="middle">
+    <rect x="2" y="20" width="58" height="40" rx="4" fill="#fff" stroke="#2b3a67"></rect><text x="31" y="37">0. Поста-</text><text x="31" y="49">новка</text>
+    <rect x="72" y="20" width="58" height="40" rx="4" fill="#e8edf7" stroke="#2b3a67"></rect><text x="101" y="37">1. Пред-</text><text x="101" y="49">ложения</text>
+    <rect x="142" y="20" width="58" height="40" rx="4" fill="#fff" stroke="#2b3a67"></rect><text x="171" y="37">2. Анони-</text><text x="171" y="49">мизация</text>
+    <rect x="212" y="20" width="58" height="40" rx="4" fill="#e8edf7" stroke="#2b3a67"></rect><text x="241" y="43">3. Критика</text>
+    <rect x="282" y="20" width="58" height="40" rx="4" fill="#e8edf7" stroke="#2b3a67"></rect><text x="311" y="37">4. Дора-</text><text x="311" y="49">ботка</text>
+    <rect x="352" y="20" width="58" height="40" rx="4" fill="#e8edf7" stroke="#2b3a67"></rect><text x="381" y="37">5. Голосо-</text><text x="381" y="49">вание</text>
+    <rect x="422" y="20" width="64" height="40" rx="4" fill="#2b3a67" stroke="#2b3a67"></rect><text x="454" y="37" fill="#fff">6. Итог</text><text x="454" y="49" fill="#fff">председателя</text>
+    <g stroke="#2b3a67" marker-end="url(#b)">
+      <line x1="60" y1="40" x2="71" y2="40"></line><line x1="130" y1="40" x2="141" y2="40"></line><line x1="200" y1="40" x2="211" y2="40"></line>
+      <line x1="270" y1="40" x2="281" y2="40"></line><line x1="340" y1="40" x2="351" y2="40"></line><line x1="410" y1="40" x2="421" y2="40"></line>
+    </g>
+    <path d="M311,60 C311,86 241,86 241,62" fill="none" stroke="#2b3a67" stroke-dasharray="3 2" marker-end="url(#b)"></path>
+    <text x="276" y="92" font-size="8">повтор N раундов</text>
+    <text x="101" y="12" font-size="8" fill="#666">параллельно, вслепую</text>
+    <text x="381" y="12" font-size="8" fill="#666">не за себя</text>
+  </g>
+</svg>
