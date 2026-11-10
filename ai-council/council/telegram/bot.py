@@ -239,6 +239,8 @@ class CouncilBot:
         self.archive_query: dict[int, str] = {}
         self.drafts: dict[int, list[Attachment]] = {}   # файлы, присланные до вопроса
         self._album_replied: set[str] = set()
+        self._tasks: set[asyncio.Task] = set()          # ссылки на задачи, чтобы их не собрал сборщик мусора
+        self._chat_locks: dict[int, asyncio.Lock] = {}  # сообщения одного чата — строго по очереди
         cfg = self.base_config()
         self.runs_dir = Path(cfg.runs_dir) if Path(cfg.runs_dir).is_absolute() else self.config_path.parent / cfg.runs_dir
         self.settings_path = self.runs_dir / "telegram_settings.json"
@@ -327,12 +329,27 @@ class CouncilBot:
                 continue
             for u in updates:
                 offset = u["update_id"] + 1
-                asyncio.create_task(self.handle_update_safe(u))
+                task = asyncio.create_task(self.handle_update_safe(u))
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
             await asyncio.sleep(0)  # дать поработать обработчикам, даже если сервер ответил мгновенно
 
+    @staticmethod
+    def _chat_of(update: dict[str, Any]) -> int | None:
+        msg = update.get("message") or (update.get("callback_query") or {}).get("message") or {}
+        return (msg.get("chat") or {}).get("id")
+
     async def handle_update_safe(self, update: dict[str, Any]) -> None:
+        """Разные чаты обрабатываются параллельно, а сообщения одного чата — по очереди, в порядке прихода
+        (иначе вопрос, отправленный сразу после альбома, мог бы обогнать скачивание фото)."""
+        chat = self._chat_of(update)
+        lock = self._chat_locks.setdefault(chat, asyncio.Lock()) if chat is not None else None
         try:
-            await self.handle_update(update)
+            if lock:
+                async with lock:
+                    await self.handle_update(update)
+            else:
+                await self.handle_update(update)
         except Exception:  # noqa: BLE001
             log.exception("ошибка обработки update %s", update.get("update_id"))
 
@@ -454,6 +471,8 @@ class CouncilBot:
         if group and group in self._album_replied and not warn:
             return  # на альбом отвечаем один раз
         if group:
+            if len(self._album_replied) > 1000:
+                self._album_replied.clear()
             self._album_replied.add(group)
         await self.send(chat_id, f"📎 Принял «{esc(att.name)}» (всего вложений: {len(draft)}).{warn}\n"
                                  "Теперь напишите вопрос — или пришлите ещё файлы. Убрать вложения: /clear")
@@ -462,7 +481,7 @@ class CouncilBot:
         s = self.chat_settings(chat_id)
         if not arg:
             cur = s.budget or self.base_config().max_cost_usd
-            await self.send(chat_id, f"Лимит заседания: <b>${cur:.2f}</b>. Изменить: <code>/budget 0.5</code>")
+            await self.send(chat_id, f"Лимит заседания: <b>${cur:g}</b>. Изменить: <code>/budget 0.5</code>")
             return
         try:
             value = float(arg.replace(",", ".").lstrip("$"))
@@ -473,7 +492,7 @@ class CouncilBot:
             return
         s.budget = value
         self._save_settings()
-        await self.send(chat_id, f"✅ Лимит заседания: <b>${value:.2f}</b>")
+        await self.send(chat_id, f"✅ Лимит заседания: <b>${value:g}</b>")
 
     async def cmd_stop(self, chat_id: int) -> None:
         r = self.running.get(chat_id)
@@ -601,9 +620,9 @@ class CouncilBot:
         if s.demo:
             line = f"<b>Стоимость:</b> демо-режим, бесплатно ({est.calls} вызовов)"
         elif pricing:
-            line = f"<b>Стоимость:</b> ≈ ${est.low:.3f} – ${est.high:.3f} ({est.calls} вызовов, лимит ${cfg.max_cost_usd:.2f})"
+            line = f"<b>Стоимость:</b> ≈ ${est.low:.3f} – ${est.high:.3f} ({est.calls} вызовов, лимит ${cfg.max_cost_usd:g})"
         else:
-            line = f"<b>Стоимость:</b> не удалось оценить ({est.calls} вызовов, лимит ${cfg.max_cost_usd:.2f})"
+            line = f"<b>Стоимость:</b> не удалось оценить ({est.calls} вызовов, лимит ${cfg.max_cost_usd:g})"
         return line, problem
 
     @staticmethod
@@ -620,7 +639,7 @@ class CouncilBot:
             members, budget = f"⚠️ {e}", s.budget or 0
         await self.send(chat_id, "⚙️ <b>Настройки чата</b>\n"
                         f"Режим: {MODE_NAME[s.mode]}" + (f", раундов: {s.rounds}" if s.mode == "debate" else "") + "\n"
-                        f"Участники: {esc(members)}\nЛимит: ${budget:.2f}\nДемо-режим: {'вкл' if s.demo else 'выкл'}\n\n"
+                        f"Участники: {esc(members)}\nЛимит: ${budget:g}\nДемо-режим: {'вкл' if s.demo else 'выкл'}\n\n"
                         "Меняются кнопками под вопросом — напишите любой вопрос. Лимит: /budget 0.5")
 
     # ------------------------------------------------------------ кнопки

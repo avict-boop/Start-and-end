@@ -116,9 +116,10 @@ class RunRequest(BaseModel):
 
 
 class RunState:
-    def __init__(self, sid: str, question: str) -> None:
+    def __init__(self, sid: str, question: str, mode: str = "") -> None:
         self.id = sid
         self.question = question
+        self.mode = mode
         self.events: list[dict[str, Any]] = []
         self.status = "running"
         self.task: asyncio.Task | None = None
@@ -349,7 +350,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         sid = make_stem(req.question)
         while sid in runs or (runs_dir(cfg) / f"{sid}.json").exists():
             sid += "-1"
-        st = RunState(sid, req.question)
+        st = RunState(sid, req.question, "evaluate" if opts else req.mode)
         rounds = cfg.debate_rounds if req.rounds is None else req.rounds
         st.push({"type": "start", "id": sid, "question": req.question, "mode": "evaluate" if opts else req.mode,
                  "rounds": rounds, "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
@@ -398,12 +399,16 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     async def list_sessions(q: str = "", mode: str = "") -> dict[str, Any]:
         items = await asyncio.to_thread(archive().list, q, mode)
         known = {i["id"] for i in items}
-        running = [{"id": st.id, "question": st.question, "status": st.status, "date": "", "mode": None,
-                    "mode_name": "", "winner": "", "winner_title": "", "winner_author": "", "cost": None,
-                    "members": [], "proposals": 0}
-                   for st in runs.values() if st.id not in known and (not q or q.casefold() in st.question.casefold())]
-        return {"items": sorted(running, key=lambda x: x["id"], reverse=True) + items,
-                "formats": available_formats(), "total": len(items) + len(running)}
+        from ..reports.view import MODE_NAME
+        # идущие, остановленные и упавшие заседания (их нет в архиве на диске) — с теми же фильтрами
+        live = [{"id": st.id, "question": st.question, "status": st.status,
+                 "date": time.strftime("%d.%m.%Y %H:%M", time.localtime(st.started)),
+                 "mode": st.mode, "mode_name": MODE_NAME.get(st.mode, ""), "winner": "", "winner_title": "",
+                 "winner_author": "", "cost": None, "members": [], "proposals": 0, "attachments": 0}
+                for st in runs.values()
+                if st.id not in known and (not q or q.casefold() in st.question.casefold()) and (not mode or st.mode == mode)]
+        return {"items": sorted(live + items, key=lambda x: x["id"], reverse=True),
+                "formats": available_formats(), "total": len(items) + len(live)}
 
     @app.get("/api/sessions/{sid}/events")
     async def stream(sid: str, request: Request) -> StreamingResponse:

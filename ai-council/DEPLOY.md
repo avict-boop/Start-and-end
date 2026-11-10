@@ -206,7 +206,7 @@ docker compose --profile web up -d
 | Состояние | `docker compose ps` |
 | Логи бота | `docker compose logs -f bot` |
 | Перезапустить | `docker compose restart` |
-| Остановить всё | `docker compose --profile web down` (история сохранится) |
+| Остановить всё | `docker compose --profile https down` (бот, веб и HTTPS; история сохранится) |
 | Запустить снова | `docker compose up -d` |
 | Поменять участников/модели | `nano config.yaml`; изменения подхватятся со следующего заседания (если нет — `docker compose restart`) |
 | Поменять ключи в `.env` | `nano .env` и `docker compose up -d --force-recreate` |

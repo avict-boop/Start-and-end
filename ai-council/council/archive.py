@@ -64,7 +64,7 @@ def download_name(stem: str, kind: str) -> str:
 
 def key_of(stem: str) -> str:
     """Короткий ключ заседания (для кнопок Telegram, где callback_data ограничен 64 байтами)."""
-    return hashlib.sha1(stem.encode("utf-8")).hexdigest()[:10]
+    return hashlib.sha1(stem.encode("utf-8"), usedforsecurity=False).hexdigest()[:10]
 
 
 class Archive:

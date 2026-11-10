@@ -255,7 +255,7 @@ function renderEstimate(e) {
   let html = "";
   if (e.low != null) {
     html += `<div class="big">≈ $${e.low.toFixed(3)} – $${e.high.toFixed(3)}</div>`;
-    html += `<div class="muted">${e.calls} вызовов · лимит $${e.budget.toFixed(2)}</div>`;
+    html += `<div class="muted">${e.calls} вызовов · лимит $${e.budget}</div>`;
     if (e.high > e.budget) html += `<div class="warnbox">Верхняя оценка выше лимита — заседание может остановиться по бюджету.</div>`;
   } else {
     html += `<div class="big">${e.calls} вызовов</div><div class="muted">${$("mock").checked ? "Демо-режим: бесплатно." : "Цены неизвестны."}</div>`;
@@ -422,9 +422,8 @@ async function loadArchive() {
       it.attachments ? `📎 ${it.attachments}` : "",
       it.cost != null ? money(it.cost) : "", done ? "" : ({ running: "идёт…", error: "ошибка", cancelled: "остановлено" }[it.status] || "")]
       .filter(Boolean).map(esc).join(" · ");
-    const actions = done
-      ? `${downloadLinks(it.id, "button ghost")}<button type="button" class="ghost" data-arc-del="${esc(it.id)}" title="Удалить">Удалить</button>`
-      : "";
+    const del = `<button type="button" class="ghost" data-arc-del="${esc(it.id)}" title="Удалить">Удалить</button>`;
+    const actions = done ? `${downloadLinks(it.id, "button ghost")}${del}` : it.status === "running" ? "" : del;
     return `<div class="arc-item">
       <div class="arc-q" data-open="${esc(it.id)}" tabindex="0" role="link" title="${esc(it.question)}">${esc(shortTitle(it.question))}</div>
       <div class="arc-actions">${actions}</div>

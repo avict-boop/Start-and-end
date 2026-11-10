@@ -197,7 +197,7 @@ class Council:
         for attempt in range(self.cfg.json_retries + 1):
             if self.total_cost >= self.cfg.max_cost_usd:
                 raise BudgetExceeded(
-                    f"достигнут лимит бюджета ${self.cfg.max_cost_usd:.2f} (потрачено ${self.total_cost:.4f})"
+                    f"достигнут лимит бюджета ${self.cfg.max_cost_usd:g} (потрачено ${self.total_cost:.4f})"
                 )
             if self._sem.locked():
                 self._call(name, stage, "queued", started, detail="ждёт свободного слота")

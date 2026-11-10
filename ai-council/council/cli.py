@@ -185,7 +185,7 @@ async def _preflight(client, cfg, args, *, mode, rounds, options, criteria, atta
     console.print(t)
     if pricing:
         console.print(f"Оценка: [bold]${est.low:.3f} – ${est.high:.3f}[/] за {est.calls} вызовов "
-                      f"(лимит ${cfg.max_cost_usd:.2f})")
+                      f"(лимит ${cfg.max_cost_usd:g})")
         if est.high > cfg.max_cost_usd:
             console.print("[yellow]Верхняя оценка выше лимита — заседание может остановиться по бюджету "
                           "(увеличьте --budget или уменьшите --rounds).[/]")
@@ -226,7 +226,7 @@ async def _ask(args) -> int:
     names = ", ".join(m.name for m in cfg.active_members)
     console.print(Panel(f"Участники: {names}\nПредседатель: {cfg.chair}"
                         + (f"\nАдвокат дьявола: {cfg.devil_advocate}" if cfg.devil_advocate else "")
-                        + f"\nЛимит бюджета: ${cfg.max_cost_usd:.2f}" + ("\n[yellow]MOCK-режим[/]" if args.mock else ""),
+                        + f"\nЛимит бюджета: ${cfg.max_cost_usd:g}" + ("\n[yellow]MOCK-режим[/]" if args.mock else ""),
                         title="Совет нейросетей"))
     options = _read_options(args)
     atts = []
@@ -309,6 +309,10 @@ async def _models(args) -> int:
     client = OpenRouterClient(os.environ.get("OPENROUTER_API_KEY", ""))
     try:
         models = await client.list_models()
+    except Exception as e:  # noqa: BLE001 — сеть, прокси, блокировка: понятное сообщение вместо трассировки
+        console.print(f"[red]Не удалось получить список моделей OpenRouter:[/] {e.__class__.__name__}: {e}\n"
+                      "Проверьте доступ в интернет с этой машины (https://openrouter.ai).")
+        return 1
     finally:
         await client.aclose()
     q = (args.search or "").lower()

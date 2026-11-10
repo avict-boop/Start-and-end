@@ -404,3 +404,26 @@ def test_files_from_telegram(env):
     asyncio.run(bot.handle_update({"update_id": 9, "message": {"message_id": 9, "from": {"id": STRANGER},
                                    "chat": {"id": STRANGER, "type": "private"}, "photo": [{"file_id": "PHOTO1"}]}}))
     assert "Доступ к боту закрыт" in fake.texts()[-1] and len(fake.texts()) == n + 1
+
+
+def test_same_chat_updates_processed_in_order(env):
+    """Альбом из двух фото и сразу вопрос: вопрос обрабатывается после фото, оба файла приложены."""
+    import io
+    from PIL import Image
+    bot, fake, _ = env
+    b = io.BytesIO()
+    Image.new("RGB", (64, 64), "red").save(b, "PNG")
+    fake.files["P1"] = fake.files["P2"] = b.getvalue()
+
+    def photo(i):
+        return {"update_id": 20 + i, "message": {"message_id": 30 + i, "media_group_id": "album1", "from": {"id": OWNER},
+                                                 "chat": {"id": CHAT, "type": "private"}, "photo": [{"file_id": f"P{i}"}]}}
+
+    async def scenario():
+        await asyncio.gather(bot.handle_update_safe(photo(1)), bot.handle_update_safe(photo(2)),
+                             bot.handle_update_safe(msg("Сравни эти две картинки")))
+
+    asyncio.run(scenario())
+    p = bot.pending[CHAT]
+    assert p.question == "Сравни эти две картинки" and [a.name for a in p.attachments] == ["фото-31.jpg", "фото-32.jpg"]
+    assert sum("Принял" in t for t in fake.texts()) == 1  # на альбом — один ответ

@@ -99,7 +99,7 @@ def _image(data: bytes) -> tuple[str, int, int, str]:
         img.seek(0)
     img.thumbnail((IMAGE_MAX_SIDE, IMAGE_MAX_SIDE))
     out = io.BytesIO()
-    has_alpha = img.mode in ("RGBA", "LA", "P") and "transparency" in img.info or img.mode in ("RGBA", "LA")
+    has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
     if has_alpha:
         img.save(out, "PNG", optimize=True)
         mime = "image/png"

@@ -118,7 +118,8 @@ python -m council web          # затем откройте http://127.0.0.1:80
 
 ```bash
 docker compose up -d                   # Telegram-бот
-docker compose --profile web up -d     # + веб-интерфейс (доступ через SSH-туннель)
+docker compose --profile https up -d   # + веб-интерфейс из интернета по HTTPS с паролем (DOMAIN, WEB_PASSWORD в .env)
+docker compose --profile web up -d     # или веб-интерфейс только через SSH-туннель
 ```
 
 Установка на чистый сервер Ubuntu одной командой. Скрипт спросит всё нужное (ключи, участников, лимит,
