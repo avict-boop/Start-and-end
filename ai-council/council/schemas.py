@@ -95,6 +95,7 @@ class Framing(BaseModel):
 
     refined_question: str
     criteria: list[str] = Field(min_length=1, max_length=7)
+    requirements: list[str] = Field(default_factory=list)  # жёсткие требования запроса пользователя
 
     @model_validator(mode="before")
     @classmethod
@@ -113,6 +114,10 @@ class Framing(BaseModel):
                 crit = [to_text(c.get("name") if isinstance(c, dict) and c.get("name") else c) for c in crit][:7]
             data["criteria"] = crit
             data["refined_question"] = to_text(data["refined_question"])
+            reqs = data.get("requirements")
+            if reqs is None:
+                reqs = _pick(data, "hard_requirements", "must_have", "constraints")
+            data["requirements"] = [r for r in to_list(reqs) if r.strip()][:10]
         return data
 
 

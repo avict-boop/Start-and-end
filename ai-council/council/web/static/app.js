@@ -674,7 +674,7 @@ function apply(s, ev) {
       break;
     }
     case "framing":
-      s.refined = ev.refined_question; s.criteria = ev.criteria;
+      s.refined = ev.refined_question; s.criteria = ev.criteria; s.requirements = ev.requirements || [];
       logAdd(s, `Критерии: ${(ev.criteria || []).join(", ")}`);
       if (s.stage === "framing") s.work = {};
       s.doneStages.add("framing");
@@ -698,6 +698,9 @@ function apply(s, ev) {
       s.tally = ev.rows;
       s.agreement = ev.agreement || null;
       s.ballotFlags = ev.ballot_flags || {};
+      s.coLeaders = ev.co_leaders || [];
+      s.decisive = ev.decisive || {};
+      s.coverage = ev.coverage || null;
       s.leaderWithout = ev.leader_without_flagged || null;
       if (ev.rows && ev.rows[0]) logAdd(s, `Голосование: лидирует вариант ${ev.rows[0].label}`);
       break;
@@ -774,7 +777,8 @@ function render(s) {
     });
   }
   $("sRefined").textContent = s.refined && s.refined !== s.question ? `Постановка: ${s.refined}` : "";
-  $("sCriteria").innerHTML = s.criteria.map((c) => `<span class="chip">${esc(c)}</span>`).join("");
+  $("sCriteria").innerHTML = s.criteria.map((c) => `<span class="chip">${esc(c)}</span>`).join("")
+    + ((s.requirements || []).length ? `<div class="reqs" title="Жёсткие требования запроса: их нарушение не компенсируется другими достоинствами"><b>Обязательно:</b> ${s.requirements.map((r, i) => `<span class="chip req">R${i + 1}. ${esc(r)}</span>`).join("")}</div>` : "");
   $("sCost").textContent = money(s.cost);
   $("cancelBtn").hidden = finished;
   $("sError").hidden = !s.error;
@@ -957,9 +961,11 @@ function renderVerdict(s) {
   $("vTitle").textContent = `Вариант ${v.winner}${p ? ` — ${p.title}` : ""} (${authorOf(s, v.winner)})`;
   const low = s.agreement && s.agreement.level === "low";
   const lead = s.tally && s.tally[0] && s.tally[0].label;
-  const dev = lead && v.winner && v.winner !== lead
+  const dev = lead && v.winner && v.winner !== lead && !(s.coLeaders || []).includes(v.winner)
     ? `⚖️ Председатель выбрал не лидера голосования: победитель ${v.winner}, лидер подсчёта — ${lead}.${(v.deviation || v.why) ? ` Причина: ${v.deviation || v.why}` : ""}` : "";
-  const warns = [low ? `⚠️ Низкое согласие совета (τ = ${s.agreement.tau.toFixed(2)}): ${AGREE_HINT.low}` : "", dev].filter(Boolean);
+  const tie = (s.coLeaders || []).length > 1
+    ? `🤝 Ничья за первое место: ${s.coLeaders.join(", ")} — по голосам их не различить${s.coLeaders.includes(v.winner) ? `; председатель выбрал ${v.winner}` : ""}` : "";
+  const warns = [low ? `⚠️ Низкое согласие совета (τ = ${s.agreement.tau.toFixed(2)}): ${AGREE_HINT.low}` : "", dev, tie].filter(Boolean);
   $("vAgreeWarn").hidden = !warns.length;
   $("vAgreeWarn").innerHTML = warns.map(esc).join("<br>");
   $("vAnswer").innerHTML = md(v.final_answer);
@@ -987,6 +993,18 @@ const FLAG_NAME = { against: "порядок почти обратный общ�
   leader_last: "ставит на последнее место вариант, который остальные считают лучшим" };
 const FACT_ICON = { confirmed: "✅", refuted: "❌", unclear: "❔" };
 const FACT_NAME = { confirmed: "подтверждено", refuted: "опровергнуто", unclear: "не удалось проверить" };
+
+function coverageHtml(s) {
+  let out = "";
+  const c = s.coverage;
+  if (c) {
+    if (c.options < 3) out += `<br>⚠️ Вариантов меньше трёх — голосование почти ничего не решает, по сути выбор делает председатель.`;
+    else out += `<br>Каждая пара вариантов сравнивалась ${c.min === c.max ? c.min : `от ${c.min} до ${c.max}`} раз${c.min < 2 ? " — мало данных, относитесь к порядку осторожно" : ""}.`;
+  }
+  const d = Object.entries(s.decisive || {});
+  if (d.length) out += `<br><b>Решающие голоса</b> (лидер меняется без одного бюллетеня): ${d.map(([v, a]) => `без ${esc(v)} лидером был бы ${esc(a)}`).join("; ")}.`;
+  return out;
+}
 
 function positionsHtml(s) {
   const c = { kept: 0, improved: 0, switched: 0 };
@@ -1041,7 +1059,7 @@ function renderTally(s) {
     $("tallyNote").innerHTML = (a ? `<b>Согласие совета: ${AGREE_NAME[a.level]}</b> (τ = ${a.tau.toFixed(2)}) — ${AGREE_HINT[a.level]}.<br>` : "")
       + (sch ? "Порядок: метод Шульце — кто выигрывает в прямых сравнениях; при равенстве — балл Борда, затем попарный счёт, затем жребий. Оценка критики — для сведения: она дана версиям до доработки."
         : "Порядок: балл Борда; при равенстве — попарное сравнение, затем оценка критики.")
-      + ties.map((t) => `<br>• ${t}`).join("") + positionsHtml(s) + flagsHtml(s);
+      + ties.map((t) => `<br>• ${t}`).join("") + coverageHtml(s) + positionsHtml(s) + flagsHtml(s);
   } else {
     $("tally").innerHTML = "";
     $("tallyNote").innerHTML = "";

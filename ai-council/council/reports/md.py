@@ -49,6 +49,8 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
             out += [f"- **{n}:** {t}" for n, t in v.image_notes.items()] + [""]
     if v.refined:
         out += [f"**Уточнённая постановка:** {v.refined}", ""]
+    if v.requirements:
+        out += ["**Обязательные требования запроса:**", "", *[f"{i}. {r}" for i, r in enumerate(v.requirements, 1)], ""]
     if summary:
         out += [f"*{v.date} · {v.mode} · участники: {', '.join(v.members)}*", ""]
         if v.agreement_line:
@@ -74,6 +76,8 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
         out.insert(out.index(vd.get("final_answer", "")), f"> ⚠️ **Низкое согласие совета:** {v.agreement_line}\n")
     if v.deviation_line:
         out.insert(out.index(vd.get("final_answer", "")), f"> ⚖️ **{v.deviation_line}**\n")
+    if v.tie_line:
+        out.insert(out.index(vd.get("final_answer", "")), f"> 🤝 **{v.tie_line}**\n")
     if vd.get("why"):
         out += ["### Почему", "", vd["why"], ""]
     if vd.get("dissent"):
@@ -108,6 +112,10 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
                    f"{'—' if avg is None else f'{avg:.1f}'} | {r.get('first_places', 0)}/{r.get('ballots', 0)} |")
     out += ["", f"*{v.order_note}*"]
     out += [f"- {n}" for n in v.tie_notes]
+    if v.coverage_line:
+        out += [f"*{v.coverage_line}.*"]
+    if v.decisive_notes:
+        out += ["*Решающие голоса (лидер меняется без одного бюллетеня): " + "; ".join(v.decisive_notes) + ".*"]
     if v.position_line:
         out += [f"*{v.position_line}.*"]
     if v.flag_notes:

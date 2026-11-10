@@ -241,12 +241,13 @@ class View:
     def fact_check(self) -> dict[str, dict]:
         return dict(self.d.get("fact_check") or {})
 
-    FACT_ICON = {"confirmed": "✅", "refuted": "❌", "unclear": "❔"}
-    FACT_NAME = {"confirmed": "подтверждено", "refuted": "опровергнуто", "unclear": "не удалось проверить"}
+    FACT_ICON = {"confirmed": "✅", "refuted": "❌", "unclear": "❔", "user_doc": "📄"}
+    FACT_NAME = {"confirmed": "подтверждено", "refuted": "опровергнуто", "unclear": "не удалось проверить",
+                 "user_doc": "из документов пользователя"}
 
     @property
     def fact_counts(self) -> dict[str, int]:
-        c = {"confirmed": 0, "refuted": 0, "unclear": 0}
+        c = {"confirmed": 0, "refuted": 0, "unclear": 0, "user_doc": 0}
         for r in self.fact_check.values():
             for cl in r.get("claims", []):
                 c[cl.get("status") if cl.get("status") in c else "unclear"] += 1
@@ -259,7 +260,44 @@ class View:
             return ""
         c = self.fact_counts
         return (f"проверены варианты {', '.join(self.fact_check)}: ✅ {c['confirmed']} подтверждено · "
-                f"❌ {c['refuted']} опровергнуто · ❔ {c['unclear']} не удалось проверить")
+                f"❌ {c['refuted']} опровергнуто · ❔ {c['unclear']} не удалось проверить"
+                + (f" · 📄 {c['user_doc']} из документов пользователя" if c["user_doc"] else ""))
+
+    # ------------------------------------------------------------ требования, ничья, решающие голоса, покрытие
+
+    @property
+    def requirements(self) -> list[str]:
+        return list(self.d.get("requirements") or [])
+
+    @property
+    def top_tie(self) -> list[str]:
+        """Варианты, разделившие первое место (их различает только жребий)."""
+        return list(self.d.get("co_leaders") or [])
+
+    @property
+    def tie_line(self) -> str:
+        t = self.top_tie
+        if len(t) < 2:
+            return ""
+        w = self.winner
+        return (f"Ничья за первое место: {', '.join(t)} — по голосам их не различить"
+                + (f"; председатель выбрал {w}" if w in t else ""))
+
+    @property
+    def decisive_notes(self) -> list[str]:
+        return [f"без бюллетеня {v} лидером был бы вариант {alt}" for v, alt in (self.d.get("decisive") or {}).items()]
+
+    @property
+    def coverage_line(self) -> str:
+        c = self.d.get("coverage") or {}
+        if not c:
+            return ""
+        if c.get("options", 0) < 3:
+            return ("Вариантов меньше трёх — голосование почти ничего не решает: каждая пара сравнивалась "
+                    f"{c['min']}–{c['max']} раз, по сути выбор делает председатель")
+        rng = f"{c['min']}" if c["min"] == c["max"] else f"от {c['min']} до {c['max']}"
+        warn = " — мало данных, относитесь к порядку осторожно" if c["min"] < 2 else ""
+        return f"Каждая пара вариантов сравнивалась в бюллетенях {rng} раз{warn}"
 
     @staticmethod
     def safe_url(u: str) -> str:
@@ -290,8 +328,8 @@ class View:
         if not w or not self.tally:
             return None
         lead = self.tally[0].get("label")
-        if not lead or lead == w:
-            return None
+        if not lead or lead == w or w in self.top_tie:
+            return None  # лидер или один из разделивших первое место — не отступление
         reason = (self.verdict.get("deviation") or "").strip() or (self.verdict.get("why") or "").strip()
         kind = reason.split(":", 1)[0].strip().lower() if ":" in reason else ""
         names = {"fact": "опровергнутые факты у лидера", "risk": "серьёзный риск у лидера",

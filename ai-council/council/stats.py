@@ -166,7 +166,7 @@ def _chair_stats(chairs: dict[str, dict[str, Any]], stem: str, d: dict[str, Any]
         return
     st["decisions"] += 1
     leader = tally[0].get("label")
-    if v.winner and leader and v.winner != leader:
+    if v.winner and leader and v.winner != leader and v.winner not in v.top_tie:
         st["overrides"] += 1
         st["examples"].append({"id": stem, "title": v.title_text[:80], "leader": leader, "winner": v.winner})
 

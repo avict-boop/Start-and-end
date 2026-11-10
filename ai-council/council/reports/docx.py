@@ -469,6 +469,10 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
         p = doc.add_paragraph()
         p.add_run("Уточнённая постановка: ").bold = True
         p.add_run(v.refined)
+    if v.requirements:
+        doc.add_paragraph().add_run("Обязательные требования запроса:").bold = True
+        for i, r in enumerate(v.requirements, 1):
+            doc.add_paragraph(f"{i}. {r}").paragraph_format.left_indent = Pt(14)
     meta = [("Дата", v.date), ("Режим", v.mode), ("Участники", ", ".join(v.members)),
             ("Критерии", ", ".join(v.criteria) or "—"), ("Стоимость", f"${v.cost:.4f}"),
             ("Длительность", v.duration)]
@@ -500,7 +504,7 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
     else:
         _heading(doc, f"Решение совета: вариант {w} — {v.title(w)} ({v.author(w)})" if w else "Решение совета", 1)
     for warn in ([f"⚠️ Низкое согласие совета: {v.agreement_line}"] if v.agreement_low else []) + \
-            ([f"⚖️ {v.deviation_line}"] if v.deviation_line else []):
+            ([f"⚖️ {v.deviation_line}"] if v.deviation_line else []) + ([f"🤝 {v.tie_line}"] if v.tie_line else []):
         wr = doc.add_paragraph().add_run(warn)
         wr.bold = True
         wr.font.color.rgb = RGBColor(0x7A, 0x4A, 0x00)
@@ -545,7 +549,9 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
     note = doc.add_paragraph().add_run(v.order_note + (f" Согласие совета: {v.agreement_line}." if v.agreement_line else ""))
     note.font.size = Pt(8.5)
     note.font.color.rgb = MUTED
-    for tn in v.tie_notes + ([v.position_line + "."] if v.position_line else []):
+    extra = ([v.coverage_line + "."] if v.coverage_line else []) + (
+        ["Решающие голоса: " + "; ".join(v.decisive_notes) + "."] if v.decisive_notes else [])
+    for tn in v.tie_notes + ([v.position_line + "."] if v.position_line else []) + extra:
         r = doc.add_paragraph().add_run("• " + tn)
         r.font.size = Pt(8.5)
         r.font.color.rgb = MUTED

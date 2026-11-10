@@ -419,7 +419,7 @@ def test_prompts_include_facts_and_ballot_notes():
     v = prompts.verdict("Q", ["Цена"], props, "1. A", "", None, "", facts, "ballots diverging: kimi")
     assert "[refuted] Х" in v and "Do not repeat refuted claims" in v and "Ballot check: ballots diverging" in v
     fc = prompts.factcheck("Q", "A", props["A"], 3)
-    assert "up to 3 key factual claims" in fc and '"status": "confirmed|refuted|unclear"' in fc
+    assert "up to 3 key factual claims" in fc and '"status": "confirmed|refuted|unclear|user_doc"' in fc
 
 
 # ---------------------------------------------------------------- ответы «в файле»

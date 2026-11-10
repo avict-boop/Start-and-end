@@ -24,6 +24,9 @@ from .voting import (
     agreement,
     assign_labels,
     ballot_flags,
+    co_leaders,
+    coverage,
+    decisive_ballots,
     leader_without,
     extract_json,
     normalize_critique,
@@ -92,6 +95,10 @@ class SessionResult:
     leader_without_flagged: str | None = None                         # лидер без них (если пометки есть)
     fact_check: dict[str, dict[str, Any]] = field(default_factory=dict)    # метка -> итоги проверки фактов
     fact_checker: str = ""                                            # модель, проверявшая факты
+    requirements: list[str] = field(default_factory=list)             # жёсткие требования запроса
+    co_leaders: list[str] = field(default_factory=list)               # ничья за 1-е место (если была)
+    decisive: dict[str, str] = field(default_factory=dict)            # голосующий -> лидер без его бюллетеня
+    coverage: dict[str, int] | None = None                            # сколько раз сравнивались пары
 
     @property
     def total_cost(self) -> float:
@@ -127,6 +134,10 @@ class SessionResult:
             "leader_without_flagged": self.leader_without_flagged,
             "fact_check": self.fact_check,
             "fact_checker": self.fact_checker,
+            "requirements": self.requirements,
+            "co_leaders": self.co_leaders,
+            "decisive": self.decisive,
+            "coverage": self.coverage,
             "transcript": self.transcript,
         }
 
@@ -159,6 +170,7 @@ class Council:
         self.history: list[dict[str, Any]] = []
         self.chair_judge = False  # председатель без своего варианта (только судья и автор итога)
         self.head = ""            # общее начало запросов этапов 1–6 (вопрос) — для кэша провайдера
+        self.requirements: list[str] = []  # жёсткие требования запроса (из постановки задачи)
         # «Компактные варианты»: число слов для участников (0 — обычный режим, полный формат у всех)
         self.compact = config.compact_proposals and config.compact_words or 0
 
@@ -365,6 +377,12 @@ class Council:
                 pass
             raise
 
+    def _shuffled(self, props: dict[str, Proposal]) -> dict[str, Proposal]:
+        """Варианты в случайном порядке (у каждого судьи свой): первые показанные обычно оценивают выше."""
+        items = list(props.items())
+        self.rng.shuffle(items)
+        return dict(items)
+
     ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}
     FILE_STAGES = {"proposal", "revision", "verdict"}  # здесь модели пишут содержательный ответ
     VOTE_DOC_CHARS = 20_000  # документы до такого объёма передаются и на голосование
@@ -500,12 +518,14 @@ class Council:
                 framing = await self._ask(chair, "framing", prompts.framing(question, context), Framing)
                 refined = framing.refined_question.strip() or question
                 criteria = [c.strip() for c in framing.criteria if c.strip()]
+                self.requirements = [r.strip() for r in framing.requirements if r.strip()]
             except (ProviderError, InvalidResponse) as e:
                 self._emit("member_failed", stage="framing", member=chair.name, error=str(e))
                 criteria = []
             criteria = criteria or ["Эффективность", "Реалистичность", "Риски"]
-        self._emit("framing", refined_question=refined, criteria=criteria)
-        self.head = prompts.head(refined, question)
+        self._emit("framing", refined_question=refined, criteria=criteria, requirements=self.requirements)
+        self.head = prompts.head(refined, question, self.requirements)
+        req = self.requirements or None
 
         # 1. Предложения (вслепую) + 2. анонимизация
         if options:
@@ -525,7 +545,7 @@ class Council:
                        chair_proposes=not self.chair_judge)
             got = await self._parallel(
                 "proposal",
-                {m.name: self._ask(m, "proposal", prompts.proposal(refined, criteria, context, question, self.compact), Proposal)
+                {m.name: self._ask(m, "proposal", prompts.proposal(refined, criteria, context, question, self.compact, req=req), Proposal)
                  for m in proposers},
             )
             if len(got) < self.cfg.min_quorum:
@@ -547,14 +567,14 @@ class Council:
             self._emit("stage", stage="critique", title=f"Критика, раунд {r + 1}/{critique_rounds}")
             jobs = {}
             for m in members:
-                target = others(m.name)
+                target = self._shuffled(others(m.name))  # свой порядок для каждого судьи — гасит эффект позиции
                 if not target:
                     continue
                 expected = list(target)
                 jobs[m.name] = self._ask(
                     m,
                     "critique",
-                    prompts.critique(refined, criteria, target, question, bool(self.compact)),
+                    prompts.critique(refined, criteria, target, question, bool(self.compact), req=req),
                     CritiqueSet,
                     check=lambda cs, e=expected: normalize_critique(cs, e, criteria),
                     meta={"labels": expected, "criteria": criteria},
@@ -580,7 +600,7 @@ class Council:
                     m,
                     "revision",
                     prompts.revision(refined, criteria, own, proposals[own], feedback, others(m.name), question,
-                                     self.compact),
+                                     self.compact, req=req),
                     Revision,
                     check=_normalize_revision,
                     meta={"label": own},
@@ -594,7 +614,7 @@ class Council:
         self._emit("stage", stage="vote", title="Голосование")
         jobs = {}
         for m in members:
-            target = others(m.name)
+            target = self._shuffled(others(m.name))
             if not target:
                 continue
             expected = list(target)
@@ -605,7 +625,7 @@ class Council:
             jobs[m.name] = self._ask(
                 m,
                 "vote",
-                prompts.vote(refined, criteria, target, question, bool(self.compact)),
+                prompts.vote(refined, criteria, target, question, bool(self.compact), req=req),
                 Ballot,
                 check=check_ballot,
                 meta={"labels": expected},
@@ -616,12 +636,19 @@ class Council:
         agree = agreement(rankings)
         flags = ballot_flags(rows, rankings)
         robust = leader_without(list(proposals), rankings, critiques, set(flags)) if flags else None
+        tied = co_leaders(rows)
+        decisive = decisive_ballots(list(proposals), rankings, critiques)
+        cover = coverage(list(proposals), rankings)
         self._emit("tally", rows=rows, authors=authors, agreement=agree, ballot_flags=flags,
-                   leader_without_flagged=robust)
+                   leader_without_flagged=robust, co_leaders=tied if len(tied) > 1 else [], decisive=decisive,
+                   coverage=cover)
         ballot_notes = ""
+        if decisive:
+            ballot_notes += ("decisive ballots (the leader changes without one of them): "
+                             + ", ".join(f"without {v} the leader would be {alt}" for v, alt in decisive.items()) + ". ")
         if flags:
             parts = [f"{n} ({'; '.join(FLAG_NAME[f] for f in fl['flags'])})" for n, fl in flags.items()]
-            ballot_notes = ("ballots strongly diverging from the others' consensus: " + ", ".join(parts)
+            ballot_notes += ("ballots strongly diverging from the others' consensus: " + ", ".join(parts)
                             + (f". Without them the leader would be {robust}" if robust and robust != rows[0].label
                                else ". Without them the leader stays the same"))
 
@@ -641,8 +668,8 @@ class Council:
             if w not in valid:
                 raise ValueError(f"winner must be one of the labels {valid}, got '{v.winner}'")
             deviation = v.deviation.strip()
-            if w == leader:
-                deviation = ""
+            if w == leader or (len(tied) > 1 and w in tied):
+                deviation = ""  # лидер или один из разделивших первое место — это не отступление
             elif follow and not re.match(r"^\W*(fact|risk|process)\b", deviation, re.I):
                 raise ValueError(
                     f"the winner must be the voting leader {leader}; choosing {w} requires 'deviation' that starts with "
@@ -657,7 +684,7 @@ class Council:
                                 (f"{agree['level']} (mean Kendall tau between ballots = {agree['tau']:.2f}; "
                                  "1 = identical rankings, 0 = unrelated)") if agree else "",
                                 prompts.factcheck_block(facts), ballot_notes, leader=leader, follow_vote=follow,
-                                compact=bool(self.compact)),
+                                compact=bool(self.compact), req=req, co_leaders=tied if len(tied) > 1 else None),
                 Verdict,
                 check=check_verdict,
                 meta={"labels": valid, "leader": rows[0].label},
@@ -699,6 +726,10 @@ class Council:
             chair_proposed=not self.chair_judge and mode != "evaluate",
             ballot_flags=flags,
             leader_without_flagged=robust,
+            requirements=self.requirements,
+            co_leaders=tied if len(tied) > 1 else [],
+            decisive=decisive,
+            coverage=cover,
             fact_check=facts,
             fact_checker=self.cfg.fact_check.model if facts else "",
         )
@@ -740,6 +771,8 @@ STATUS_ALIASES = {
     "подтверждено": "confirmed", "подтверждён": "confirmed", "верно": "confirmed",
     "refuted": "refuted", "false": "refuted", "incorrect": "refuted", "wrong": "refuted",
     "опровергнуто": "refuted", "неверно": "refuted", "ложно": "refuted",
+    "user_doc": "user_doc", "user_provided": "user_doc", "from_user_doc": "user_doc", "user": "user_doc",
+    "из документов пользователя": "user_doc",
 }
 
 

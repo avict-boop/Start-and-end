@@ -250,7 +250,7 @@ def agreement(ballots: dict[str, list[str]]) -> dict | None:
 
 AGREEMENT_NAME = {"high": "высокое", "medium": "среднее", "low": "низкое"}
 AGREEMENT_HINT = {
-    "high": "модели в основном одинаково упорядочили варианты — решение устойчиво",
+    "high": "модели в основном одинаково упорядочили варианты (это согласие, а не гарантия правоты)",
     "medium": "модели частично расходятся в оценке вариантов",
     "low": "мнения совета разошлись — относитесь к решению осторожно и посмотрите особые мнения",
 }
@@ -327,3 +327,36 @@ def leader_without(candidates: list[str], ballots: dict[str, list[str]], critiqu
     if not rest:
         return None
     return tally(candidates, rest, critiques)[0].label
+
+
+
+def co_leaders(rows: list[TallyRow]) -> list[str]:
+    """Варианты, разделившие первое место: равны по Шульце, Борда и попарному счёту (их различает только жребий)."""
+    if not rows:
+        return []
+    top = rows[0]
+    return [r.label for r in rows if r.schulze == top.schulze and abs(r.borda - top.borda) < EPS
+            and r.pairwise == top.pairwise]
+
+
+def decisive_ballots(candidates: list[str], ballots: dict[str, list[str]],
+                     critiques: dict[str, CritiqueSet]) -> dict[str, str]:
+    """Решающие голоса: голосующий -> кто был бы лидером без его бюллетеня (только если лидер сменился)."""
+    if len(ballots) < 2:
+        return {}
+    lead = tally(candidates, ballots, critiques)[0].label
+    out = {}
+    for voter in ballots:
+        alt = leader_without(candidates, ballots, critiques, {voter})
+        if alt and alt != lead:
+            out[voter] = alt
+    return out
+
+
+def coverage(candidates: list[str], ballots: dict[str, list[str]]) -> dict[str, int] | None:
+    """Сколько раз сравнивалась каждая пара вариантов (в скольких бюллетенях есть оба): минимум и максимум."""
+    if len(candidates) < 2:
+        return None
+    counts = [sum(1 for r in ballots.values() if x in r and y in r)
+              for i, x in enumerate(candidates) for y in candidates[i + 1:]]
+    return {"min": min(counts), "max": max(counts), "options": len(candidates), "ballots": len(ballots)}

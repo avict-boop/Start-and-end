@@ -241,6 +241,9 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
                 + "</details>")
     if v.refined:
         add(f'<div class="refined"><b>Уточнённая постановка:</b> {_e(v.refined)}</div>')
+    if v.requirements:
+        add('<div class="refined"><b>Обязательные требования запроса:</b><ol>'
+            + "".join(f"<li>{_e(r)}</li>" for r in v.requirements) + "</ol></div>")
     add('<div class="meta">')
     rows = [("Дата", v.date), ("Режим", v.mode),
             ("Участники", ", ".join(v.members)),
@@ -280,6 +283,8 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
         add(f'<div class="agree-warn">⚠️ Низкое согласие совета: {_e(v.agreement_line)}</div>')
     if v.deviation_line:
         add(f'<div class="agree-warn">⚖️ {_e(v.deviation_line)}</div>')
+    if v.tie_line:
+        add(f'<div class="agree-warn">🤝 {_e(v.tie_line)}</div>')
     add(f'<div class="md">{md_to_html(vd.get("final_answer", ""))}</div>')
     if vd.get("why"):
         add(f'<h3>Почему</h3><div class="md">{md_to_html(vd["why"])}</div>')
@@ -315,6 +320,11 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
         + (f" Согласие совета: {_e(v.agreement_line)}." if v.agreement_line else "") + "</p>")
     for note in v.tie_notes:
         add(f'<p class="muted small">• {_e(note)}</p>')
+    if v.coverage_line:
+        add(f'<p class="muted small">{_e(v.coverage_line)}.</p>')
+    if v.decisive_notes:
+        add('<p class="muted small"><b>Решающие голоса</b> (лидер меняется без одного бюллетеня): '
+            + "; ".join(_e(n) for n in v.decisive_notes) + ".</p>")
     if v.position_line:
         add(f'<p class="muted small">{_e(v.position_line)}.</p>')
     if v.flag_notes:

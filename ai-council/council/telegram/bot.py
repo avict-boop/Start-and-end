@@ -1058,6 +1058,8 @@ class CouncilBot:
             lines.append(f"🔎 Факты: {esc(v.fact_line)}")
         if v.deviation_line:
             lines.append(f"⚖️ {esc(v.deviation_line[:400])}")
+        if v.tie_line:
+            lines.append(f"🤝 {esc(v.tie_line)}")
         if v.ballot_flags:
             lines.append(f"⚠️ Бюллетеней против общего мнения: {len(v.ballot_flags)}. {esc(v.robust_note)}")
         lines += ["", f"💰 ${v.cost:.4f} · ⏱ {v.duration} · вариантов: {len(v.proposals)}"]
@@ -1097,6 +1099,10 @@ class CouncilBot:
         lines += [f"• {esc(n)}" for n in v.tie_notes]
         if v.agreement_line:
             lines += ["", f"Согласие совета: {esc(v.agreement_line)}"]
+        if v.coverage_line:
+            lines += ["", esc(v.coverage_line)]
+        if v.decisive_notes:
+            lines += ["", "<b>Решающие голоса</b>: " + esc("; ".join(v.decisive_notes))]
         if v.flag_notes:
             lines += ["", "⚠️ <b>Бюллетени против общего мнения</b> (голоса учтены):"] + [f"• {esc(n)}" for n in v.flag_notes]
             lines.append(esc(v.robust_note))

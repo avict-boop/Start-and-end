@@ -37,7 +37,8 @@ class MockClient:
         stage = meta.get("stage")
         who = meta.get("member", model)
         if stage == "framing":
-            out = {"refined_question": "Уточнённый вопрос (mock)", "criteria": ["Польза", "Стоимость", "Риски"]}
+            out = {"refined_question": "Уточнённый вопрос (mock)", "criteria": ["Польза", "Стоимость", "Риски"],
+                   "requirements": ["Ответ на русском языке", "Привести таблицу с цифрами"]}
         elif stage in ("proposal", "revision"):
             out = {
                 "title": f"Вариант {who}" + (" (доработан)" if stage == "revision" else ""),

@@ -62,7 +62,8 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
          "members": list(d.get("stats", {})), "rounds": None,
          "parent": ({"id": d["followup_of"], "title": (d.get("thread") or [{}])[-1].get("title", "")}
                     if d.get("followup_of") else None)},
-        {"type": "framing", "refined_question": d.get("refined_question", d["question"]), "criteria": d["criteria"]},
+        {"type": "framing", "refined_question": d.get("refined_question", d["question"]), "criteria": d["criteria"],
+         "requirements": d.get("requirements") or []},
     ]
     if d.get("attachments"):
         ev.insert(1, {"type": "attachments", "items": d["attachments"], "blind": []})
@@ -85,7 +86,9 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
     from ..voting import agreement
     agree = d.get("agreement") or agreement({m: b.get("ranking", []) for m, b in (d.get("ballots") or {}).items()})
     ev.append({"type": "tally", "rows": d["tally"], "authors": d["authors"], "agreement": agree,
-               "ballot_flags": d.get("ballot_flags") or {}, "leader_without_flagged": d.get("leader_without_flagged")})
+               "ballot_flags": d.get("ballot_flags") or {}, "leader_without_flagged": d.get("leader_without_flagged"),
+               "co_leaders": d.get("co_leaders") or [], "decisive": d.get("decisive") or {},
+               "coverage": d.get("coverage")})
     if d.get("fact_check"):
         ev.append({"type": "stage", "stage": "factcheck", "title": "Проверка фактов"})
         ev.append({"type": "factcheck", "results": d["fact_check"], "model": d.get("fact_checker", "")})

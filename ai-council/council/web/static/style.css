@@ -527,3 +527,6 @@ label.check.small:has(#factCheck) { display: flex; gap: .45rem; align-items: cen
   .set-tabs button { padding: .45rem .5rem; font-size: .88rem; }
 }
 .diag-link { display: inline-block; margin: .3rem 0 .5rem; font-size: .85rem; }
+
+.reqs { margin-top: .4rem; font-size: .85rem; }
+.chip.req { background: var(--warn-soft); }

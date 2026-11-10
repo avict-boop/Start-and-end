@@ -56,10 +56,18 @@ def _original(question: str, original: str | None) -> str:
             f"format of the answer — they apply to your answer):\n<<<\n{original}\n>>>\n")
 
 
-def head(question: str, original: str | None) -> str:
+def requirements_block(req: list[str] | None) -> str:
+    if not req:
+        return ""
+    items = "\n".join(f"R{i}. {r}" for i, r in enumerate(req, 1))
+    return ("\nHard requirements of the user's request (they are NOT criteria and cannot be traded off: violating any "
+            f"of them is a serious flaw, not compensated by quality elsewhere):\n{items}\n")
+
+
+def head(question: str, original: str | None, req: list[str] | None = None) -> str:
     """Начало запроса, одинаковое на этапах предложений, критики, доработки, голосования и итога.
     Одинаковое начало провайдеры кэшируют, и повторное чтение вопроса стоит дешевле."""
-    return f"Question for the council:\n{question}\n{_original(question, original)}"
+    return f"Question for the council:\n{question}\n{_original(question, original)}{requirements_block(req)}"
 
 
 def compact_rule(words: int) -> str:
@@ -68,6 +76,11 @@ def compact_rule(words: int) -> str:
             "final answer in that format from the proposals. Include every key point, fact, number and recommendation "
             "the final answer will need; drop introductions, repetition and decoration.")
 
+
+REQ_CHECK = ("\nCheck every proposal against the hard requirements R1, R2, …: list each violated one in "
+             "\"weaknesses\" as \"VIOLATES Rn: …\". In compact mode only content requirements apply (format is the chair's job).\n")
+REQ_VOTE = ("\nA proposal that violates a hard requirement ranks below every proposal that satisfies all of them, "
+            "whatever its other qualities (in compact mode — content requirements only).")
 
 COMPACT_JUDGE = ("Proposals are compact on purpose (the chair writes the final formatted answer): judge their substance, "
                  "not missing formatting, sections or length.")
@@ -96,8 +109,20 @@ def _proposal_block(label: str, p: Proposal) -> str:
     return "\n".join(lines)
 
 
-def proposals_block(proposals: dict[str, Proposal]) -> str:
-    return "\n\n".join(_proposal_block(label, p) for label, p in proposals.items())
+def proposals_block(proposals: dict[str, Proposal], with_changes: bool = False) -> str:
+    if not with_changes:
+        return "\n\n".join(_proposal_block(label, p) for label, p in proposals.items())
+    out = []
+    for label, p in proposals.items():
+        block = _proposal_block(label, p)
+        changes = getattr(p, "changes", "") or ""
+        not_acc = getattr(p, "not_accepted", None) or []
+        if changes:
+            block += f"\nChanges after critique: {changes}"
+        if not_acc:
+            block += "\nCritique not accepted by the author: " + "; ".join(not_acc)
+        out.append(block)
+    return "\n\n".join(out)
 
 
 def framing(question: str, context: str | None) -> str:
@@ -108,16 +133,20 @@ User question:
 {_context(context)}
 1. Restate the question precisely and neutrally (keep the user's intent; do not answer it).
 2. Define 3-5 short evaluation criteria that matter most for choosing the best answer (e.g. effectiveness, cost, risk, feasibility). Each criterion is 1-4 words.
+3. List the HARD REQUIREMENTS the user stated explicitly: required structure, sections, tables, length, language,
+   constraints, things that must or must not be included. Copy them faithfully, one per item, do not soften or
+   generalise them, do not invent new ones (at most 10; an empty list if the request has none). They are checked
+   separately from the criteria.
 
 JSON format:
-{{"refined_question": "...", "criteria": ["...", "..."]}}"""
+{{"refined_question": "...", "criteria": ["...", "..."], "requirements": ["...", "..."]}}"""
 
 
 def proposal(question: str, criteria: list[str], context: str | None, original: str | None = None,
-             compact: int = 0) -> str:
+             compact: int = 0, req: list[str] | None = None) -> str:
     """compact — число слов в режиме «Компактные варианты» (0 — обычный режим)."""
     rule = compact_rule(compact) if compact else FORMAT_RULE
-    return f"""{head(question, original)}{_context(context)}
+    return f"""{head(question, original, req)}{_context(context)}
 The answers will be judged by these criteria:
 {_criteria(criteria)}
 
@@ -134,11 +163,11 @@ JSON format:
 
 
 def critique(question: str, criteria: list[str], proposals: dict[str, Proposal], original: str | None = None,
-             compact: bool = False) -> str:
+             compact: bool = False, req: list[str] | None = None) -> str:
     labels = ", ".join(proposals)
     example_scores = ", ".join(f'"{c}": 1-10' for c in criteria)
     note = f"\n{COMPACT_JUDGE}\n" if compact else ""
-    return f"""{head(question, original)}
+    return f"""{head(question, original, req)}
 Review each of these anonymous proposals:
 
 {proposals_block(proposals)}
@@ -147,7 +176,7 @@ Score every proposal on every criterion from 1 to 10:
 {_criteria(criteria)}
 
 {SCALE}
-{note}
+{note}{REQ_CHECK if req else ""}
 You must review exactly these labels: {labels}. Use the criteria names exactly as written.
 
 JSON format:
@@ -166,11 +195,12 @@ def revision(
     others: dict[str, Proposal],
     original: str | None = None,
     compact: int = 0,
+    req: list[str] | None = None,
 ) -> str:
     fb = json.dumps(feedback, ensure_ascii=False, indent=1) if feedback else "(no feedback received)"
     others_full = "\n\n".join(_proposal_block(l, p) for l, p in others.items())  # целиком, без обрезки
     rule = compact_rule(compact) if compact else FORMAT_RULE
-    return f"""{head(question, original)}
+    return f"""{head(question, original, req)}
 Criteria:
 {_criteria(criteria)}
 
@@ -208,10 +238,10 @@ switched — core approach replaced (for example, rebuilt on another proposal)."
 
 
 def vote(question: str, criteria: list[str], proposals: dict[str, Proposal], original: str | None = None,
-         compact: bool = False) -> str:
+         compact: bool = False, req: list[str] | None = None) -> str:
     labels = ", ".join(proposals)
     note = f"\n{COMPACT_JUDGE}" if compact else ""
-    return f"""{head(question, original)}
+    return f"""{head(question, original, req)}
 Criteria:
 {_criteria(criteria)}
 
@@ -220,7 +250,7 @@ Final proposals:
 {proposals_block(proposals)}
 
 Rank ALL of these proposals from best to worst. Include every label exactly once: {labels}.
-Judge substance against the criteria and the request, not length or style.{note}
+Judge substance against the criteria and the request, not length or style.{note}{REQ_VOTE if req else ""}
 
 JSON format:
 {{"ranking": ["best label", "...", "worst label"], "rationale": "why the top choice wins"}}"""
@@ -239,6 +269,8 @@ def verdict(
     leader: str = "",
     follow_vote: bool = False,
     compact: bool = False,
+    req: list[str] | None = None,
+    co_leaders: list[str] | None = None,
 ) -> str:
     labels = ", ".join(proposals)
     if follow_vote and leader:
@@ -260,17 +292,20 @@ def verdict(
         agree += ("\nIndependent web fact-check of the leading proposals:\n" + facts + "\n"
                   "Do not repeat refuted claims in final_answer (correct them using the fact-check); present unclear "
                   "ones as uncertain. A proposal resting on refuted facts is a weaker candidate.\n")
+    if co_leaders and len(co_leaders) > 1:
+        agree += (f"\nTie for first place: {', '.join(co_leaders)} are equal on every voting measure (only lot separates "
+                  "them). You may name any of them as the winner without a deviation reason — explain the choice in why.\n")
     if compact:
         agree += ("\nThe proposals were written compactly on purpose, without the requested format. Your final_answer "
                   "is the full deliverable: expand the winning proposal (with the best ideas of others) into the complete "
                   "answer in exactly the structure and format the user requested.\n")
-    return f"""{head(question, original)}
+    return f"""{head(question, original, req)}
 Criteria:
 {_criteria(criteria)}
 
-Final proposals:
+Final proposals (after revision; "Changes after critique" shows what each author fixed):
 
-{proposals_block(proposals)}
+{proposals_block(proposals, with_changes=True)}
 
 Voting results, in final order (schulze wins = how many rivals the proposal beats by the Schulze method, which decides the order; borda = Borda score 0..1, 1 is the maximum, first tie-break; pairwise = wins minus losses in head-to-head comparisons; critique = average critique score 1..10 given to the version BEFORE revision, for information only; first-place votes):
 {tally_text}
@@ -282,6 +317,11 @@ Write the council's final verdict.
 {winner_rule}
 - "final_answer": the complete, ready-to-use final answer for the user, based on the winner and improved with the best ideas from other proposals (markdown allowed). {FORMAT_RULE} Do not drop requested sections even if the proposals skipped them — write them yourself.
 - If you mention voting numbers anywhere, copy them exactly as given above; do not estimate or round them differently.
+- The critique points below the voting refer to versions BEFORE revision. A weakness or risk counts only if it is still
+  present in the final text — check "Changes after critique" and quote the final text when you rely on a risk.
+- Do not introduce new numbers, facts, names or sources that appear neither in the proposals nor in the fact-check.
+  If you must add one, mark it in final_answer as "(добавлено председателем)".
+- If hard requirements R1, R2, … are listed, final_answer must satisfy every one of them — check them one by one.
 - If agreement is low, say in "why" that the council was divided and what the main split is.
 - "why": why this option won.
 - "dissent": notable minority opinions or strong alternatives worth knowing.
@@ -306,10 +346,10 @@ Proposal {label} (one of the leading options after voting):
 
 Pick up to {max_claims} key factual claims in this proposal that matter most for the decision and are checkable
 in public sources. Verify each with web search. Claims based only on the user's private documents cannot be
-checked publicly — skip them or mark them "unclear" with a note.
+checked publicly — mark them "user_doc" (taken from the user's own data, not checkable by search).
 
 JSON format:
-{{"claims": [{{"claim": "the claim, short", "status": "confirmed|refuted|unclear",
+{{"claims": [{{"claim": "the claim, short", "status": "confirmed|refuted|unclear|user_doc",
               "note": "what the sources say, one or two sentences", "sources": ["https://..."]}}],
   "summary": "one sentence: how reliable the factual basis of this proposal is"}}"""
 
