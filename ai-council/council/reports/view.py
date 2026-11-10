@@ -29,6 +29,15 @@ class View:
         return self.d.get("question", "")
 
     @property
+    def title_text(self) -> str:
+        """Короткий заголовок отчёта (первая строка запроса)."""
+        return short_title(self.question)
+
+    @property
+    def question_is_long(self) -> bool:
+        return self.question.strip() != self.title_text
+
+    @property
     def refined(self) -> str:
         r = self.d.get("refined_question") or ""
         return r if r and r != self.question else ""
@@ -210,9 +219,33 @@ def _wrap_table(m: re.Match) -> str:
     return f'<div class="tbl"><table class="mdt {size}" data-cols="{cols}">{body}</table></div>'
 
 
-def md_to_html(text: str) -> str:
-    """Безопасно: сырой HTML из ответа модели не исполняется, а выводится как текст."""
-    md = _markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists"], output_format="html")
+def short_title(text: str, limit: int = 110) -> str:
+    """Первая содержательная строка без Markdown-разметки, не длиннее limit (обрезка по слову)."""
+    for raw in str(text or "").splitlines():
+        line = re.sub(r"^\s*(#+|[-*+•>]|\d+[.)])\s+", "", raw)
+        line = re.sub(r"[*_`]+", "", line).strip()
+        if line:
+            break
+    else:
+        return ""
+    many_lines = len([x for x in str(text).splitlines() if x.strip()]) > 1
+    # длинный запрос: в заголовок — первое предложение, если оно короткое
+    m = re.match(r"(.{12,90}?[.!?…])(\s|$)", line)
+    if m and (many_lines or len(line) > limit):
+        return m.group(1)
+    if len(line) <= limit:
+        return line
+    cut = line[:limit].rsplit(" ", 1)[0] if " " in line[:limit] else line[:limit]
+    return cut.rstrip(",;:—-– ") + "…"
+
+
+def md_to_html(text: str, *, breaks: bool = False) -> str:
+    """Безопасно: сырой HTML из ответа модели не исполняется, а выводится как текст.
+
+    breaks=True сохраняет одиночные переносы строк (для текста запроса, написанного человеком).
+    """
+    ext = ["tables", "fenced_code", "sane_lists"] + (["nl2br"] if breaks else [])
+    md = _markdown.Markdown(extensions=ext, output_format="html")
     md.preprocessors.deregister("html_block")
     md.inlinePatterns.deregister("html")
     return _TABLE_HTML.sub(_wrap_table, md.convert(normalize_md(text)))

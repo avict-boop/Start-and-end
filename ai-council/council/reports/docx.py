@@ -114,7 +114,8 @@ class _Writer:
             else:
                 self.inline(par, child, f)
             if child.tail:
-                self._run(par, child.tail, fmt)
+                # после переноса строки не начинаем новую строку с пробела
+                self._run(par, child.tail.lstrip() if tag == "br" else child.tail, fmt)
 
     def _run(self, par, text: str, fmt: dict) -> None:
         text = text if fmt.get("pre") else _clean(text)
@@ -215,9 +216,9 @@ def inline_markdown(par, text: str, fmt: dict | None = None) -> None:
         par.add_run(_clean(frag.text_content()))
 
 
-def add_markdown(container, text: str) -> None:
+def add_markdown(container, text: str, *, breaks: bool = False) -> None:
     """Добавляет Markdown-текст модели в документ или ячейку с сохранением форматирования."""
-    html = md_to_html(text).strip()
+    html = md_to_html(text, breaks=breaks).strip()
     if not html:
         return
     frag = LH.fragment_fromstring(html, create_parent="div")
@@ -274,7 +275,7 @@ def render_docx(view: View) -> bytes:
     sec.left_margin = sec.right_margin = Pt(50)
     sec.top_margin = sec.bottom_margin = Pt(48)
     _page_number_footer(doc)
-    doc.core_properties.title = v.question[:200]
+    doc.core_properties.title = v.title_text
     doc.core_properties.subject = "Отчёт «Совета нейросетей»"
 
     brand = doc.add_paragraph()
@@ -282,7 +283,16 @@ def render_docx(view: View) -> bytes:
     r.font.size = Pt(8)
     r.font.color.rgb = MUTED
     r.bold = True
-    _heading(doc, v.question, 0)
+    title = _heading(doc, v.title_text, 1)
+    for run in title.runs:
+        run.font.size = Pt(16)
+    if v.question_is_long:
+        lab = doc.add_paragraph()
+        r = lab.add_run("ЗАПРОС")
+        r.bold = True
+        r.font.size = Pt(8)
+        r.font.color.rgb = MUTED
+        add_markdown(doc, v.question, breaks=True)
     if v.refined:
         p = doc.add_paragraph()
         p.add_run("Уточнённая постановка: ").bold = True

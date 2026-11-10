@@ -138,6 +138,11 @@
           <div>
             <div class="eyebrow" id="sMeta"></div>
             <h1 id="sQuestion"></h1>
+            <div id="sQuery" class="query" hidden>
+              <div class="query-label">Запрос</div>
+              <div id="sQueryBody" class="query-body md"></div>
+              <button id="sQueryToggle" type="button" class="link" hidden>Показать запрос полностью</button>
+            </div>
             <div id="sRefined" class="muted"></div>
             <div id="sCriteria" class="chips"></div>
           </div>
@@ -147,6 +152,21 @@
           </div>
         </div>
         <ol id="timeline" class="timeline"></ol>
+        <div id="activity" class="activity" hidden>
+          <div class="stage-now">
+            <div id="stageNow" class="stage-now-text" aria-live="polite"></div>
+            <div class="progress" aria-hidden="true"><i id="stageBar"></i></div>
+          </div>
+          <ul id="workers" class="workers"></ul>
+          <div id="stallHint" class="stall" hidden></div>
+          <div class="activity-foot">
+            <span id="conn" class="conn"></span>
+            <details id="logBox" class="log-box">
+              <summary>Журнал событий <span id="logCount"></span></summary>
+              <ol id="log" class="log"></ol>
+            </details>
+          </div>
+        </div>
         <div class="head-bottom">
           <div id="memberStatus" class="chips"></div>
           <div class="head-actions">

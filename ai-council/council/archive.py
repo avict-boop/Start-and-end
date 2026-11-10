@@ -22,7 +22,7 @@ from .reports.view import MODE_NAME, View
 
 log = logging.getLogger("council.archive")
 
-REPORT_VERSION = "3"  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
+REPORT_VERSION = "4"  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
 MARKER = ".reports-version"
 ID_RE = re.compile(r"^[\w\-]{1,160}$", re.U)
 MIME = {

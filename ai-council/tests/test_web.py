@@ -68,7 +68,7 @@ def test_full_mock_session_history_report_delete(client):
     events = read_events(client, sid)
     types = [e["type"] for e in events]
     assert types[0] == "start" and types[-1] == "done"
-    for t in ("framing", "proposals", "revisions", "tally", "verdict", "cost"):
+    for t in ("framing", "proposals", "revisions", "tally", "verdict", "cost", "call", "saving"):
         assert t in types
     assert events[0]["chair"] == "b"
     done = events[-1]

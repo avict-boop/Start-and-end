@@ -306,7 +306,7 @@ async function loadHistory() {
     const meta = it.status === "done"
       ? `${esc(date)} · ${esc(it.winner_title || "")}${it.cost != null ? ` · ${money(it.cost)}` : ""}`
       : `${esc(date)} · ${statusText[it.status] || it.status}`;
-    return `<li class="item" data-id="${esc(it.id)}"><div class="q"><div>${esc(it.question)}</div><div class="meta">${meta}</div></div>
+    return `<li class="item" data-id="${esc(it.id)}"><div class="q"><div title="${esc(it.question)}">${esc(shortTitle(it.question))}</div><div class="meta">${meta}</div></div>
       ${it.status === "running" ? "" : `<button class="del" title="Удалить" data-del="${esc(it.id)}" aria-label="Удалить">×</button>`}</li>`;
   }).join("");
   markActiveHistory();
@@ -337,7 +337,7 @@ async function loadArchive() {
       ? `${downloadLinks(it.id, "button ghost")}<button type="button" class="ghost" data-arc-del="${esc(it.id)}" title="Удалить">Удалить</button>`
       : "";
     return `<div class="arc-item">
-      <div class="arc-q" data-open="${esc(it.id)}" tabindex="0" role="link">${esc(it.question)}</div>
+      <div class="arc-q" data-open="${esc(it.id)}" tabindex="0" role="link" title="${esc(it.question)}">${esc(shortTitle(it.question))}</div>
       <div class="arc-actions">${actions}</div>
       ${done && it.winner ? `<div class="arc-win">🏆 <b>${esc(it.winner)}</b>: ${esc(it.winner_title)} <span class="muted">(${esc(it.winner_author)})</span></div>` : ""}
       <div class="arc-meta">${meta}</div>
@@ -405,16 +405,74 @@ function newState(id) {
     work: {}, proposals: {}, authors: {}, revised: {}, critiques: {}, ballots: {},
     tally: null, verdict: null, failures: [], cost: 0, done: null, error: null,
     startedAt: Date.now(), initial: {},
+    calls: {}, log: [], stageStart: null, lastMsg: Date.now(), wrote: {},
   };
 }
 
+const PHASE_ACTIVE = new Set(["queued", "sent", "thinking", "writing", "checking", "retry"]);
+function logAdd(s, text, kind = "") {
+  s.log.push({ t: new Date(), text, kind });
+  if (s.log.length > 400) s.log.shift();
+}
+// короткий заголовок: первая содержательная строка без разметки, до 110 символов (как в отчётах)
+function shortTitle(text, limit = 110) {
+  for (const raw of String(text || "").split(/\r?\n/)) {
+    const line = raw.replace(/^\s*(#+|[-*+•>]|\d+[.)])\s+/, "").replace(/[*_`]+/g, "").trim();
+    if (!line) continue;
+    const manyLines = String(text).split(/\r?\n/).filter((x) => x.trim()).length > 1;
+    // длинный запрос: в заголовок — первое предложение, если оно короткое
+    const m = line.match(/^(.{12,90}?[.!?…])(\s|$)/);
+    if (m && (manyLines || line.length > limit)) return m[1];
+    if (line.length <= limit) return line;
+    const part = line.slice(0, limit);
+    const cut = part.includes(" ") ? part.slice(0, part.lastIndexOf(" ")) : part;
+    return cut.replace(/[,;:—–\- ]+$/, "") + "…";
+  }
+  return "";
+}
+const fmtSec = (sec) => (sec >= 60 ? `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, "0")}` : `${Math.floor(sec)} с`);
+const approxTokens = (chars) => Math.max(1, Math.round(chars / 3.2));
+
 function apply(s, ev) {
   switch (ev.type) {
+    case "ping":
+      break;
+    case "saving":
+      s.saving = true;
+      logAdd(s, "Готовлю отчёты: PDF, Word, Markdown");
+      break;
+    case "call": {
+      const prev = s.calls[ev.member];
+      const fresh = !prev || prev.stage !== ev.stage;
+      const c = fresh ? { stage: ev.stage, chars: 0, rchars: 0 } : prev;
+      c.phase = ev.phase;
+      c.since = Date.now() - (ev.elapsed || 0) * 1000;  // начало обращения по часам браузера
+      c.updated = Date.now();
+      if (ev.chars != null) c.chars = ev.chars;
+      if (ev.reasoning_chars != null) c.rchars = ev.reasoning_chars;
+      if (ev.attempt) c.attempt = ev.attempt;
+      if (ev.max_tokens) c.maxTokens = ev.max_tokens;
+      c.detail = ev.detail || (ev.phase === "retry" ? c.detail : "");
+      if (ev.wait) c.wait = ev.wait;
+      if (ev.cost != null) c.cost = ev.cost;
+      if (["done", "failed"].includes(ev.phase)) c.final = ev.elapsed;
+      s.calls[ev.member] = c;
+      const who = `${ev.member} (${STAGE_NAME[ev.stage] || ev.stage})`;
+      const key = `${ev.member}|${ev.stage}`;
+      if (ev.phase === "sent" && (ev.attempt || 1) === 1 && fresh) logAdd(s, `${who}: запрос отправлен`);
+      if (ev.phase === "writing" && !s.wrote[key]) { s.wrote[key] = 1; logAdd(s, `${who}: начал писать ответ через ${fmtSec(ev.elapsed || 0)}`); }
+      if (ev.phase === "retry") logAdd(s, `${who}: повтор — ${ev.detail || "временная ошибка"}${ev.wait ? `, через ${ev.wait} с` : ""}`, "k-warn");
+      if (ev.phase === "done") logAdd(s, `${who}: готово за ${fmtSec(ev.elapsed || 0)}`, "k-ok");
+      if (ev.phase === "failed") logAdd(s, `${who}: сбой — ${ev.detail || ""}`, "k-bad");
+      break;
+    }
     case "start":
       Object.assign(s, { question: ev.question, mode: ev.mode, rounds: ev.rounds, members: ev.members || [],
         chair: ev.chair || null, mock: !!ev.mock });
       break;
     case "stage": {
+      s.stageStart = Date.now();
+      logAdd(s, `▶ ${ev.title}`, "k-stage");
       if (s.stage && s.stage !== ev.stage) s.doneStages.add(s.stage);
       s.stage = ev.stage;
       s.stageTitle[ev.stage] = ev.title;
@@ -424,6 +482,7 @@ function apply(s, ev) {
     }
     case "framing":
       s.refined = ev.refined_question; s.criteria = ev.criteria;
+      logAdd(s, `Критерии: ${(ev.criteria || []).join(", ")}`);
       if (s.stage === "framing") s.work = {};
       s.doneStages.add("framing");
       break;
@@ -444,20 +503,24 @@ function apply(s, ev) {
       break;
     case "tally":
       s.tally = ev.rows;
+      if (ev.rows && ev.rows[0]) logAdd(s, `Голосование: лидирует вариант ${ev.rows[0].label}`);
       break;
     case "cost":
       s.cost = ev.total;
       break;
     case "verdict":
       s.verdict = ev.verdict;
+      logAdd(s, `Председатель выбрал вариант ${ev.verdict.winner}`, "k-ok");
       break;
     case "done":
+      logAdd(s, `✓ Заседание завершено, отчёты готовы`, "k-ok");
       s.done = ev;
       s.cost = ev.total_cost ?? s.cost;
       if (s.stage) s.doneStages.add(s.stage);
       s.stage = null; s.work = {};
       break;
     case "error":
+      logAdd(s, `Заседание прервано: ${ev.message}`, "k-bad");
       s.error = ev.message; s.stage = null; s.work = {};
       break;
   }
@@ -485,7 +548,22 @@ function render(s) {
   const modeName = { debate: "Дебаты", quick: "Быстро", evaluate: "Оценка вариантов" }[s.mode] || s.mode;
   $("sMeta").textContent = [modeName, s.mode === "debate" && s.rounds ? `раундов: ${s.rounds}` : "",
     s.members.length ? `участников: ${s.members.length}` : "", s.mock ? "демо" : ""].filter(Boolean).join(" · ");
-  $("sQuestion").textContent = s.question;
+  const title = shortTitle(s.question);
+  $("sQuestion").textContent = title;
+  const longQuery = !!s.question && s.question.trim() !== title;
+  $("sQuery").hidden = !longQuery;
+  if (longQuery && $("sQueryBody").dataset.src !== s.question) {
+    $("sQueryBody").dataset.src = s.question;
+    $("sQueryBody").innerHTML = md(s.question);  // переносы строк, списки и выделение — как написал пользователь
+    $("sQueryBody").classList.remove("open");
+    requestAnimationFrame(() => {
+      const b = $("sQueryBody");
+      const clipped = b.scrollHeight > b.clientHeight + 2;
+      b.classList.toggle("clipped", clipped);
+      $("sQueryToggle").hidden = !clipped;
+      $("sQueryToggle").textContent = "Показать запрос полностью";
+    });
+  }
   $("sRefined").textContent = s.refined && s.refined !== s.question ? `Постановка: ${s.refined}` : "";
   $("sCriteria").innerHTML = s.criteria.map((c) => `<span class="chip">${esc(c)}</span>`).join("");
   $("sCost").textContent = money(s.cost);
@@ -501,7 +579,10 @@ function render(s) {
     return `<li class="${cls}"><b>${name}</b>${esc(sub)}</li>`;
   }).join("");
 
+  renderActivity(s);
+
   // участники
+  $("memberStatus").hidden = !s.done;
   if (s.done && s.done.stats) {
     $("memberStatus").innerHTML = Object.entries(s.done.stats).map(([n, st]) =>
       `<span class="chip ${st.failures && st.failures.length ? "fail" : "done"}" title="${st.calls} вызовов">${esc(n)} · ${money(st.cost)}</span>`).join("");
@@ -519,6 +600,113 @@ function render(s) {
   $("failSec").hidden = !s.failures.length;
   $("failures").innerHTML = s.failures.map((f) =>
     `<li><b>${esc(f.member)}</b> (${esc(STAGE_NAME[f.stage] || f.stage)}): ${esc(f.error)}</li>`).join("");
+}
+
+const PHASE_TEXT = {
+  queued: "в очереди — ждёт свободного слота",
+  sent: "запрос отправлен, ждём начала ответа",
+  thinking: "думает",
+  writing: "пишет ответ",
+  checking: "проверяю ответ",
+  retry: "повтор",
+  done: "готово",
+  failed: "сбой",
+};
+const STALL_SEC = 40;
+
+function phaseText(c) {
+  let t = PHASE_TEXT[c.phase] || c.phase;
+  if (c.phase === "thinking") t = c.rchars ? `рассуждает · ≈${approxTokens(c.rchars)} ток.` : "думает над ответом…";
+  if (c.phase === "writing") t = `пишет ответ · ≈${approxTokens(c.chars)} ток.`;
+  if (c.phase === "sent" && c.attempt > 1) t += ` (попытка ${c.attempt})`;
+  if (c.phase === "retry") t = `повтор: ${c.detail || "временная ошибка"}`;
+  if (c.phase === "done") t = `готово${c.cost != null ? ` · ${money(c.cost)}` : ""}`;
+  if (c.phase === "failed") t = `сбой: ${c.detail || ""}`;
+  return t;
+}
+
+function renderActivity(s) {
+  const box = $("activity");
+  const finished = !!(s.done || s.error);
+  const live = !finished && (s.stage || !s.stageStart);
+  box.hidden = !(live || s.log.length);
+  if (box.hidden) return;
+  const now = Date.now();
+
+  // текущий этап и прогресс
+  const bar = $("stageBar").parentElement;
+  if (finished) {
+    const secs = s.done && s.done.duration_s != null ? s.done.duration_s : (now - s.startedAt) / 1000;
+    $("stageNow").innerHTML = s.error ? `<b>Заседание прервано</b>` : `<b>✓ Заседание завершено</b> за ${fmtSec(secs)}`;
+    bar.classList.remove("indeterminate");
+    $("stageBar").style.width = "100%";
+  } else if (s.saving) {
+    $("stageNow").innerHTML = "<b>Готовлю отчёты</b> · PDF, Word и Markdown";
+    bar.classList.add("indeterminate");
+  } else if (!s.stage) {
+    $("stageNow").innerHTML = "<b>Заседание запускается…</b> подключаемся к моделям";
+    bar.classList.add("indeterminate");
+  } else {
+    // считаем по живым событиям: модель готова, как только её ответ принят
+    const names = Object.keys(s.work);
+    const total = names.length;
+    const ready = names.filter((n) => s.work[n] !== "work"
+      || (s.calls[n] && s.calls[n].stage === s.stage && ["done", "failed"].includes(s.calls[n].phase))).length;
+    const stageSec = s.stageStart ? (now - s.stageStart) / 1000 : 0;
+    const who = s.stage === "framing" ? `председатель (${esc(s.chair || "")}) формулирует критерии`
+      : s.stage === "verdict" ? `председатель (${esc(s.chair || "")}) пишет итоговое решение`
+      : total ? `готово ${ready} из ${total}` : "";
+    $("stageNow").innerHTML = `<b>${esc(s.stageTitle[s.stage] || STAGE_NAME[s.stage] || s.stage)}</b>${who ? ` · ${who}` : ""} · ${fmtSec(stageSec)} на этапе`;
+    bar.classList.toggle("indeterminate", ready === 0);
+    $("stageBar").style.width = total ? `${Math.round((ready / total) * 100)}%` : "0%";
+  }
+
+  // строки моделей текущего этапа
+  const rows = [];
+  if (!finished && s.stage && !s.saving) {
+    for (const name of Object.keys(s.work)) {
+      const c = s.calls[name];
+      if (!c || c.stage !== s.stage) {
+        rows.push(`<li class="w idle"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">ожидает запуска</span><span class="w-time"></span></li>`);
+        continue;
+      }
+      const active = PHASE_ACTIVE.has(c.phase);
+      const secs = active ? (now - c.since) / 1000 : (c.final || 0);
+      const cls = ["w", active ? "active" : "", c.phase].join(" ");
+      rows.push(`<li class="${cls}"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">${esc(phaseText(c))}</span><span class="w-time" title="время этого обращения">${fmtSec(secs)}</span></li>`);
+    }
+  }
+  $("workers").innerHTML = rows.join("");
+  $("workers").hidden = !rows.length;
+
+  // подсказка, если модель долго молчит
+  const slow = finished ? [] : Object.entries(s.calls).filter(([n, c]) => c.stage === s.stage && ["sent", "thinking"].includes(c.phase)
+    && (now - c.since) / 1000 > STALL_SEC && s.work[n] === "work").map(([n]) => n);
+  const connOk = now - s.lastMsg < 25000;
+  $("stallHint").hidden = !slow.length || !connOk;
+  if (slow.length) {
+    $("stallHint").textContent = `⏳ ${slow.join(", ")} ${slow.length > 1 ? "думают" : "думает"} дольше ${STALL_SEC} с. `
+      + "Это нормально для «думающих» моделей (gpt-5, Gemini 2.5 и др.): они рассуждают перед ответом до 1–3 минут. "
+      + "Процесс не завис — связь с сервером есть.";
+  }
+
+  // связь с сервером
+  const conn = $("conn");
+  conn.hidden = finished;
+  if (!finished) {
+    const age = Math.round((now - s.lastMsg) / 1000);
+    conn.classList.toggle("bad", !connOk);
+    conn.textContent = connOk ? `Связь с сервером есть · последнее событие ${age} с назад`
+      : `Нет вестей от сервера ${age} с — переподключаюсь…`;
+  }
+
+  // журнал (новые сверху)
+  $("logCount").textContent = `(${s.log.length})`;
+  if ($("logBox").open || $("log").dataset.n !== String(s.log.length)) {
+    $("log").dataset.n = String(s.log.length);
+    $("log").innerHTML = s.log.slice().reverse().map((e) =>
+      `<li class="${e.kind}"><time>${e.t.toLocaleTimeString("ru-RU")}</time>${esc(e.text)}</li>`).join("");
+  }
 }
 
 function renderVerdict(s) {
@@ -624,6 +812,7 @@ function tick() {
     ? current.done.duration_s
     : Math.round((Date.now() - current.startedAt) / 1000);
   $("sTime").textContent = secs >= 60 ? `${Math.floor(secs / 60)} мин ${Math.round(secs % 60)} с` : `${Math.round(secs)} с`;
+  if (view === "session") renderActivity(current);
 }
 
 /* ------------------------------------------------------------ поток событий */
@@ -654,7 +843,9 @@ function openSession(id) {
   stream.onmessage = (msg) => {
     if (current !== s) return;
     const ev = JSON.parse(msg.data);
+    s.lastMsg = Date.now();
     apply(s, ev);
+    if (ev.type === "ping") return;
     scheduleRender();
     if (pendingProposal && ev.type === "done") { const l = pendingProposal; pendingProposal = null; setTimeout(() => openProposal(s, l), 50); }
     if (ev.type === "done" || ev.type === "error") {
@@ -671,6 +862,12 @@ function openSession(id) {
     }
   };
 }
+
+$("sQueryToggle").addEventListener("click", () => {
+  const b = $("sQueryBody");
+  const open = b.classList.toggle("open");
+  $("sQueryToggle").textContent = open ? "Свернуть запрос" : "Показать запрос полностью";
+});
 
 $("cancelBtn").addEventListener("click", async () => {
   if (!current || !confirm("Остановить заседание? Уже потраченные запросы не вернутся.")) return;

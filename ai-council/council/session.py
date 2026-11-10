@@ -111,6 +111,7 @@ class Council:
         self._sem = asyncio.Semaphore(config.max_concurrency)
         self.stats: dict[str, MemberStats] = {m.name: MemberStats() for m in config.active_members}
         self.transcript: list[dict[str, Any]] = []
+        self._last_call_emit: dict[tuple[str, str], tuple[str, float]] = {}
 
     # ------------------------------------------------------------------ helpers
 
@@ -123,6 +124,20 @@ class Council:
             self.on_event(event, **data)
         except Exception:  # обработчик интерфейса не должен ронять заседание
             pass
+
+    def _call(self, member: str, stage: str, phase: str, started: float, **data: Any) -> None:
+        """Событие о ходе одного обращения к модели (для живого индикатора в интерфейсах).
+
+        Фазы: queued → sent → thinking → writing → checking → done | retry | failed.
+        Частые обновления «думает/пишет» прореживаются, смена фазы отправляется сразу.
+        """
+        now = time.monotonic()
+        key = (member, stage)
+        last = self._last_call_emit.get(key)
+        if last and last[0] == phase and phase in ("thinking", "writing") and now - last[1] < 0.8:
+            return
+        self._last_call_emit[key] = (phase, now)
+        self._emit("call", member=member, stage=stage, phase=phase, elapsed=round(now - started, 1), **data)
 
     def _account(self, member: MemberConfig, comp: Completion) -> None:
         s = self.stats[member.name]
@@ -154,11 +169,23 @@ class Council:
         max_tokens = member.max_tokens or self.cfg.max_tokens
         effort = member.reasoning_effort or self.cfg.reasoning_effort
         error = ""
+        started = time.monotonic()
+        name = member.name
+
+        def progress(ev: dict[str, Any]) -> None:
+            ev = dict(ev)
+            phase = ev.pop("phase", "")
+            if phase == "sent" and ev.get("attempt", 1) > 1:
+                ev["detail"] = f"попытка {ev['attempt']}"
+            self._call(name, stage, phase, started, **ev)
+
         for attempt in range(self.cfg.json_retries + 1):
             if self.total_cost >= self.cfg.max_cost_usd:
                 raise BudgetExceeded(
                     f"достигнут лимит бюджета ${self.cfg.max_cost_usd:.2f} (потрачено ${self.total_cost:.4f})"
                 )
+            if self._sem.locked():
+                self._call(name, stage, "queued", started, detail="ждёт свободного слота")
             try:
                 async with self._sem:
                     comp = await self.client.complete(
@@ -168,12 +195,15 @@ class Council:
                         max_tokens=max_tokens,
                         reasoning_effort=None if effort == "none" else effort,
                         meta=meta,
+                        on_progress=progress,
                     )
             except ProviderError as e:
                 if e.spent is not None:  # неудачные попытки тоже стоят денег
                     self._account(member, e.spent)
+                self._call(name, stage, "failed", started, detail=str(e)[:300])
                 raise
             self._account(member, comp)
+            self._call(name, stage, "checking", started, tokens=comp.completion_tokens)
             max_tokens = max(max_tokens, comp.max_tokens or 0)  # клиент мог уже увеличить лимит
             entry = {
                 "stage": stage,
@@ -196,18 +226,24 @@ class Council:
                     error = f"ответ обрезан на лимите {max_tokens} токенов ({error})"
                     max_tokens = min(max_tokens * 2, self.cfg.max_tokens_cap)
                     messages = list(base_messages)
+                    hint = f"ответ обрезан — повтор с лимитом {max_tokens} токенов"
                 else:
                     messages += [
                         {"role": "assistant", "content": comp.text},
                         {"role": "user", "content": prompts.fix_json(error)},
                     ]
+                    hint = "ответ не в нужном формате — прошу модель исправить"
+                if attempt < self.cfg.json_retries:
+                    self._call(name, stage, "retry", started, detail=hint)
                 entry["error"] = error
                 entry["finish_reason"] = comp.finish_reason
                 self.transcript.append(entry)
                 continue
             entry["parsed"] = obj.model_dump()
             self.transcript.append(entry)
+            self._call(name, stage, "done", started, cost=round(self.stats[name].cost, 6))
             return obj
+        self._call(name, stage, "failed", started, detail=f"некорректный ответ: {error}"[:300])
         raise InvalidResponse(f"{member.name}: некорректный ответ после {self.cfg.json_retries + 1} попыток: {error}")
 
     async def _parallel(self, stage: str, jobs: dict[str, Awaitable[T]]) -> dict[str, T]:

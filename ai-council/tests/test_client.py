@@ -100,3 +100,66 @@ def test_no_reasoning_param_when_disabled():
 
     asyncio.run(make(handler).complete("m", [], temperature=0, max_tokens=10))
     assert "reasoning" not in seen
+
+
+def sse(*chunks, comments=True):
+    lines = [": OPENROUTER PROCESSING"] if comments else []
+    lines += [f"data: {json.dumps(c, ensure_ascii=False)}" for c in chunks] + ["data: [DONE]"]
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=("\n\n".join(lines) + "\n\n").encode())
+
+
+def test_streaming_phases_text_and_cost():
+    events = []
+    seen = {}
+
+    def handler(req):
+        seen.update(json.loads(req.content))
+        return sse(
+            {"model": "x/y", "choices": [{"delta": {"reasoning": "хм"}}]},
+            {"choices": [{"delta": {"reasoning": " думаю…"}}]},
+            {"choices": [{"delta": {"content": '{"ok": '}}]},
+            {"choices": [{"delta": {"content": "1}"}, "finish_reason": "stop"}]},
+            {"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 20, "cost": 0.007}},
+        )
+
+    c = OpenRouterClient("k", transport=httpx.MockTransport(handler), retry_base_delay=0)
+    comp = asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100, on_progress=events.append))
+    assert seen["stream"] is True
+    assert comp.text == '{"ok": 1}' and comp.cost == 0.007 and comp.finish_reason == "stop" and comp.model == "x/y"
+    phases = [e["phase"] for e in events]
+    assert phases[0] == "sent" and "thinking" in phases and phases[-1] == "writing"
+    assert events[-1]["chars"] == len('{"ok": 1}')
+
+
+def test_streaming_retry_on_overload_and_error_chunk():
+    events, n = [], []
+
+    def handler(req):
+        n.append(1)
+        if len(n) == 1:
+            return httpx.Response(503, text="overloaded")
+        if len(n) == 2:  # ошибка посреди потока
+            return sse({"error": {"code": 429, "message": "rate limited"}})
+        return sse({"choices": [{"delta": {"content": "готово"}, "finish_reason": "stop"}]})
+
+    c = OpenRouterClient("k", transport=httpx.MockTransport(handler), retry_base_delay=0)
+    comp = asyncio.run(c.complete("m", [], temperature=0, max_tokens=10, on_progress=events.append))
+    assert comp.text == "готово" and len(n) == 3
+    retries = [e for e in events if e["phase"] == "retry"]
+    assert len(retries) == 2 and "перегружен" in retries[0]["detail"] and "частоту" in retries[1]["detail"]
+
+
+def test_streaming_empty_answer_bumps_limit():
+    bodies = []
+
+    def handler(req):
+        bodies.append(json.loads(req.content))
+        if len(bodies) == 1:
+            return sse({"choices": [{"delta": {"content": ""}, "finish_reason": "length"}], "usage": {"cost": 0.01}})
+        return sse({"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}], "usage": {"cost": 0.02}})
+
+    events = []
+    c = OpenRouterClient("k", transport=httpx.MockTransport(handler), retry_base_delay=0)
+    comp = asyncio.run(c.complete("m", [], temperature=0, max_tokens=4000, on_progress=events.append))
+    assert [b["max_tokens"] for b in bodies] == [4000, 8000] and comp.cost == pytest.approx(0.03)
+    assert any(e["phase"] == "retry" and "8000" in e["detail"] for e in events)

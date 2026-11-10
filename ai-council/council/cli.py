@@ -23,7 +23,68 @@ console = Console()
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 
 
+class _LiveStatus:
+    """Живая строка внизу консоли: этап, сколько ответов готово, что делает каждая модель."""
+
+    PHASE = {"queued": "в очереди", "sent": "запрос отправлен", "thinking": "думает", "writing": "пишет",
+             "checking": "проверка", "retry": "повтор", "done": "готово", "failed": "сбой"}
+
+    def __init__(self) -> None:
+        import time
+        self.time = time
+        self.stage = ""
+        self.stage_started = time.monotonic()
+        self.calls: dict[str, dict] = {}
+        self.expected: list[str] = []
+        self.status = None
+
+    def on_event(self, event: str, d: dict) -> None:
+        now = self.time.monotonic()
+        if event == "stage":
+            self.stage, self.stage_started, self.calls = d["title"], now, {}
+            self.expected = []
+        elif event == "call":
+            c = self.calls.setdefault(d["member"], {})
+            c.update(phase=d["phase"], since=now - float(d.get("elapsed") or 0), chars=d.get("chars", c.get("chars", 0)))
+            if d["member"] not in self.expected:
+                self.expected.append(d["member"])
+            if d["phase"] == "retry":
+                console.print(f"  [yellow]↻ {d['member']}: {d.get('detail') or 'повтор'}[/]")
+            if d["phase"] in ("done", "failed"):
+                c["final"] = float(d.get("elapsed") or 0)
+        self.refresh()
+
+    def text(self) -> str:
+        now = self.time.monotonic()
+        if not self.stage:
+            return "Заседание запускается…"
+        ready = sum(1 for c in self.calls.values() if c.get("phase") in ("done", "failed"))
+        parts = []
+        for name in self.expected:
+            c = self.calls[name]
+            ph = c.get("phase")
+            if ph in ("done", "failed"):
+                continue
+            secs = int(now - c["since"])
+            extra = f" ≈{max(1, round((c.get('chars') or 0) / 3.2))} ток." if ph == "writing" else ""
+            parts.append(f"{name}: {self.PHASE.get(ph, ph)}{extra} {secs} с")
+        stage_secs = int(now - self.stage_started)
+        head = f"[bold cyan]{self.stage}[/] · готово {ready} из {len(self.expected) or '…'} · {stage_secs} с"
+        return head + ("  —  " + "; ".join(parts) if parts else "")
+
+    def refresh(self) -> None:
+        if self.status is not None:
+            self.status.update(self.text())
+
+
+_live = _LiveStatus()
+
+
 def _on_event(event: str, **d) -> None:
+    if event in ("stage", "call"):
+        _live.on_event(event, d)
+        if event == "call":
+            return
     if event == "stage":
         console.rule(f"[bold cyan]{d['title']}")
     elif event == "member_done":
@@ -166,14 +227,27 @@ async def _ask(args) -> int:
         if go is not None:
             return go
         council = Council(cfg, client, on_event=_on_event, seed=args.seed)
-        res = await council.run(
-            question,
-            criteria=criteria,
-            options=options,
-            context=context,
-            mode=mode,
-            rounds=rounds,
-        )
+
+        async def ticker() -> None:  # секундомеры в живой строке идут, даже пока модели молчат
+            while True:
+                await asyncio.sleep(1)
+                _live.refresh()
+
+        with console.status(_live.text(), spinner="dots") as status:
+            _live.status = status
+            tick = asyncio.create_task(ticker())
+            try:
+                res = await council.run(
+                    question,
+                    criteria=criteria,
+                    options=options,
+                    context=context,
+                    mode=mode,
+                    rounds=rounds,
+                )
+            finally:
+                tick.cancel()
+                _live.status = None
     except CouncilError as e:
         console.print(f"[red bold]Заседание прервано:[/] {e}")
         return 1
@@ -192,7 +266,8 @@ async def _ask(args) -> int:
     runs_dir = Path(cfg.runs_dir)
     if not runs_dir.is_absolute():
         runs_dir = PROJECT_DIR / runs_dir
-    paths = save(res, runs_dir)
+    with console.status("Готовлю отчёты: PDF, Word и Markdown…", spinner="dots"):
+        paths = save(res, runs_dir)
     console.print(f"\nСтоимость: [bold]${res.total_cost:.4f}[/], время: {res.duration_s} с")
     for fmt, title in (("pdf", "PDF"), ("docx", "Word"), ("md", "Markdown"), ("json", "Стенограмма")):
         if fmt in paths:

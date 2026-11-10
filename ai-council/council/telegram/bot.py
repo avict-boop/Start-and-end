@@ -25,6 +25,7 @@ from ..archive import MIME, Archive, available_formats, key_of
 from ..report import make_stem, save
 from ..session import Council, CouncilError, SessionResult
 from .api import TelegramAPI, TelegramError
+from ..reports.view import short_title
 from .format import esc, md_to_tg, split_message, strip_tags
 
 log = logging.getLogger("council.telegram")
@@ -94,9 +95,26 @@ class Progress:
     failures: list[str] = field(default_factory=list)
     cost: float = 0.0
     started: float = field(default_factory=time.monotonic)
+    stage_started: float = field(default_factory=time.monotonic)
+    calls: dict[str, dict[str, Any]] = field(default_factory=dict)
+    saving: bool = False
 
     def apply(self, event: str, d: dict[str, Any]) -> None:
-        if event == "stage":
+        if event == "call":
+            c = self.calls.get(d["member"])
+            if not c or c.get("stage") != d["stage"]:
+                c = {"stage": d["stage"], "chars": 0}
+            c.update(phase=d["phase"], since=time.monotonic() - float(d.get("elapsed") or 0),
+                     detail=d.get("detail") or (c.get("detail") if d["phase"] == "retry" else ""))
+            if d.get("chars") is not None:
+                c["chars"] = d["chars"]
+            if d["phase"] in ("done", "failed"):
+                c["final"] = float(d.get("elapsed") or 0)
+                if d["phase"] == "done":
+                    self.work[d["member"]] = "done"
+            self.calls[d["member"]] = c
+        elif event == "stage":
+            self.stage_started = time.monotonic()
             if self.stage and self.stage != d["stage"]:
                 self.done_stages.add(self.stage)
             self.stage, self.stage_title = d["stage"], d["title"]
@@ -117,6 +135,26 @@ class Progress:
         elif event == "cost":
             self.cost = d["total"]
 
+    def _member_line(self, name: str) -> str:
+        c = self.calls.get(name)
+        if not c or c.get("stage") != self.stage:
+            return f"▫️ {esc(name)} — ожидает запуска"
+        phase = c.get("phase")
+        active = phase not in ("done", "failed")
+        secs = int(time.monotonic() - c["since"]) if active else int(c.get("final") or 0)
+        tok = max(1, round((c.get("chars") or 0) / 3.2))
+        text = {
+            "queued": ("🕓", "в очереди"),
+            "sent": ("📨", "запрос отправлен"),
+            "thinking": ("🤔", "думает"),
+            "writing": ("✍️", f"пишет ответ, ≈{tok} ток."),
+            "checking": ("🔎", "проверяю ответ"),
+            "retry": ("🔁", f"повтор: {c.get('detail') or 'временная ошибка'}"),
+            "done": ("✅", "готово"),
+            "failed": ("❌", f"сбой: {c.get('detail') or ''}"),
+        }.get(phase, ("⏳", phase or ""))
+        return f"{text[0]} {esc(name)} — {esc(text[1][:120])} · {_fmt_secs(secs)}"
+
     def skipped(self) -> set[str]:
         return {"quick": {"critique", "revision"}, "evaluate": {"proposal", "revision"}}.get(self.mode, set())
 
@@ -125,7 +163,7 @@ class Progress:
         meta = MODE_NAME.get(self.mode, self.mode) + (f", раундов: {self.rounds}" if self.mode == "debate" else "")
         if self.demo:
             meta += " · демо"
-        lines = [head, f"<i>{esc(meta)}</i>", f"❓ {esc(self.question[:300])}", ""]
+        lines = [head, f"<i>{esc(meta)}</i>", f"❓ {esc(short_title(self.question))}", ""]
         steps = []
         for key, name in STAGES:
             if key in self.skipped():
@@ -133,10 +171,19 @@ class Progress:
             icon = "✅" if key in self.done_stages else "⏳" if key == self.stage else "▫️"
             steps.append(f"{icon} {name}")
         lines.append("  ".join(steps))
-        if self.stage and not final:
-            lines.append(f"<b>Сейчас:</b> {esc(self.stage_title)}")
-            icons = {"work": "⏳", "done": "✅", "fail": "❌"}
-            lines.append(" ".join(f"{icons[s]}{esc(n)}" for n, s in self.work.items()))
+        if self.saving and not final:
+            lines.append("<b>Сейчас:</b> готовлю отчёты PDF, Word и Markdown…")
+        elif self.stage and not final:
+            ready = sum(1 for s in self.work.values() if s != "work")
+            stage_secs = int(time.monotonic() - self.stage_started)
+            lines.append(f"<b>Сейчас:</b> {esc(self.stage_title)} — готово {ready} из {len(self.work)} · "
+                         f"{_fmt_secs(stage_secs)} на этапе")
+            lines += [self._member_line(n) for n in self.work]
+            slow = [n for n, c in self.calls.items() if c.get("stage") == self.stage and self.work.get(n) == "work"
+                    and c.get("phase") in ("sent", "thinking") and time.monotonic() - c["since"] > 40]
+            if slow:
+                lines.append(f"<i>⏳ {esc(', '.join(slow))}: «думающие» модели рассуждают до 1–3 минут — "
+                             f"это нормально, процесс не завис.</i>")
         if self.proposals:
             lines += ["", "<b>Варианты:</b>"]
             lines += [f"<b>{l}</b> — {esc(t[:80])}" for l, t in sorted(self.proposals.items())]
@@ -146,6 +193,10 @@ class Progress:
         lines += ["", f"💰 ${self.cost:.4f} · ⏱ {secs // 60} мин {secs % 60} с" if secs >= 60
                   else f"💰 ${self.cost:.4f} · ⏱ {secs} с"]
         return "\n".join(lines)
+
+
+def _fmt_secs(secs: int) -> str:
+    return f"{secs // 60}:{secs % 60:02d}" if secs >= 60 else f"{secs} с"
 
 
 @dataclass
@@ -588,6 +639,10 @@ class CouncilBot:
             try:
                 council = Council(cfg, client, on_event=on_event)
                 res = await council.run(p.question, options=p.options, mode=mode, rounds=s.rounds)
+                progress.saving = True
+                r = self.running.get(chat_id)
+                if r:
+                    r.dirty = True
                 await asyncio.to_thread(save, res, self.runs_dir, stem)
                 updater.cancel()
                 await self._safe_edit(chat_id, msg["message_id"], progress.render(final="✅ <b>Заседание завершено</b>"))
@@ -688,7 +743,7 @@ class CouncilBot:
             lines = [head, f"<i>Всего: {len(items)} · страница {page + 1} из {pages}</i>", ""]
             for i, it in enumerate(chunk, page * ARCHIVE_PAGE + 1):
                 win = f"🏆 {esc(it['winner'])}: {esc(it['winner_title'][:50])}" if it["winner"] else ""
-                lines.append(f"<b>{i}.</b> {esc(it['question'][:110])}\n    <i>{esc(it['date'])}</i> · {win}")
+                lines.append(f"<b>{i}.</b> {esc(short_title(it['question'], 100))}\n    <i>{esc(it['date'])}</i> · {win}")
             lines += ["", "Нажмите номер, чтобы получить отчёт."]
             text = "\n".join(lines)
             nums = [self._btn(str(i), f"ses:{it['key']}") for i, it in enumerate(chunk, page * ARCHIVE_PAGE + 1)]
@@ -723,7 +778,7 @@ class CouncilBot:
             caption = None
             if s:
                 win = f"\n🏆 {esc(s['winner'])}: {esc(s['winner_title'][:80])} ({esc(s['winner_author'])})" if s["winner"] else ""
-                caption = (f"<b>{esc(s['question'][:300])}</b>\n<i>{esc(s['date'])} · {esc(s['mode_name'])} · "
+                caption = (f"<b>{esc(short_title(s['question']))}</b>\n<i>{esc(s['date'])} · {esc(s['mode_name'])} · "
                            f"${s['cost']:.4f}</i>{win}")[:1000]
             await self.send_report(chat_id, stem, caption=caption)
         elif fmt in available_formats():

@@ -333,3 +333,17 @@ def test_archive_pages_and_backfill(env):
     assert built == 11 and failed == 0
     assert bot.archive.ensure_all() == (0, 0)  # повторно — ничего не делает
     assert all((runs / f"20200101-0000{i:02d}-old-{i}.{ext}").is_file() for i in range(10) for ext in ("pdf", "docx", "md"))
+
+
+def test_progress_shows_each_model():
+    from council.telegram.bot import Progress
+    pr = Progress(question="Длинный вопрос. С подробностями\n- пункт", mode="debate", rounds=1,
+                  members=["a", "b", "c"], chair="a", demo=True)
+    pr.apply("stage", {"stage": "proposal", "title": "Независимые предложения"})
+    pr.apply("call", {"member": "a", "stage": "proposal", "phase": "thinking", "elapsed": 50})
+    pr.apply("call", {"member": "b", "stage": "proposal", "phase": "writing", "elapsed": 3, "chars": 640})
+    pr.apply("call", {"member": "c", "stage": "proposal", "phase": "done", "elapsed": 12})
+    text = pr.render()
+    assert "готово 1 из 3" in text and "❓ Длинный вопрос." in text
+    assert "🤔 a — думает · 50 с" in text and "✍️ b — пишет ответ, ≈200 ток." in text and "✅ c — готово · 12 с" in text
+    assert "процесс не завис" in text  # a думает дольше 40 с

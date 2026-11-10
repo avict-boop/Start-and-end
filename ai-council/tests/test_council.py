@@ -220,3 +220,35 @@ def test_failed_attempts_cost_is_counted():
     res = run(Council(make_cfg(), Expensive(delay=0)).run("Q", mode="quick", criteria=["x"]))
     # b упал дважды — на предложении и на голосовании; обе неудачи стоили денег
     assert res.stats["b"].cost == pytest.approx(0.10) and len(res.stats["b"].failures) == 2
+
+
+def test_call_progress_events():
+    events = []
+    council = Council(make_cfg(), BrokenJsonOnce(), on_event=lambda e, **d: events.append((e, d)))
+    run(council.run("Q", mode="quick", criteria=["x"]))
+    calls = [d for e, d in events if e == "call"]
+    a = [d["phase"] for d in calls if d["member"] == "a" and d["stage"] == "proposal"]
+    # первая попытка вернула не JSON (заглушка без фаз клиента) → проверка → повтор с объяснением → успех
+    assert a[0] == "checking" and a[1] == "retry" and a[-1] == "done"
+    assert a.index("retry") < a.index("sent") < a.index("thinking") < a.index("writing") < len(a) - 1
+    retry = next(d for d in calls if d["member"] == "a" and d["phase"] == "retry")
+    assert "формате" in retry["detail"]
+    assert all("elapsed" in d for d in calls)
+
+
+def test_short_title_and_query_formatting():
+    from council.reports.html import render_html
+    from council.reports.md import render_md
+    from council.reports.view import View, short_title
+    assert short_title("Как назвать кофейню?") == "Как назвать кофейню?"
+    q = "Помоги выбрать стек для магазина. Подробности ниже:\n- бюджет **1 млн**\n- срок 3 месяца\nСпасибо!"
+    assert short_title(q) == "Помоги выбрать стек для магазина."
+    long_line = "слово " * 40
+    assert short_title(long_line).endswith("…") and len(short_title(long_line)) <= 111
+    res = run(Council(make_cfg(), MockClient(delay=0)).run(q, mode="quick", criteria=["x"]))
+    v = View(res.to_dict())
+    html = render_html(v)
+    assert "<h1>Помоги выбрать стек для магазина.</h1>" in html
+    assert 'class="query"' in html and "<li>бюджет <strong>1 млн</strong></li>" in html and "Спасибо!" in html
+    md = render_md(v)
+    assert md.startswith("# Помоги выбрать стек для магазина.") and "> - срок 3 месяца  " in md

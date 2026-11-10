@@ -254,6 +254,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 council = Council(cfg, client, on_event=on_event)
                 res = await council.run(req.question, criteria=req.clean_criteria, options=opts,
                                         context=req.context or None, mode=req.mode, rounds=rounds)
+                st.push({"type": "saving"})
                 await asyncio.to_thread(save, res, runs_dir(cfg), sid)
                 st.status = "done"
                 st.push({"type": "done", "id": sid, "total_cost": res.total_cost, "duration_s": res.duration_s,
@@ -318,8 +319,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     return
                 if await request.is_disconnected():
                     return
-                if not await st.wait(15):
-                    yield ": ping\n\n"
+                if not await st.wait(10):
+                    # «сердцебиение» без id: страница видит, что связь есть, даже пока модели молча думают
+                    yield f"data: {json.dumps({'type': 'ping', 'server_time': time.time()})}\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

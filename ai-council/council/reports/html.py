@@ -15,7 +15,10 @@ body { font-family: "DejaVu Sans", "Segoe UI", Roboto, Arial, sans-serif; color:
   line-height: 1.5; margin: 0; background: #fff; }
 .page { max-width: 920px; margin: 0 auto; padding: 28px 24px 60px; }
 @media print { .page { padding: 0; max-width: none; } .noprint { display: none !important; } }
-h1 { font-size: 19pt; line-height: 1.25; margin: 4px 0 8px; }
+h1 { font-size: 15pt; line-height: 1.3; margin: 4px 0 8px; overflow-wrap: anywhere; }
+.query { border-left: 3px solid #c9c9e6; background: #f7f7fb; border-radius: 0 7px 7px 0; padding: 6px 12px; margin: 6px 0 10px; }
+.query-label { font-size: 8.5pt; text-transform: uppercase; letter-spacing: .06em; color: #6b6b80; font-weight: bold; margin-bottom: 2px; }
+.query .md p { margin: 3px 0; }
 h2 { font-size: 14pt; margin: 26px 0 10px; padding-bottom: 4px; border-bottom: 2px solid #e4e4ee; }
 h3 { font-size: 11.5pt; margin: 18px 0 6px; }
 h4 { font-size: 10.5pt; margin: 12px 0 4px; }
@@ -145,7 +148,9 @@ def render_html(view: View, *, toolbar: str = "") -> str:
 
     add('<div class="page">')
     add('<div class="brand">Совет нейросетей · отчёт о заседании</div>')
-    add(f"<h1>{_e(v.question)}</h1>")
+    add(f"<h1>{_e(v.title_text)}</h1>")
+    if v.question_is_long:
+        add(f'<div class="query"><div class="query-label">Запрос</div><div class="md">{md_to_html(v.question, breaks=True)}</div></div>')
     if v.refined:
         add(f'<div class="refined"><b>Уточнённая постановка:</b> {_e(v.refined)}</div>')
     add('<div class="meta">')
@@ -276,5 +281,5 @@ def render_html(view: View, *, toolbar: str = "") -> str:
     body = "\n".join(parts)
     return (f'<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{_e(v.question[:80])} — Совет нейросетей</title><style>{CSS}</style></head>"
+            f"<title>{_e(v.title_text)} — Совет нейросетей</title><style>{CSS}</style></head>"
             f"<body>{toolbar}{body}{SCROLL_HINT}</body></html>")

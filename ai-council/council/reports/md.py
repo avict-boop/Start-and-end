@@ -12,7 +12,10 @@ def render_md(view: View) -> str:
     v = view
     vd = v.verdict
     w = v.winner
-    out = [f"# {v.question}", ""]
+    out = [f"# {v.title_text}", ""]
+    if v.question_is_long:
+        # запрос целиком, с его переносами строк (два пробела в конце строки — перенос в Markdown)
+        out += ["**Запрос:**", ""] + [f"> {line}  " if line.strip() else ">" for line in v.question.splitlines()] + [""]
     if v.refined:
         out += [f"**Уточнённая постановка:** {v.refined}", ""]
     out += [

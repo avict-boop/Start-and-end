@@ -19,10 +19,19 @@ class MockClient:
         self.delay = delay
         self.calls: list[dict[str, Any]] = []
 
-    async def complete(self, model, messages, *, temperature, max_tokens, reasoning_effort=None, meta=None) -> Completion:
+    async def complete(self, model, messages, *, temperature, max_tokens, reasoning_effort=None, meta=None,
+                       on_progress=None) -> Completion:
         meta = meta or {}
         self.calls.append({"model": model, "meta": meta})
-        await asyncio.sleep(self.delay)
+        report = on_progress or (lambda ev: None)
+        report({"phase": "sent", "attempt": 1, "max_tokens": max_tokens})
+        # имитация: модель сначала «думает», потом «пишет» ответ порциями
+        think = self.delay * (0.5 + _h(model, str(meta.get("stage"))) % 100 / 100)
+        report({"phase": "thinking", "chars": 0})
+        await asyncio.sleep(think)
+        for i in range(1, 4):
+            await asyncio.sleep(self.delay / 3)
+            report({"phase": "writing", "chars": 180 * i})
         if model in self.fail_models:
             raise ProviderError(f"{model}: имитация недоступности")
         stage = meta.get("stage")
