@@ -25,13 +25,16 @@ Special role: you are the council's devil's advocate. Look for non-obvious alter
 CHAIR = """
 Special role: you chair the council. You must be neutral and fair toward all proposals, including any that may be your own."""
 
+CHAIR_JUDGE = """
+Special role: you chair the council. You do not submit a proposal of your own: your job is to frame the task, judge fairly and write the final decision. Stay neutral toward all proposals."""
 
-def system(name: str, language: str, *, devil: bool = False, chair: bool = False) -> str:
+
+def system(name: str, language: str, *, devil: bool = False, chair: bool = False, judge_only: bool = False) -> str:
     text = SYSTEM.format(name=name, language=language)
     if devil:
         text += DEVIL
     if chair:
-        text += CHAIR
+        text += CHAIR_JUDGE if judge_only else CHAIR
     return text
 
 
@@ -41,6 +44,27 @@ def _criteria(criteria: list[str]) -> str:
 
 def _context(context: str | None) -> str:
     return f"\nAdditional context from the user:\n{context}\n" if context else ""
+
+
+def _original(question: str, original: str | None) -> str:
+    """Исходный запрос дословно: в нём могут быть требования к формату и структуре ответа,
+    которые теряются в уточнённой формулировке."""
+    if not original or original.strip() == question.strip():
+        return ""
+    return ("\nThe user's original request, verbatim (it may contain requirements for the structure, sections and "
+            f"format of the answer — they apply to your answer):\n<<<\n{original}\n>>>\n")
+
+
+FORMAT_RULE = ("If the user's request specifies a structure, sections, a table or another format for the answer, "
+               "follow it exactly and cover every requested item.")
+
+SCALE = """Scoring scale (use the whole range; most real answers are not 9-10):
+- 1-2: wrong, irrelevant or unusable for this criterion;
+- 3-4: serious flaws or important gaps;
+- 5-6: acceptable, but with notable weaknesses;
+- 7-8: good, only minor issues;
+- 9-10: excellent, hard to improve (rare).
+Judge substance, not length or style: a longer or more polished answer is not better by itself, and missing a requirement of the request is a weakness."""
 
 
 def _proposal_block(label: str, p: Proposal) -> str:
@@ -71,14 +95,15 @@ JSON format:
 {{"refined_question": "...", "criteria": ["...", "..."]}}"""
 
 
-def proposal(question: str, criteria: list[str], context: str | None) -> str:
+def proposal(question: str, criteria: list[str], context: str | None, original: str | None = None) -> str:
     return f"""Question for the council:
 {question}
-{_context(context)}
+{_original(question, original)}{_context(context)}
 The answers will be judged by these criteria:
 {_criteria(criteria)}
 
 Propose YOUR best answer/option. Other members answer independently; you will not see them yet.
+{FORMAT_RULE} The "summary" field holds the answer itself.
 
 JSON format:
 {{"title": "short name of your option",
@@ -89,18 +114,20 @@ JSON format:
   "confidence": 0.0-1.0}}"""
 
 
-def critique(question: str, criteria: list[str], proposals: dict[str, Proposal]) -> str:
+def critique(question: str, criteria: list[str], proposals: dict[str, Proposal], original: str | None = None) -> str:
     labels = ", ".join(proposals)
     example_scores = ", ".join(f'"{c}": 1-10' for c in criteria)
     return f"""Question for the council:
 {question}
-
+{_original(question, original)}
 Review each of these anonymous proposals:
 
 {proposals_block(proposals)}
 
-Score every proposal on every criterion from 1 (very bad) to 10 (excellent):
+Score every proposal on every criterion from 1 to 10:
 {_criteria(criteria)}
+
+{SCALE}
 
 You must review exactly these labels: {labels}. Use the criteria names exactly as written.
 
@@ -118,12 +145,13 @@ def revision(
     own: Proposal,
     feedback: list[dict],
     others: dict[str, Proposal],
+    original: str | None = None,
 ) -> str:
     fb = json.dumps(feedback, ensure_ascii=False, indent=1) if feedback else "(no feedback received)"
     others_short = "\n".join(f"- {l}: {p.title} — {p.summary[:400]}" for l, p in others.items())
     return f"""Question for the council:
 {question}
-
+{_original(question, original)}
 Criteria:
 {_criteria(criteria)}
 
@@ -138,6 +166,7 @@ Other proposals (short):
 
 Revise your proposal: fix real weaknesses, keep what is strong, borrow good ideas from others if they make it better.
 If another proposal is clearly better, you may rework yours to build on it. Do not change things just to please critics.
+{FORMAT_RULE}
 
 JSON format:
 {{"title": "...", "summary": "...", "reasoning": "...", "pros": ["..."], "risks": ["..."],
@@ -157,6 +186,7 @@ Final proposals:
 {proposals_block(proposals)}
 
 Rank ALL of these proposals from best to worst. Include every label exactly once: {labels}.
+Judge substance against the criteria and the request, not length or style.
 
 JSON format:
 {{"ranking": ["best label", "...", "worst label"], "rationale": "why the top choice wins"}}"""
@@ -168,11 +198,14 @@ def verdict(
     proposals: dict[str, Proposal],
     tally_text: str,
     critique_notes: str,
+    original: str | None = None,
+    agreement: str = "",
 ) -> str:
     labels = ", ".join(proposals)
+    agree = f"\nCouncil agreement on the ranking: {agreement}\n" if agreement else ""
     return f"""Question for the council:
 {question}
-
+{_original(question, original)}
 Criteria:
 {_criteria(criteria)}
 
@@ -180,15 +213,17 @@ Final proposals:
 
 {proposals_block(proposals)}
 
-Voting results (Borda score 0..1, average critique score 1..10, first-place votes):
+Voting results (Borda score 0..1 where 1 is the maximum; pairwise = wins minus losses in head-to-head comparisons; average critique score 1..10; first-place votes):
 {tally_text}
-
+{agree}
 Key critique points:
 {critique_notes or "(no critique round)"}
 
 Write the council's final verdict.
 - "winner": the label of the best proposal ({labels}). The vote is strong evidence; if you pick differently, justify it in "why".
-- "final_answer": the complete, ready-to-use final answer for the user, based on the winner and improved with the best ideas from other proposals (markdown allowed).
+- "final_answer": the complete, ready-to-use final answer for the user, based on the winner and improved with the best ideas from other proposals (markdown allowed). {FORMAT_RULE} Do not drop requested sections even if the proposals skipped them — write them yourself.
+- If you mention voting numbers anywhere, copy them exactly as given above; do not estimate or round them differently.
+- If agreement is low, say in "why" that the council was divided and what the main split is.
 - "why": why this option won.
 - "dissent": notable minority opinions or strong alternatives worth knowing.
 - "risks": main risks and how to mitigate them.

@@ -37,3 +37,25 @@ def test_estimate_cost_and_unknown():
     assert est.high > est.low > 0
     missing = unknown_models(cfg, set(pricing))
     assert set(missing) == {"m/c", "m/d"} and "m/cc" in missing["m/c"]
+
+
+def test_plan_calls_with_judge_chair():
+    from council.config import CouncilConfig, with_overrides
+    from council.estimate import plan_calls
+    members = [{"name": n, "model": f"m/{n}"} for n in ("a", "b", "c", "d", "e")]
+    cfg = CouncilConfig.model_validate({"chair": "a", "members": members})
+    total = lambda c, mode, n=None: sum(len(v) for v in plan_calls(c, mode, 1, n, False).values())  # noqa: E731
+    assert (total(cfg, "debate"), total(cfg, "quick"), total(cfg, "evaluate", 3)) == (20, 11, 12)
+    plan = plan_calls(cfg, "debate", 1, None, False)
+    assert ("critique", 4) in plan["a"] and ("vote", 4) in plan["a"] and not any(s == "proposal" for s, _ in plan["a"])
+    assert ("critique", 3) in plan["b"]
+    assert total(with_overrides(cfg, chair_proposes=True), "debate") == 22
+
+
+def test_plan_matches_real_calls_with_judge_chair():
+    cfg = make_cfg(chair_proposes=False)
+    client = MockClient(delay=0)
+    asyncio.run(Council(cfg, client, seed=1).run("Вопрос?"))
+    real = Counter((c["meta"]["member"], c["meta"]["stage"]) for c in client.calls)
+    plan = Counter((name, stage) for name, items in plan_calls(cfg, "debate", 1, None, False).items() for stage, _ in items)
+    assert real == plan

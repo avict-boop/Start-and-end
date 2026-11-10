@@ -144,6 +144,7 @@ function refreshRoleSelects() {
   };
   fill($("chair"), false, config.chair);
   fill($("devil"), true, config.devil_advocate);
+  $("chairProposes").checked = !!config.chair_proposes;
 }
 
 function parseOptions(text) {
@@ -164,6 +165,7 @@ function payload() {
     members: selectedMembers(),
     chair: $("chair").value || null,
     devil_advocate: $("devil").value,
+    chair_proposes: $("chairProposes").checked,
     budget: Number($("budget").value) || null,
     mock: $("mock").checked,
     attachments: uploads.filter((u) => u.status === "ready").map((u) => u.meta.id),
@@ -217,6 +219,7 @@ $("repeatBtn").addEventListener("click", async () => {
   }
   if (r.chair) $("chair").value = r.chair;
   if (r.devil_advocate !== undefined) $("devil").value = r.devil_advocate || "";
+  if (r.chair_proposes !== undefined) $("chairProposes").checked = !!r.chair_proposes;
   if (r.budget) $("budget").value = r.budget;
   uploads = (data.uploads || []).map((m) => ({ key: ++uploadSeq, name: m.name, status: "ready", meta: m }));
   renderUploads();
@@ -643,7 +646,10 @@ function apply(s, ev) {
       if (s.stage && s.stage !== ev.stage) s.doneStages.add(s.stage);
       s.stage = ev.stage;
       s.stageTitle[ev.stage] = ev.title;
-      const who = ["framing", "verdict"].includes(ev.stage) ? [s.chair].filter(Boolean) : s.members;
+      if (ev.stage === "proposal") s.chairJudge = ev.chair_proposes === false;
+      // председатель без своего варианта не участвует в предложениях и доработке
+      const who = ["framing", "verdict"].includes(ev.stage) ? [s.chair].filter(Boolean)
+        : ["proposal", "revision"].includes(ev.stage) && s.chairJudge ? s.members.filter((m) => m !== s.chair) : s.members;
       s.work = Object.fromEntries(who.map((n) => [n, "work"]));
       break;
     }
@@ -670,6 +676,7 @@ function apply(s, ev) {
       break;
     case "tally":
       s.tally = ev.rows;
+      s.agreement = ev.agreement || null;
       if (ev.rows && ev.rows[0]) logAdd(s, `Голосование: лидирует вариант ${ev.rows[0].label}`);
       break;
     case "cost":
@@ -916,6 +923,9 @@ function renderVerdict(s) {
   if (!v) return;
   const p = s.proposals[v.winner];
   $("vTitle").textContent = `Вариант ${v.winner}${p ? ` — ${p.title}` : ""} (${authorOf(s, v.winner)})`;
+  const low = s.agreement && s.agreement.level === "low";
+  $("vAgreeWarn").hidden = !low;
+  $("vAgreeWarn").textContent = low ? `⚠️ Низкое согласие совета (τ = ${s.agreement.tau.toFixed(2)}): ${AGREE_HINT.low}` : "";
   $("vAnswer").innerHTML = md(v.final_answer);
   $("vWhy").innerHTML = md(v.why);
   $("vDissentBox").hidden = !(v.dissent || []).length;
@@ -926,21 +936,37 @@ function renderVerdict(s) {
   $("downloads").innerHTML = s.done ? downloadLinks(s.id) : "";
 }
 
+const AGREE_NAME = { high: "высокое", medium: "среднее", low: "низкое" };
+const AGREE_HINT = {
+  high: "модели в основном одинаково упорядочили варианты — решение устойчиво",
+  medium: "модели частично расходятся в оценке вариантов",
+  low: "мнения совета разошлись — относитесь к решению осторожно и посмотрите особые мнения",
+};
+const TIE_NAME = { pairwise: "попарное сравнение", critique: "оценка критики", label: "жребий (метка)" };
+
 function renderTally(s) {
   const ballots = Object.entries(s.ballots);
   $("tallySec").hidden = !s.tally && !ballots.length;
   const win = s.verdict && s.verdict.winner;
   if (s.tally) {
-    $("tally").innerHTML = `<thead><tr><th>#</th><th>Вариант</th><th>Автор</th><th>Борда</th><th>Критика</th><th>1-х мест</th></tr></thead><tbody>${
+    $("tally").innerHTML = `<thead><tr><th>#</th><th>Вариант</th><th>Автор</th><th>Борда</th><th title="Попарные сравнения: побед минус поражений">Попарно</th><th>Критика</th><th>1-х мест</th></tr></thead><tbody>${
       s.tally.map((r, i) => `<tr class="${r.label === win ? "winner" : ""}">
         <td class="num">${i + 1}</td>
         <td><span class="lbl">${esc(r.label)}</span> ${esc((s.proposals[r.label] || {}).title || "")}</td>
         <td>${esc(authorOf(s, r.label))}</td>
         <td class="num"><div style="display:flex;gap:.5rem;align-items:center"><div class="bar"><i style="width:${(r.borda * 100).toFixed(0)}%"></i></div>${r.borda.toFixed(2)}</div></td>
+        <td class="num">${r.pairwise == null ? "—" : (r.pairwise > 0 ? "+" : "") + r.pairwise}</td>
         <td class="num">${r.avg_score == null ? "—" : r.avg_score.toFixed(1)}</td>
         <td class="num">${r.first_places}/${r.ballots}</td></tr>`).join("")}</tbody>`;
+    const ties = s.tally.slice(0, -1).map((r, i) => r.tie_break
+      ? `${esc(r.label)} выше ${esc(s.tally[i + 1].label)}: при равном балле Борда решило ${TIE_NAME[r.tie_break] || r.tie_break}` : "").filter(Boolean);
+    const a = s.agreement;
+    $("tallyNote").innerHTML = (a ? `<b>Согласие совета: ${AGREE_NAME[a.level]}</b> (τ = ${a.tau.toFixed(2)}) — ${AGREE_HINT[a.level]}.<br>` : "")
+      + "Порядок: балл Борда; при равенстве — попарное сравнение, затем оценка критики."
+      + ties.map((t) => `<br>• ${t}`).join("");
   } else {
     $("tally").innerHTML = "";
+    $("tallyNote").innerHTML = "";
   }
   $("ballots").innerHTML = ballots.map(([voter, b]) => `<div class="ballot"><b>${esc(voter)}</b>
     <span class="rank">${b.ranking.map(esc).join(" › ")}</span>${b.rationale ? `<span class="why">${inline(b.rationale)}</span>` : ""}</div>`).join("");

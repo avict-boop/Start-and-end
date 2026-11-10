@@ -109,6 +109,7 @@ class Progress:
     stage_started: float = field(default_factory=time.monotonic)
     calls: dict[str, dict[str, Any]] = field(default_factory=dict)
     saving: bool = False
+    chair_judge: bool = False  # председатель без своего варианта
 
     def apply(self, event: str, d: dict[str, Any]) -> None:
         if event == "call":
@@ -129,7 +130,11 @@ class Progress:
             if self.stage and self.stage != d["stage"]:
                 self.done_stages.add(self.stage)
             self.stage, self.stage_title = d["stage"], d["title"]
-            who = [self.chair] if d["stage"] in ("framing", "verdict") else self.members
+            if d["stage"] == "proposal":
+                self.chair_judge = d.get("chair_proposes") is False
+            who = ([self.chair] if d["stage"] in ("framing", "verdict")
+                   else [m for m in self.members if m != self.chair]
+                   if d["stage"] in ("proposal", "revision") and self.chair_judge else self.members)
             self.work = {n: "work" for n in who}
         elif event == "framing":
             self.done_stages.add("framing")
@@ -841,7 +846,8 @@ class CouncilBot:
                                         history=history, followup_of=p.parent)
                 res.request = {"question": p.question, "mode": mode, "rounds": s.rounds, "criteria": [],
                                "options": p.options or [], "members": [m.name for m in cfg.active_members],
-                               "chair": cfg.chair, "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd}
+                               "chair": cfg.chair, "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
+                               "chair_proposes": cfg.chair_proposes}
                 progress.saving = True
                 r = self.running.get(chat_id)
                 if r:
@@ -927,6 +933,10 @@ class CouncilBot:
         lines = [head, f"<i>❓ {esc(v.title_text)}</i>", "", md_to_tg(short)]
         if cut:
             lines += ["", "<i>Полный ответ — «📖 Подробнее» или в отчёте.</i>"]
+        a = v.agreement
+        if a:
+            icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}[a["level"]]
+            lines += ["", f"{icon} Согласие совета: {esc(v.agreement_line)}"]
         lines += ["", f"💰 ${v.cost:.4f} · ⏱ {v.duration} · вариантов: {len(v.proposals)}"]
         await self.send(chat_id, "\n".join(lines), reply_markup=self._result_buttons(stem))
 
@@ -948,8 +958,12 @@ class CouncilBot:
             lab = r.get("label", "")
             avg = r.get("avg_score")
             lines.append(f"{i}. <b>{lab}</b> {esc(v.title(lab)[:60])} ({esc(v.author(lab))}) — "
-                         f"Борда {float(r.get('borda') or 0):.2f}, критика {'—' if avg is None else f'{avg:.1f}'}, "
+                         f"Борда {float(r.get('borda') or 0):.2f}, попарно {v.pairwise_str(r)}, "
+                         f"критика {'—' if avg is None else f'{avg:.1f}'}, "
                          f"1-х мест {r.get('first_places', 0)}/{r.get('ballots', 0)}")
+        lines += [f"• {esc(n)}" for n in v.tie_notes]
+        if v.agreement_line:
+            lines += ["", f"Согласие совета: {esc(v.agreement_line)}"]
         await self.send(chat_id, "\n".join(lines))
 
     async def send_result(self, chat_id: int, res: SessionResult, stem: str) -> None:

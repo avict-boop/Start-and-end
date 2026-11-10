@@ -68,7 +68,8 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
         if d.get("image_notes"):
             ev.insert(2, {"type": "image_notes", "by": d.get("image_notes_by", ""), "notes": d["image_notes"]})
     if d["mode"] != "evaluate":
-        ev.append({"type": "stage", "stage": "proposal", "title": "Независимые предложения"})
+        ev.append({"type": "stage", "stage": "proposal", "title": "Независимые предложения",
+                   "chair_proposes": d.get("chair_proposed", True)})
     ev.append({"type": "proposals", "proposals": d["initial_proposals"], "authors": d["authors"]})
     if d.get("critiques"):
         ev.append({"type": "stage", "stage": "critique", "title": "Критика"})
@@ -80,7 +81,9 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
         ev.append({"type": "revisions", "revised": revised})
     ev.append({"type": "stage", "stage": "vote", "title": "Голосование"})
     ev += [{"type": "member_done", "stage": "vote", "member": m, "result": b} for m, b in d["ballots"].items()]
-    ev.append({"type": "tally", "rows": d["tally"], "authors": d["authors"]})
+    from ..voting import agreement
+    agree = d.get("agreement") or agreement({m: b.get("ranking", []) for m, b in (d.get("ballots") or {}).items()})
+    ev.append({"type": "tally", "rows": d["tally"], "authors": d["authors"], "agreement": agree})
     ev.append({"type": "stage", "stage": "verdict", "title": "Итоговое решение"})
     for name, s in d.get("stats", {}).items():
         for f in s.get("failures", []):
@@ -102,6 +105,7 @@ class RunRequest(BaseModel):
     members: list[str] | None = None
     chair: str | None = None
     devil_advocate: str | None = None  # "" — без адвоката дьявола
+    chair_proposes: bool | None = None  # None — как в config.yaml
     budget: float | None = Field(default=None, gt=0, le=100)
     mock: bool = False
     attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)  # id загрузок
@@ -174,7 +178,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     def build_config(req: RunRequest) -> CouncilConfig:
         try:
             return with_overrides(base_config(), members=req.members, chair=req.chair,
-                                  devil_advocate=req.devil_advocate, budget=req.budget)
+                                  devil_advocate=req.devil_advocate, budget=req.budget,
+                                  chair_proposes=req.chair_proposes)
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
 
@@ -345,6 +350,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             "members": [{"name": m.name, "model": m.model, "enabled": m.enabled} for m in cfg.members],
             "chair": cfg.chair,
             "devil_advocate": cfg.devil_advocate,
+            "chair_proposes": cfg.chair_proposes,
             "mode": cfg.mode,
             "rounds": cfg.debate_rounds,
             "budget": cfg.max_cost_usd,
@@ -440,7 +446,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 res.request = {"question": req.question, "mode": "evaluate" if opts else req.mode, "rounds": rounds,
                                "criteria": req.clean_criteria or [], "options": opts or [], "context": req.context or "",
                                "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
-                               "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd}
+                               "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
+                               "chair_proposes": cfg.chair_proposes}
                 st.push({"type": "saving"})
                 await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts)
                 import shutil

@@ -101,3 +101,21 @@ def test_archive_backfills_summary(tmp_path):
     for kind in all_reports():
         assert (tmp_path / f"20250101-000000-old.{kind}").is_file()
     assert a.delete("20250101-000000-old") and not list(tmp_path.glob("20250101-000000-old.*"))
+
+
+def test_reports_show_agreement_and_pairwise():
+    d = session("Ответ совета")
+    d["ballots"] = {"x": {"ranking": ["A", "B"], "rationale": ""}, "y": {"ranking": ["B", "A"], "rationale": ""}}
+    d["tally"] = [{"label": "A", "borda": 0.5, "avg_score": None, "first_places": 1, "ballots": 2, "pairwise": 0,
+                   "tie_break": "label"},
+                  {"label": "B", "borda": 0.5, "avg_score": None, "first_places": 1, "ballots": 2, "pairwise": 0,
+                   "tie_break": ""}]
+    v = View(d)
+    assert v.agreement["level"] == "low"  # противоположные бюллетени — считается и для старых заседаний
+    html = render_html(v)
+    assert "Согласие совета" in html and "Низкое согласие совета" in html and "Попарно" in html
+    assert "A выше B: при равном балле Борда решило жребий (метка)" in html
+    md = render_md(v)
+    assert "| Попарно |" in md and "Низкое согласие" in md
+    text = "\n".join(p.text for p in Document(io.BytesIO(render_docx(v))).paragraphs)
+    assert "Низкое согласие совета" in text

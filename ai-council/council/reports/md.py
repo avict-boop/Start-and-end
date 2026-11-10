@@ -50,7 +50,10 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
     if v.refined:
         out += [f"**Уточнённая постановка:** {v.refined}", ""]
     if summary:
-        out += [f"*{v.date} · {v.mode} · участники: {', '.join(v.members)}*", "", "## Решение совета", ""]
+        out += [f"*{v.date} · {v.mode} · участники: {', '.join(v.members)}*", ""]
+        if v.agreement_line:
+            out += [f"*Согласие совета: {v.agreement_line}*", ""]
+        out += ["## Решение совета", ""]
         if w:
             out += [f"*Лучший вариант: {v.title(w)} (предложил {v.author(w)})*", ""]
         out += [vd.get("final_answer", ""), ""]
@@ -60,10 +63,14 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
             f"| Дата | {v.date} |", f"| Режим | {v.mode} |",
             f"| Участники | {', '.join(v.members)} |",
             f"| Критерии | {_cell(', '.join(v.criteria)) or '—'} |",
-            f"| Стоимость | ${v.cost:.4f} |", f"| Длительность | {v.duration} |", "",
+            f"| Стоимость | ${v.cost:.4f} |", f"| Длительность | {v.duration} |",
+            *([f"| Согласие совета | {_cell(v.agreement_line)} |"] if v.agreement_line else []),
+            *([f"| Роли | {_cell(v.chair_note)} |"] if v.chair_note else []), "",
             f"## Решение совета: вариант {w} — {v.title(w)} ({v.author(w)})" if w else "## Решение совета", "",
             vd.get("final_answer", ""), "",
         ]
+    if v.agreement_low:
+        out.insert(out.index(vd.get("final_answer", "")), f"> ⚠️ **Низкое согласие совета:** {v.agreement_line}\n")
     if vd.get("why"):
         out += ["### Почему", "", vd["why"], ""]
     if vd.get("dissent"):
@@ -75,14 +82,16 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
                 "критикой и голосованием скачивается отдельно.*"]
         return "\n".join(out).rstrip() + "\n"
 
-    out += ["## Голосование", "", "| # | Вариант | Автор | Борда (0–1) | Оценка критики | 1-х мест |",
-            "|---|---|---|---|---|---|"]
+    out += ["## Голосование", "", "| # | Вариант | Автор | Борда (0–1) | Попарно | Оценка критики | 1-х мест |",
+            "|---|---|---|---|---|---|---|"]
     for i, r in enumerate(v.tally, 1):
         l = r.get("label", "")
         avg = r.get("avg_score")
         name = f"**{l}: {_cell(v.title(l))}**" if l == w else f"{l}: {_cell(v.title(l))}"
-        out.append(f"| {i} | {name} | {v.author(l)} | {float(r.get('borda') or 0):.2f} | "
+        out.append(f"| {i} | {name} | {v.author(l)} | {float(r.get('borda') or 0):.2f} | {v.pairwise_str(r)} | "
                    f"{'—' if avg is None else f'{avg:.1f}'} | {r.get('first_places', 0)}/{r.get('ballots', 0)} |")
+    out += ["", "*Порядок: балл Борда; при равенстве — попарное сравнение (побед минус поражений), затем оценка критики.*"]
+    out += [f"- {n}" for n in v.tie_notes]
     out.append("")
     if v.ballots:
         out += ["### Бюллетени", ""]

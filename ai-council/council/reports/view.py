@@ -161,8 +161,51 @@ class View:
         return (self.proposals.get(label) or {}).get("title", "")
 
     @property
+    def agreement(self) -> dict | None:
+        """Согласие совета; для старых заседаний считается по сохранённым бюллетеням."""
+        from ..voting import agreement
+        if self.d.get("agreement"):
+            return self.d["agreement"]
+        return agreement({m: (b or {}).get("ranking", []) for m, b in (self.d.get("ballots") or {}).items()})
+
+    @property
+    def agreement_line(self) -> str:
+        """«Согласие совета: высокое (τ = 0.67) — пояснение» или пустая строка."""
+        from ..voting import AGREEMENT_HINT, agreement_text
+        a = self.agreement
+        return f"{agreement_text(a)} — {AGREEMENT_HINT[a['level']]}" if a else ""
+
+    @property
+    def agreement_low(self) -> bool:
+        a = self.agreement
+        return bool(a and a.get("level") == "low")
+
+    @property
     def tally(self) -> list[dict]:
         return list(self.d.get("tally") or [])
+
+    @staticmethod
+    def pairwise_str(row: dict) -> str:
+        """Попарный счёт (побед минус поражений) или «—» для старых заседаний."""
+        return "—" if row.get("pairwise") is None else f"{float(row['pairwise']):+.0f}"
+
+    @property
+    def tie_notes(self) -> list[str]:
+        """Пояснения, чем решены ничьи по баллу Борда."""
+        from ..voting import TIE_NAME
+        rows = self.tally
+        return [f"{a.get('label')} выше {b.get('label')}: при равном балле Борда решило "
+                f"{TIE_NAME.get(a['tie_break'], a['tie_break'])}"
+                for a, b in zip(rows, rows[1:]) if a.get("tie_break")]
+
+    @property
+    def chair_note(self) -> str:
+        """«Председатель claude — без своего варианта» (только для новых заседаний, где это так)."""
+        if self.d.get("chair_proposed", True) or self.d.get("mode") == "evaluate":
+            return ""
+        chair = (self.d.get("request") or {}).get("chair") or ""
+        return f"председатель {chair} — без своего варианта (только постановка, оценка и итог)" if chair else \
+            "председатель — без своего варианта (только постановка, оценка и итог)"
 
     def place(self, label: str) -> int | None:
         for i, r in enumerate(self.tally, 1):

@@ -9,7 +9,7 @@ from council.mock import MockClient
 from council.report import render_markdown
 from council.schemas import CritiqueSet
 from council.session import BudgetExceeded, Council, CouncilError
-from council.voting import extract_json, normalize_critique, normalize_ranking, tally
+from council.voting import agreement, extract_json, normalize_critique, normalize_ranking, tally
 
 
 def make_cfg(**over):
@@ -17,6 +17,7 @@ def make_cfg(**over):
         "chair": "a",
         "members": [{"name": n, "model": f"m/{n}"} for n in ("a", "b", "c", "d")],
         "json_retries": 1,
+        "chair_proposes": True,  # классическая схема: председатель тоже участник со своим вариантом
     }
     data.update(over)
     return CouncilConfig.model_validate(data)
@@ -252,3 +253,85 @@ def test_short_title_and_query_formatting():
     assert 'class="query"' in html and "<li>бюджет <strong>1 млн</strong></li>" in html and "Спасибо!" in html
     md = render_md(v)
     assert md.startswith("# Помоги выбрать стек для магазина.") and "> - срок 3 месяца  " in md
+
+
+# ---------------------------------------------------------------- пакет улучшений логики
+
+
+def test_pairwise_breaks_borda_ties_before_critique():
+    # цикл Кондорсе: все равны и по Борда, и попарно — тогда решает оценка критики
+    ballots = {"x": ["C", "A", "B"], "y": ["A", "B", "C"], "z": ["B", "C", "A"]}
+    crit = {"x": CritiqueSet.model_validate({"reviews": [{"label": "A", "scores": {"k": 2}},
+                                                         {"label": "B", "scores": {"k": 9}}]})}
+    rows = tally(["A", "B", "C"], ballots, crit)
+    by = {r.label: r for r in rows}
+    assert by["A"].borda == by["B"].borda == by["C"].borda == 0.5  # цикл Кондорсе: все равны по Борда
+    assert by["A"].pairwise == by["B"].pairwise == by["C"].pairwise == 0  # и попарно тоже (A>B, B>C, C>A)
+    assert [r.label for r in rows] == ["B", "A", "C"]  # дальше решает критика: B 9 > A 2 > C (нет)
+    assert rows[0].tie_break == "critique"
+
+    ballots = {"x": ["A", "B"], "y": ["B", "A"], "z": ["A", "C"], "w": ["C", "B"]}
+    rows = tally(["A", "B", "C"], ballots, crit)
+    # A: 1, 0, 1 → 0.67; B: 0, 1, 0 → 0.33; C: 0, 1 → 0.5 — без ничьих
+    assert [r.label for r in rows] == ["A", "C", "B"] and not any(r.tie_break for r in rows)
+
+
+def test_pairwise_decides_equal_borda():
+    # A и D равны по Борда (0.33), у A даже есть первое место, но большинство общих бюллетеней ставит D выше A
+    ballots = {"p": ["A", "B", "D"], "q": ["B", "D", "A"], "r": ["B", "D", "A"]}
+    rows = tally(["A", "B", "D"], ballots, {})
+    by = {r.label: r for r in rows}
+    assert abs(by["A"].borda - by["D"].borda) < 1e-9
+    assert by["D"].pairwise > by["A"].pairwise
+    assert [r.label for r in rows] == ["B", "D", "A"] and by["D"].tie_break == "pairwise"
+
+
+def test_agreement_levels():
+    same = {"a": ["A", "B", "C"], "b": ["A", "B", "C"], "c": ["A", "B", "C"]}
+    assert agreement(same)["tau"] == 1.0 and agreement(same)["level"] == "high"
+    opposite = {"a": ["A", "B", "C"], "b": ["C", "B", "A"]}
+    assert agreement(opposite)["tau"] == -1.0 and agreement(opposite)["level"] == "low"
+    # неполные бюллетени: сравниваются только общие варианты
+    partial = {"a": ["B", "C", "D"], "b": ["A", "C", "D"], "c": ["A", "B", "D"]}
+    a = agreement(partial)
+    assert a["tau"] == 1.0 and a["pairs"] == 3
+    assert agreement({"a": ["A"]}) is None
+
+
+def test_chair_without_own_proposal():
+    cfg = make_cfg(chair_proposes=False)
+    client = MockClient(delay=0)
+    events = []
+    res = run(Council(cfg, client, seed=1, on_event=lambda e, **d: events.append((e, d))).run("Вопрос?"))
+    stages = {(c["meta"]["member"], c["meta"]["stage"]) for c in client.calls}
+    assert ("a", "proposal") not in stages and ("a", "revision") not in stages
+    assert ("a", "critique") in stages and ("a", "vote") in stages and ("a", "verdict") in stages
+    assert "a" not in res.authors.values() and len(res.proposals) == 3
+    assert len(res.ballots["a"].ranking) == 3  # председатель ранжирует все варианты
+    assert res.chair_proposed is False and res.to_dict()["agreement"] is not None
+    assert any(e == "stage" and d.get("stage") == "proposal" and d.get("chair_proposes") is False for e, d in events)
+    # системная инструкция председателя — роль судьи, а не участника со своим вариантом
+    from council import prompts
+    assert "do not submit a proposal" in prompts.system("a", "Russian", chair=True, judge_only=True)
+
+
+def test_chair_proposes_when_quorum_needs_it():
+    cfg = make_cfg(chair_proposes=False, members=[{"name": n, "model": f"m/{n}"} for n in ("a", "b")])
+    client = MockClient(delay=0)
+    res = run(Council(cfg, client, seed=1).run("Вопрос?"))
+    assert "a" in res.authors.values() and res.chair_proposed is True
+
+
+def test_prompts_keep_original_request_and_format():
+    from council import prompts
+    from council.schemas import Proposal
+    original = "Сравни варианты.\nФОРМАТ ОТВЕТА: 1) таблица; 2) вывод."
+    p = prompts.proposal("Какой вариант лучше?", ["Цена"], None, original)
+    assert "ФОРМАТ ОТВЕТА" in p and "follow it exactly" in p
+    assert "original request" not in prompts.proposal("Q", ["Цена"], None, "Q")  # не дублируем одинаковое
+    props = {"A": Proposal(title="t", summary="s")}
+    c = prompts.critique("Какой вариант лучше?", ["Цена"], props, original)
+    assert "9-10: excellent" in c and "not length or style" in c and "ФОРМАТ ОТВЕТА" in c
+    v = prompts.verdict("Какой вариант лучше?", ["Цена"], props, "1. A: borda=1.00", "", original, "low (tau = 0.10)")
+    assert "ФОРМАТ ОТВЕТА" in v and "Do not drop requested sections" in v and "copy them exactly" in v
+    assert "Council agreement on the ranking: low" in v

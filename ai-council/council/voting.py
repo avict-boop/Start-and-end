@@ -104,6 +104,32 @@ class TallyRow:
     avg_score: float | None  # средняя оценка в критике 1..10
     first_places: int
     ballots: int
+    pairwise: float = 0.0  # попарные сравнения (Копленд): побед минус поражений над другими вариантами
+    tie_break: str = ""    # чем решена ничья по Борда с вариантом ниже: pairwise | critique | label
+
+
+EPS = 1e-9
+
+
+def pairwise_scores(candidates: list[str], ballots: dict[str, list[str]]) -> dict[str, float]:
+    """Счёт Копленда по бюллетеням: для каждой пары X, Y — кто выше в большинстве бюллетеней, где есть оба.
+
+    Победа = +1, поражение = −1, равенство = 0. Бюллетени неполные (без своего варианта),
+    поэтому пара сравнивается только там, где встречаются оба варианта.
+    """
+    pos = [{l: i for i, l in enumerate(r)} for r in ballots.values()]
+    score = {c: 0.0 for c in candidates}
+    for i, x in enumerate(candidates):
+        for y in candidates[i + 1:]:
+            x_up = sum(1 for p in pos if x in p and y in p and p[x] < p[y])
+            y_up = sum(1 for p in pos if x in p and y in p and p[y] < p[x])
+            if x_up > y_up:
+                score[x] += 1
+                score[y] -= 1
+            elif y_up > x_up:
+                score[y] += 1
+                score[x] -= 1
+    return score
 
 
 def tally(
@@ -114,7 +140,8 @@ def tally(
     """Нормированный подсчёт Борда: в каждом бюллетене 1-е место = 1, последнее = 0.
 
     Нормировка нужна, потому что участник не голосует за себя и бюллетени имеют разную длину.
-    При равенстве решает средняя оценка критики, затем метка.
+    При равенстве Борда решают попарные сравнения (кто выше в большинстве общих бюллетеней),
+    затем средняя оценка критики, затем метка.
     """
     points: dict[str, list[float]] = {c: [] for c in candidates}
     firsts = {c: 0 for c in candidates}
@@ -131,6 +158,7 @@ def tally(
         for r in cs.reviews:
             if r.label in scores and r.scores:
                 scores[r.label].append(mean(r.scores.values()))
+    pair = pairwise_scores(candidates, ballots)
 
     rows = [
         TallyRow(
@@ -139,16 +167,70 @@ def tally(
             avg_score=mean(scores[c]) if scores[c] else None,
             first_places=firsts[c],
             ballots=len(points[c]),
+            pairwise=pair[c],
         )
         for c in candidates
     ]
-    rows.sort(key=lambda r: (-r.borda, -(r.avg_score or 0), r.label))
+    rows.sort(key=lambda r: (-round(r.borda, 9), -r.pairwise, -(r.avg_score or 0), r.label))
+    for a, b in zip(rows, rows[1:]):
+        if abs(a.borda - b.borda) < EPS:
+            a.tie_break = ("pairwise" if a.pairwise != b.pairwise else
+                           "critique" if (a.avg_score or 0) != (b.avg_score or 0) else "label")
     return rows
+
+
+TIE_NAME = {"pairwise": "попарное сравнение", "critique": "оценка критики", "label": "жребий (метка)"}
+
+
+def agreement(ballots: dict[str, list[str]]) -> dict | None:
+    """Согласие совета: средний коэффициент Кендалла τ между бюллетенями по общим вариантам.
+
+    τ = (согласных пар − несогласных пар) / все пары; 1 — одинаковый порядок, 0 — нет связи, −1 — обратный.
+    Классический W Кендалла не подходит: в каждом бюллетене нет своего варианта, поэтому сравниваем
+    бюллетени попарно только на общих вариантах (нужно хотя бы 2 общих).
+    """
+    lists = [r for r in ballots.values() if len(r) >= 2]
+    taus: list[float] = []
+    for i, a in enumerate(lists):
+        for b in lists[i + 1:]:
+            common = [l for l in a if l in b]
+            if len(common) < 2:
+                continue
+            pb = {l: k for k, l in enumerate(b)}
+            conc = disc = 0
+            for x in range(len(common)):
+                for y in range(x + 1, len(common)):
+                    if pb[common[x]] < pb[common[y]]:
+                        conc += 1
+                    else:
+                        disc += 1
+            taus.append((conc - disc) / (conc + disc))
+    if not taus:
+        return None
+    tau = mean(taus)
+    level = "high" if tau >= 0.6 else "medium" if tau >= 0.3 else "low"
+    return {"tau": round(tau, 3), "level": level, "pairs": len(taus), "ballots": len(lists)}
+
+
+AGREEMENT_NAME = {"high": "высокое", "medium": "среднее", "low": "низкое"}
+AGREEMENT_HINT = {
+    "high": "модели в основном одинаково упорядочили варианты — решение устойчиво",
+    "medium": "модели частично расходятся в оценке вариантов",
+    "low": "мнения совета разошлись — относитесь к решению осторожно и посмотрите особые мнения",
+}
+
+
+def agreement_text(a: dict | None) -> str:
+    if not a:
+        return "—"
+    return f"{AGREEMENT_NAME[a['level']]} (τ = {a['tau']:.2f})"
 
 
 def tally_text(rows: list[TallyRow]) -> str:
     lines = []
     for i, r in enumerate(rows, 1):
         avg = f"{r.avg_score:.1f}" if r.avg_score is not None else "—"
-        lines.append(f"{i}. {r.label}: borda={r.borda:.2f}, critique={avg}, first places={r.first_places}/{r.ballots}")
+        tie = f", tie broken by {r.tie_break}" if r.tie_break else ""
+        lines.append(f"{i}. {r.label}: borda={r.borda:.2f}, pairwise={r.pairwise:+.0f}, critique={avg}, "
+                     f"first places={r.first_places}/{r.ballots}{tie}")
     return "\n".join(lines)

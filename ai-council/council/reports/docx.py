@@ -444,7 +444,12 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
     meta = [("Дата", v.date), ("Режим", v.mode), ("Участники", ", ".join(v.members)),
             ("Критерии", ", ".join(v.criteria) or "—"), ("Стоимость", f"${v.cost:.4f}"),
             ("Длительность", v.duration)]
-    _meta_table(doc, meta[:3] if summary else meta)
+    meta = meta[:3] if summary else meta
+    if v.agreement_line:
+        meta.append(("Согласие совета", v.agreement_line))
+    if v.chair_note:
+        meta.append(("Роли", v.chair_note))
+    _meta_table(doc, meta)
     if not summary:
         toc_title = doc.add_paragraph().add_run("СОДЕРЖАНИЕ")  # не заголовок — иначе попадёт в само оглавление
         toc_title.bold = True
@@ -464,6 +469,10 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
             rr.font.size = Pt(9)
     else:
         _heading(doc, f"Решение совета: вариант {w} — {v.title(w)} ({v.author(w)})" if w else "Решение совета", 1)
+    if v.agreement_low:
+        wr = doc.add_paragraph().add_run(f"⚠️ Низкое согласие совета: {v.agreement_line}")
+        wr.bold = True
+        wr.font.color.rgb = RGBColor(0x7A, 0x4A, 0x00)
     add_markdown(doc, vd.get("final_answer", ""))
     if vd.get("why"):
         _heading(doc, "Почему", 3)
@@ -483,22 +492,30 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
 
     # Голосование
     _heading(doc, "Голосование", 1)
-    t = doc.add_table(rows=1, cols=6)
+    t = doc.add_table(rows=1, cols=7)
     t.style = "Table Grid"
-    for j, h in enumerate(["#", "Вариант", "Автор", "Борда (0–1)", "Оценка критики", "1-х мест"]):
+    for j, h in enumerate(["#", "Вариант", "Автор", "Борда (0–1)", "Попарно", "Оценка критики", "1-х мест"]):
         t.cell(0, j).paragraphs[0].add_run(h).bold = True
         _shade(t.cell(0, j), "F2F2F8")
     for i, row in enumerate(v.tally, 1):
         l = row.get("label", "")
         avg = row.get("avg_score")
         cells = t.add_row().cells
-        vals = [str(i), f"{l}: {v.title(l)}", v.author(l), f"{float(row.get('borda') or 0):.2f}",
+        vals = [str(i), f"{l}: {v.title(l)}", v.author(l), f"{float(row.get('borda') or 0):.2f}", v.pairwise_str(row),
                 "—" if avg is None else f"{avg:.1f}", f"{row.get('first_places', 0)}/{row.get('ballots', 0)}"]
         for c, val in zip(cells, vals):
             c.paragraphs[0].add_run(val).bold = (l == w) or None
             if l == w:
                 _shade(c, "FFF6D8")
-    _widths(t, [0.8, 6.6, 2.6, 2.2, 2.2, 1.6])
+    _widths(t, [0.8, 5.6, 2.4, 2.0, 1.8, 2.0, 1.4])
+    note = doc.add_paragraph().add_run("Порядок: балл Борда; при равенстве — попарное сравнение (побед минус поражений), "
+                                       "затем оценка критики." + (f" Согласие совета: {v.agreement_line}." if v.agreement_line else ""))
+    note.font.size = Pt(8.5)
+    note.font.color.rgb = MUTED
+    for tn in v.tie_notes:
+        r = doc.add_paragraph().add_run("• " + tn)
+        r.font.size = Pt(8.5)
+        r.font.color.rgb = MUTED
     if v.ballots:
         _heading(doc, "Бюллетени", 3)
         for voter, b in v.ballots.items():

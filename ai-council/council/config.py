@@ -45,6 +45,9 @@ class CouncilConfig(BaseModel):
     json_retries: int = 2
     max_concurrency: int = 8
     chair: str
+    # Предлагает ли председатель свой вариант. False — председатель только ставит задачу, критикует,
+    # голосует и пишет итог (нет конфликта «автор и судья»). Если без него вариантов меньше кворума — предлагает.
+    chair_proposes: bool = False
     devil_advocate: str | None = None
     runs_dir: str = "runs"
     branding: BrandingConfig = Field(default_factory=BrandingConfig)
@@ -112,6 +115,7 @@ def with_overrides(
     chair: str | None = None,
     devil_advocate: str | None = None,  # "" — убрать адвоката дьявола, None — оставить как есть
     budget: float | None = None,
+    chair_proposes: bool | None = None,
 ) -> CouncilConfig:
     """Возвращает копию конфига с выбранными участниками/ролями/бюджетом, проверяя результат."""
     from pydantic import ValidationError
@@ -134,6 +138,8 @@ def with_overrides(
         data["devil_advocate"] = None
     if budget:
         data["max_cost_usd"] = budget
+    if chair_proposes is not None:
+        data["chair_proposes"] = chair_proposes
     try:
         return CouncilConfig.model_validate(data)
     except ValidationError as e:

@@ -84,20 +84,24 @@ def plan_calls(
 ) -> dict[str, list[tuple[str, int]]]:
     """Сколько вызовов каждого этапа сделает каждый участник: name -> [(stage, n_proposals)]."""
     members = [m.name for m in cfg.active_members]
-    n = n_options or len(members)
+    # председатель без своего варианта, если без него хватает участников для кворума (как в session.Council)
+    judge = not n_options and not cfg.chair_proposes and len(members) - 1 >= cfg.min_quorum
+    proposers = [m for m in members if not (judge and m == cfg.chair)]
+    n = n_options or len(proposers)
     own = 0 if n_options else 1  # своего варианта участник не оценивает
     critique_rounds = 0 if mode == "quick" else (1 if mode == "evaluate" else rounds)
     plan: dict[str, list[tuple[str, int]]] = {name: [] for name in members}
     if not has_criteria:
         plan[cfg.chair].append(("framing", 0))
     for name in members:
-        if not n_options:
+        mine = own if name in proposers else 0
+        if not n_options and name in proposers:
             plan[name].append(("proposal", 0))
         for _ in range(critique_rounds):
-            plan[name].append(("critique", n - own))
-            if mode == "debate":
-                plan[name].append(("revision", n - own))
-        plan[name].append(("vote", n - own))
+            plan[name].append(("critique", n - mine))
+            if mode == "debate" and name in proposers:
+                plan[name].append(("revision", n - mine))
+        plan[name].append(("vote", n - mine))
     plan[cfg.chair].append(("verdict", n))
     return plan
 

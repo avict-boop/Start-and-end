@@ -89,6 +89,9 @@
           <select id="devil"></select>
         </label>
       </div>
+      <label class="check small" title="По умолчанию председатель не предлагает свой вариант: он ставит задачу, оценивает, голосует и пишет итог — так он не судит собственный вариант.">
+        <input id="chairProposes" type="checkbox"> Председатель тоже предлагает свой вариант
+      </label>
 
       <div class="row2">
         <label class="field">
@@ -209,6 +212,7 @@
           </div>
           <div id="downloads" class="downloads" hidden></div>
         </div>
+        <div id="vAgreeWarn" class="agree-warn" hidden></div>
         <div id="vAnswer" class="md"></div>
         <div class="verdict-grid">
           <div><h3>Почему</h3><div id="vWhy" class="md"></div></div>
@@ -224,6 +228,7 @@
       <section id="tallySec" class="card" hidden>
         <h2>Итоги голосования</h2>
         <div class="table-wrap"><table id="tally" class="table"></table></div>
+        <p id="tallyNote" class="muted small"></p>
         <div id="ballots" class="ballots"></div>
       </section>
 

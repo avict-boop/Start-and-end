@@ -471,3 +471,9 @@ body.modal-open { overflow: hidden; }
   .brand { font-size: .9rem; gap: .45rem; line-height: 1.15; }
   .topbar-right button { padding: .4rem .5rem; }
 }
+
+/* согласие совета */
+.agree-warn { background: color-mix(in srgb, #e9a23b 14%, transparent); border: 1px solid color-mix(in srgb, #e9a23b 55%, transparent);
+  border-radius: 8px; padding: .45rem .7rem; margin: .4rem 0 .8rem; font-size: .9rem; }
+#tallyNote { margin: .6rem 0 0; line-height: 1.5; }
+label.check.small:has(#chairProposes) { display: flex; gap: .45rem; align-items: center; margin: -.2rem 0 .8rem; color: var(--muted); }

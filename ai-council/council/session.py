@@ -18,6 +18,7 @@ from .attachments import Attachment, documents_block, image_parts, images_note
 from .schemas import Ballot, CritiqueSet, Framing, ImageNotes, Proposal, Revision, Verdict
 from .voting import (
     TallyRow,
+    agreement,
     assign_labels,
     extract_json,
     normalize_critique,
@@ -75,6 +76,8 @@ class SessionResult:
     followup_of: str = ""                                             # id заседания, к которому это уточнение
     request: dict[str, Any] = field(default_factory=dict)             # исходные настройки запуска (для «Повторить»)
     thread: list[dict[str, Any]] = field(default_factory=list)        # предыдущие вопросы и решения цепочки
+    agreement: dict[str, Any] | None = None                           # согласие совета (средний τ Кендалла)
+    chair_proposed: bool = True                                       # был ли у председателя свой вариант
 
     @property
     def total_cost(self) -> float:
@@ -104,6 +107,8 @@ class SessionResult:
             "followup_of": self.followup_of,
             "request": self.request,
             "thread": self.thread,
+            "agreement": self.agreement,
+            "chair_proposed": self.chair_proposed,
             "transcript": self.transcript,
         }
 
@@ -132,6 +137,7 @@ class Council:
         self.image_notes: dict[str, str] = {}
         self.image_notes_by = ""
         self.history: list[dict[str, Any]] = []
+        self.chair_judge = False  # председатель без своего варианта (только судья и автор итога)
 
     # ------------------------------------------------------------------ helpers
 
@@ -183,6 +189,7 @@ class Council:
             self.cfg.language,
             devil=member.name == self.cfg.devil_advocate and stage in {"proposal", "critique", "revision"},
             chair=member.name == self.cfg.chair and stage in {"framing", "verdict"},
+            judge_only=self.chair_judge,
         )
         base_messages = [{"role": "system", "content": system},
                          {"role": "user", "content": content or self._with_attachments(member, stage, user_prompt)}]
@@ -394,13 +401,23 @@ class Council:
                 for l, opt in zip(authors, options)
             }
         else:
-            self._emit("stage", stage="proposal", title="Независимые предложения")
+            # Председатель по умолчанию не предлагает свой вариант (нет конфликта «автор и судья»),
+            # если без него хватает участников для кворума.
+            proposers = members
+            if not self.cfg.chair_proposes:
+                others_ = [m for m in members if m.name != chair.name]
+                if len(others_) >= self.cfg.min_quorum:
+                    proposers = others_
+                    self.chair_judge = True
+            self._emit("stage", stage="proposal", title="Независимые предложения",
+                       chair_proposes=not self.chair_judge)
             got = await self._parallel(
                 "proposal",
-                {m.name: self._ask(m, "proposal", prompts.proposal(refined, criteria, context), Proposal) for m in members},
+                {m.name: self._ask(m, "proposal", prompts.proposal(refined, criteria, context, question), Proposal)
+                 for m in proposers},
             )
             if len(got) < self.cfg.min_quorum:
-                raise CouncilError(f"нет кворума: ответили {len(got)} из {len(members)}, нужно {self.cfg.min_quorum}")
+                raise CouncilError(f"нет кворума: ответили {len(got)} из {len(proposers)}, нужно {self.cfg.min_quorum}")
             labels = assign_labels(list(got), self.rng)
             authors = dict(labels)
             proposals = {l: got[name] for l, name in labels.items()}
@@ -425,7 +442,7 @@ class Council:
                 jobs[m.name] = self._ask(
                     m,
                     "critique",
-                    prompts.critique(refined, criteria, target),
+                    prompts.critique(refined, criteria, target, question),
                     CritiqueSet,
                     check=lambda cs, e=expected: normalize_critique(cs, e, criteria),
                     meta={"labels": expected, "criteria": criteria},
@@ -450,7 +467,7 @@ class Council:
                 jobs[m.name] = self._ask(
                     m,
                     "revision",
-                    prompts.revision(refined, criteria, own, proposals[own], feedback, others(m.name)),
+                    prompts.revision(refined, criteria, own, proposals[own], feedback, others(m.name), question),
                     Revision,
                     meta={"label": own},
                 )
@@ -480,8 +497,10 @@ class Council:
                 meta={"labels": expected},
             )
         ballots = await self._parallel("vote", jobs)
-        rows = tally(list(proposals), {n: b.ranking for n, b in ballots.items()}, critiques)
-        self._emit("tally", rows=rows, authors=authors)
+        rankings = {n: b.ranking for n, b in ballots.items()}
+        rows = tally(list(proposals), rankings, critiques)
+        agree = agreement(rankings)
+        self._emit("tally", rows=rows, authors=authors, agreement=agree)
 
         # 6. Синтез решения председателем
         self._emit("stage", stage="verdict", title="Итоговое решение председателя")
@@ -498,7 +517,9 @@ class Council:
             verdict = await self._ask(
                 chair,
                 "verdict",
-                prompts.verdict(refined, criteria, proposals, tally_text(rows), notes),
+                prompts.verdict(refined, criteria, proposals, tally_text(rows), notes, question,
+                                (f"{agree['level']} (mean Kendall tau between ballots = {agree['tau']:.2f}; "
+                                 "1 = identical rankings, 0 = unrelated)") if agree else ""),
                 Verdict,
                 check=check_verdict,
                 meta={"labels": valid, "leader": rows[0].label},
@@ -536,6 +557,8 @@ class Council:
             image_notes_by=self.image_notes_by,
             followup_of=followup_of,
             thread=self.history,
+            agreement=agree,
+            chair_proposed=not self.chair_judge and mode != "evaluate",
         )
 
 

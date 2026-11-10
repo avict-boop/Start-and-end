@@ -113,7 +113,7 @@ def _on_event(event: str, **d) -> None:
             console.print(f"  [bold]{label}[/] → {p.title}")
     elif event == "tally":
         t = Table(title="Итоги голосования")
-        for col in ("#", "Вариант", "Автор", "Борда", "Критика", "1-х мест"):
+        for col in ("#", "Вариант", "Автор", "Борда", "Попарно", "Критика", "1-х мест"):
             t.add_column(col)
         for i, r in enumerate(d["rows"], 1):
             t.add_row(
@@ -121,10 +121,16 @@ def _on_event(event: str, **d) -> None:
                 r.label,
                 d["authors"].get(r.label) or "пользователь",
                 f"{r.borda:.2f}",
+                f"{r.pairwise:+.0f}",
                 f"{r.avg_score:.1f}" if r.avg_score is not None else "—",
                 f"{r.first_places}/{r.ballots}",
             )
         console.print(t)
+        a = d.get("agreement")
+        if a:
+            from .voting import AGREEMENT_HINT, agreement_text
+            color = {"high": "green", "medium": "yellow", "low": "red"}[a["level"]]
+            console.print(f"Согласие совета: [{color}]{agreement_text(a)}[/] — {AGREEMENT_HINT[a['level']]}")
 
 
 def _read_options(args) -> list[str] | None:
@@ -213,6 +219,8 @@ async def _ask(args) -> int:
     cfg = load_config(args.config)
     if args.budget:
         cfg.max_cost_usd = args.budget
+    if args.chair_proposes:
+        cfg.chair_proposes = True
     if args.only:
         wanted = {n.strip() for n in args.only.split(",") if n.strip()}
         unknown = wanted - {m.name for m in cfg.members}
@@ -302,7 +310,8 @@ async def _ask(args) -> int:
                 res.request = {"question": question, "mode": mode, "rounds": rounds, "criteria": criteria or [],
                                "options": options or [], "context": context or "",
                                "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
-                               "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd}
+                               "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
+                               "chair_proposes": cfg.chair_proposes}
             finally:
                 tick.cancel()
                 _live.status = None
@@ -464,6 +473,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="приложить файл: картинку, PDF, Word, Excel, текст (можно несколько раз)")
     a.add_argument("--only", help="участвуют только эти участники, через запятую")
     a.add_argument("--budget", type=float, help="лимит стоимости заседания в $")
+    a.add_argument("--chair-proposes", action="store_true",
+                   help="председатель тоже предлагает свой вариант (по умолчанию — только ставит задачу, оценивает и пишет итог)")
     a.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
     a.add_argument("--seed", type=int, help="seed для перемешивания меток")
     a.add_argument("--mock", action="store_true", help="прогон без ключа на фейковых ответах")

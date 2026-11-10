@@ -73,7 +73,8 @@ class Recorder(MockClient):
 
 
 def test_models_get_images_or_descriptions():
-    cfg = CouncilConfig.model_validate({"chair": "a", "members": [{"name": n, "model": f"m/{n}"} for n in "abc"]})
+    cfg = CouncilConfig.model_validate({"chair": "a", "chair_proposes": True,
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "abc"]})
     client = Recorder()
     atts = [load_attachment(png(), "график.png"), load_attachment(docx_bytes(), "бриф.docx")]
     assign_files(atts)
