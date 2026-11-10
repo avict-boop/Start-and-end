@@ -176,6 +176,7 @@ class OpenRouterClient:
         wait = 0.0
         attempt = 0
         credit_waits = 0
+        empty_runs = 0  # ответы, целиком ушедшие в скрытые рассуждения
         while attempt < self.max_retries + 1:
             attempt += 1
             if attempt > 1 or credit_waits:  # о каждом повторе сообщаем, даже если ждать не нужно
@@ -212,10 +213,22 @@ class OpenRouterClient:
             text, finish = res["text"], res["finish"]
             if not text.strip():
                 limit = payload["max_tokens"]
-                if finish in ("length", "max_tokens", "MAX_TOKENS") and limit < self.max_tokens_cap:
-                    payload["max_tokens"] = min(limit * 2, self.max_tokens_cap)
-                    last_error = (f"пустой ответ: модель израсходовала лимит {limit} токенов на рассуждения, "
-                                  f"повтор с лимитом {payload['max_tokens']}")
+                if finish in ("length", "max_tokens", "MAX_TOKENS"):
+                    # «Думающая» модель потратила весь лимит на скрытые рассуждения и не начала ответ.
+                    # Просто поднимать лимит бесполезно — она рассуждает ещё дольше (и это оплачивается).
+                    # Поэтому вместе с лимитом ограничиваем сами рассуждения, оставляя место для ответа.
+                    empty_runs += 1
+                    if empty_runs > 2:
+                        raise ProviderError(
+                            f"{model}: модель тратит весь лимит на скрытые рассуждения и не даёт ответа даже при "
+                            "ограничении рассуждений. В «Настройки → Участники» поставьте этому участнику "
+                            "«Глубина рассуждений: не задавать» или «низкая», либо выберите другую модель.",
+                            spent=spent)
+                    payload["max_tokens"] = min(max(limit * 2, 4000), self.max_tokens_cap)
+                    budget = max(1024, payload["max_tokens"] // 2) if empty_runs == 1 else 2048
+                    payload["reasoning"] = {"max_tokens": budget}
+                    last_error = (f"пустой ответ: модель израсходовала лимит {limit} токенов на скрытые рассуждения — "
+                                  f"повтор с лимитом {payload['max_tokens']}, рассуждения ограничены {budget} токенами")
                     wait = 0.0  # повторяем сразу (причина уйдёт в событие retry)
                 else:
                     last_error = f"пустой ответ модели (finish_reason={finish}, лимит {limit} токенов)"

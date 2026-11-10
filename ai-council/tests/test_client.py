@@ -206,3 +206,37 @@ def test_balance():
 
     assert asyncio.run(make(handler).balance()) == 12.5
     assert asyncio.run(make(lambda req: httpx.Response(500)).balance()) is None
+
+
+def test_reasoning_runaway_gets_thinking_budget_then_clear_error():
+    """Случай deepseek-v4.1-flash: каждый раз весь лимит уходит в рассуждения — не жжём попытки бесконечно."""
+    bodies = []
+
+    def handler(req):
+        bodies.append(json.loads(req.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                                         "usage": {"cost": 0.01}})
+
+    c = OpenRouterClient("k", transport=httpx.MockTransport(handler), max_retries=5, retry_base_delay=0,
+                         max_tokens_cap=32000)
+    with pytest.raises(ProviderError, match="скрытые рассуждения") as e:
+        asyncio.run(c.complete("deepseek/x", [], temperature=0, max_tokens=8000, reasoning_effort="low"))
+    assert len(bodies) == 3  # не 6: после двух ограничений рассуждений — понятная ошибка
+    assert bodies[0]["reasoning"] == {"effort": "low"}
+    assert bodies[1]["max_tokens"] == 16000 and bodies[1]["reasoning"] == {"max_tokens": 8000}
+    assert bodies[2]["max_tokens"] == 32000 and bodies[2]["reasoning"] == {"max_tokens": 2048}
+    assert "Глубина рассуждений" in str(e.value) and e.value.spent.cost == pytest.approx(0.03)
+
+
+def test_thinking_budget_lets_model_answer():
+    bodies = []
+
+    def handler(req):
+        bodies.append(json.loads(req.content))
+        if len(bodies) == 1:
+            return httpx.Response(200, json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                                             "usage": {"cost": 0.01}})
+        return httpx.Response(200, json=ok_body("ответ"))
+
+    comp = asyncio.run(make(handler).complete("m", [], temperature=0, max_tokens=8000, reasoning_effort="low"))
+    assert comp.text == "ответ" and bodies[1]["reasoning"] == {"max_tokens": 8000}

@@ -59,8 +59,12 @@ def setup_logging(runs_dir: str | Path, name: str, *, console: bool = True) -> P
         sh.setFormatter(_Redacting("%(asctime)s %(levelname)s %(name)s: %(message)s"))
         sh.setLevel(logging.WARNING)
         root.addHandler(sh)
-    for noisy in ("httpx", "httpcore", "uvicorn.access", "weasyprint", "fontTools"):
+    for noisy in ("httpx", "httpcore", "uvicorn.access"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    # WeasyPrint предупреждает о CSS для экрана (sticky, @media) и о способе встраивания шрифтов —
+    # на PDF это не влияет, а журнал засоряет. Настоящие ошибки сборки PDF остаются.
+    for noisy in ("weasyprint", "fontTools"):
+        logging.getLogger(noisy).setLevel(logging.ERROR)
     return path
 
 
