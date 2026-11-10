@@ -34,6 +34,18 @@ class TelegramAPI:
             timeout=httpx.Timeout(70, connect=15),
             transport=transport,
         )
+        self._file_base = f"{base_url}/file/bot{token}"
+
+    async def download(self, file_id: str) -> bytes:
+        """Скачивает файл, присланный пользователем (Bot API отдаёт файлы до 20 МБ)."""
+        info = await self.call("getFile", file_id=file_id)
+        path = (info or {}).get("file_path")
+        if not path:
+            raise TelegramError("getFile", "Telegram не отдал путь к файлу")
+        resp = await self._http.get(f"{self._file_base}/{path}")
+        if resp.status_code != 200:
+            raise TelegramError("download", f"HTTP {resp.status_code}")
+        return resp.content
 
     async def call(self, method: str, files: dict[str, tuple[str, bytes, str]] | None = None, **params: Any) -> Any:
         params = {k: v for k, v in params.items() if v is not None}

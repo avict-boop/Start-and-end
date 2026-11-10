@@ -19,9 +19,11 @@ from typing import Any
 
 from ..client import LLMClient, OpenRouterClient
 from ..config import CouncilConfig, OverrideError, load_config, with_overrides
-from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models
+from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models, vision_map
 from ..mock import MockClient
 from ..archive import MIME, Archive, all_reports, available_formats, download_name, key_of
+from ..attachments import (MAX_FILE_BYTES, MAX_FILES, Attachment, AttachmentError, assign_files, limit_total,
+                           load_attachment)
 from ..report import make_stem, save
 from ..session import Council, CouncilError, SessionResult
 from .api import TelegramAPI, TelegramError
@@ -39,6 +41,7 @@ COMMANDS = [
     ("settings", "режим, раунды, участники, демо"),
     ("budget", "лимит стоимости, напр. /budget 0.5"),
     ("archive", "архив заседаний и отчёты"),
+    ("clear", "убрать приложенные файлы"),
     ("stop", "остановить идущее заседание"),
     ("help", "как пользоваться"),
 ]
@@ -50,6 +53,7 @@ HELP = """<b>Совет нейросетей</b>
 • <code>/evaluate</code> — выбор из готовых вариантов: первая строка — вопрос, дальше по варианту на строку (или блоки через <code>---</code>).
 • /settings — режим, раунды, участники, демо-режим. Настройки запоминаются для чата.
 • /budget 0.5 — лимит стоимости одного заседания в $.
+• 📎 Файлы: пришлите фото, скриншот или документ (PDF, Word, Excel, текст) — с подписью-вопросом или перед вопросом. Убрать вложения: /clear
 • /archive — архив всех заседаний: отчёты в PDF, Word и Markdown. Поиск: <code>/archive кофейня</code>
 • /stop — остановить заседание.
 
@@ -76,6 +80,7 @@ class Pending:
     options: list[str] | None = None
     card_id: int | None = None
     view: str = "main"  # main | members
+    attachments: list[Attachment] = field(default_factory=list)
 
 
 @dataclass
@@ -232,6 +237,8 @@ class CouncilBot:
         self.running: dict[int, Running] = {}
         self.username = ""
         self.archive_query: dict[int, str] = {}
+        self.drafts: dict[int, list[Attachment]] = {}   # файлы, присланные до вопроса
+        self._album_replied: set[str] = set()
         cfg = self.base_config()
         self.runs_dir = Path(cfg.runs_dir) if Path(cfg.runs_dir).is_absolute() else self.config_path.parent / cfg.runs_dir
         self.settings_path = self.runs_dir / "telegram_settings.json"
@@ -347,6 +354,12 @@ class CouncilBot:
         chat_id = msg["chat"]["id"]
         user_id = (msg.get("from") or {}).get("id")
         private = msg["chat"].get("type") == "private"
+        if msg.get("photo") or msg.get("document"):
+            if user_id in self.allowed and (private or (msg.get("caption") or "").startswith("/ask")):
+                await self.on_file(msg)
+            elif user_id not in self.allowed and private:
+                await self.send(chat_id, f"⛔ Доступ к боту закрыт.\nВаш Telegram ID: <code>{user_id}</code>")
+            return
         if not text:
             return
         cmd, _, arg = text.partition(" ") if text.startswith("/") else ("", "", text)
@@ -377,6 +390,15 @@ class CouncilBot:
             await self.cmd_stop(chat_id)
         elif cmd == "/evaluate":
             await self.cmd_evaluate(chat_id, arg)
+        elif cmd == "/clear":
+            n = len(self.drafts.pop(chat_id, []))
+            p = self.pending.get(chat_id)
+            if p and p.attachments:
+                n += len(p.attachments)
+                p.attachments.clear()
+                text, markup = await self.card(chat_id, p)
+                await self.api.edit_message(chat_id, p.card_id, text, reply_markup=markup)
+            await self.send(chat_id, f"🗑 Вложения убраны ({n})." if n else "Вложений нет.")
         elif cmd == "/archive":
             self.archive_query[chat_id] = arg
             await self.show_archive(chat_id, arg, 0)
@@ -390,6 +412,51 @@ class CouncilBot:
                 await self.send(chat_id, "Неизвестная команда. /help — справка.")
         elif private:
             await self.new_question(chat_id, arg)
+
+    async def on_file(self, msg: dict[str, Any]) -> None:
+        """Фото или документ: прикладываем к вопросу (подпись = вопрос) или копим до вопроса."""
+        chat_id = msg["chat"]["id"]
+        if msg.get("photo"):
+            ph = max(msg["photo"], key=lambda x: x.get("file_size") or x.get("width", 0) * x.get("height", 0))
+            file_id, name, size = ph["file_id"], f"фото-{msg.get('message_id', 0)}.jpg", ph.get("file_size") or 0
+        else:
+            doc = msg["document"]
+            file_id, name, size = doc["file_id"], doc.get("file_name") or "документ", doc.get("file_size") or 0
+        if size > MAX_FILE_BYTES:
+            await self.send(chat_id, f"⚠️ «{esc(name)}» больше {MAX_FILE_BYTES // 1024 // 1024} МБ — Telegram не отдаёт ботам такие файлы.")
+            return
+        draft = self.pending[chat_id].attachments if chat_id in self.pending else self.drafts.setdefault(chat_id, [])
+        if len(draft) >= MAX_FILES:
+            await self.send(chat_id, f"⚠️ Можно приложить не больше {MAX_FILES} файлов.")
+            return
+        try:
+            data = await self.api.download(file_id)
+            att = await asyncio.to_thread(load_attachment, data, name)
+        except (TelegramError, AttachmentError) as e:
+            await self.send(chat_id, f"⚠️ Не удалось принять «{esc(name)}»: {esc(getattr(e, 'description', None) or e)}")
+            return
+        draft.append(att)
+        warn = f"\n⚠️ {esc(att.warning)}" if att.warning else ""
+        caption = (msg.get("caption") or "").strip()
+        if caption.startswith("/ask"):
+            caption = caption[4:].strip()
+        if caption:  # подпись к файлу — это и есть вопрос
+            await self.new_question(chat_id, caption)
+            return
+        p = self.pending.get(chat_id)
+        if p and p.card_id:  # вопрос уже есть — обновляем карточку
+            text, markup = await self.card(chat_id, p)
+            await self.api.edit_message(chat_id, p.card_id, text, reply_markup=markup)
+            if warn:
+                await self.send(chat_id, f"📎 «{esc(att.name)}» добавлен к вопросу.{warn}")
+            return
+        group = msg.get("media_group_id")
+        if group and group in self._album_replied and not warn:
+            return  # на альбом отвечаем один раз
+        if group:
+            self._album_replied.add(group)
+        await self.send(chat_id, f"📎 Принял «{esc(att.name)}» (всего вложений: {len(draft)}).{warn}\n"
+                                 "Теперь напишите вопрос — или пришлите ещё файлы. Убрать вложения: /clear")
 
     async def cmd_budget(self, chat_id: int, arg: str) -> None:
         s = self.chat_settings(chat_id)
@@ -444,7 +511,7 @@ class CouncilBot:
                 await self.api.edit_message(chat_id, old.card_id, "<i>Вопрос заменён новым.</i>")
             except TelegramError:
                 pass
-        p = Pending(question=question[:20000], options=options)
+        p = Pending(question=question[:20000], options=options, attachments=self.drafts.pop(chat_id, []))
         self.pending[chat_id] = p
         text, markup = await self.card(chat_id, p)
         msg = await self.send(chat_id, text, reply_markup=markup)
@@ -458,6 +525,8 @@ class CouncilBot:
         lines = ["🏛 <b>Вопрос для совета</b>", esc(p.question[:1500])]
         if p.options:
             lines += ["", "<b>Варианты:</b>"] + [f"{chr(65 + i)}. {esc(o[:200])}" for i, o in enumerate(p.options)]
+        if p.attachments:
+            lines += ["", f"📎 <b>Вложения ({len(p.attachments)}):</b> " + ", ".join(esc(a.name) for a in p.attachments)]
         problem = None
         try:
             cfg = self.build_config(s)
@@ -484,6 +553,8 @@ class CouncilBot:
         n = len(cfg.active_members) if cfg else 0
         kb.append([self._btn(f"👥 Участники ({n})", "view:members"),
                    self._btn(f"🧪 Демо: {'вкл' if s.demo else 'выкл'}", "demo")])
+        if p.attachments:
+            kb.append([self._btn(f"🗑 Убрать вложения ({len(p.attachments)})", "noatt")])
         kb.append([self._btn("▶️ Начать", "go"), self._btn("✖️ Отмена", "drop")])
         return "\n".join(lines), {"inline_keyboard": kb}
 
@@ -517,8 +588,16 @@ class CouncilBot:
                     problem = "На OpenRouter нет моделей: " + "; ".join(
                         m + (f" (возможно: {', '.join(sim)})" if sim else "") for m, sim in missing.items()
                     ) + ". Исправьте config.yaml или снимите участника."
+        models = None if s.demo else await self.catalog.get()
+        vision = vision_map(cfg, models)
+        imgs = sum(1 for a in p.attachments if a.kind == "image")
         est = estimate(cfg, pricing, mode=mode, rounds=s.rounds,
-                       n_options=len(p.options) if p.options else None, has_criteria=False)
+                       n_options=len(p.options) if p.options else None, has_criteria=False,
+                       doc_tokens=sum(a.tokens for a in p.attachments if a.kind == "document"),
+                       images=imgs, vision=vision)
+        blind = [m.name for m in cfg.active_members if vision.get(m.model) is False]
+        if imgs and blind and not problem:
+            problem = f"ℹ️ {', '.join(blind)} не видят картинки — им передадут их описание."
         if s.demo:
             line = f"<b>Стоимость:</b> демо-режим, бесплатно ({est.calls} вызовов)"
         elif pricing:
@@ -581,7 +660,9 @@ class CouncilBot:
             await self.api.answer_callback(cq["id"], "Отменено")
             await self.api.edit_message(chat_id, p.card_id, f"<s>{esc(p.question[:500])}</s>\n<i>Отменено.</i>")
             return
-        if kind == "mode" and value in ("debate", "quick"):
+        if kind == "noatt":
+            p.attachments.clear()
+        elif kind == "mode" and value in ("debate", "quick"):
             s.mode = value
         elif kind == "rounds" and value.isdigit():
             s.rounds = max(1, min(5, int(value)))
@@ -637,13 +718,18 @@ class CouncilBot:
             updater = asyncio.create_task(self._updater(chat_id, stop_kb))
             stem = make_stem(p.question)
             try:
-                council = Council(cfg, client, on_event=on_event)
-                res = await council.run(p.question, options=p.options, mode=mode, rounds=s.rounds)
+                atts = p.attachments
+                assign_files(atts)
+                for w in limit_total(atts):
+                    await self.send(chat_id, f"⚠️ {esc(w)}")
+                vision = vision_map(cfg, None if s.demo else await self.catalog.get())
+                council = Council(cfg, client, on_event=on_event, vision=vision)
+                res = await council.run(p.question, options=p.options, mode=mode, rounds=s.rounds, attachments=atts)
                 progress.saving = True
                 r = self.running.get(chat_id)
                 if r:
                     r.dirty = True
-                await asyncio.to_thread(save, res, self.runs_dir, stem)
+                await asyncio.to_thread(save, res, self.runs_dir, stem, atts)
                 updater.cancel()
                 await self._safe_edit(chat_id, msg["message_id"], progress.render(final="✅ <b>Заседание завершено</b>"))
                 await self.send_result(chat_id, res, stem)

@@ -197,6 +197,22 @@ JSON format:
 {{"winner": "A", "final_answer": "...", "why": "...", "dissent": ["..."], "risks": ["..."]}}"""
 
 
+def describe_images(question: str, names: list[str]) -> str:
+    listed = "\n".join(f"- {n}" for n in names)
+    return f"""The user attached images to a question for the council. Some council members cannot see images,
+so they will rely ONLY on your description. Describe every image exhaustively and objectively:
+transcribe all visible text verbatim, all numbers, table contents (as rows), chart axes and values,
+diagram elements and their connections, important visual details. Do not answer the question itself.
+
+User question (for context): {question}
+
+Images, in the order they are attached:
+{listed}
+
+JSON format:
+{{"images": [{{"name": "exact image name", "description": "detailed description"}}]}}"""
+
+
 def fix_json(error: str) -> str:
     return f"""Your previous reply could not be accepted: {error}
 Reply again with ONE valid JSON object in the required format, and nothing else."""

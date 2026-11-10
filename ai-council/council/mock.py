@@ -71,6 +71,9 @@ class MockClient:
                     for l in meta["labels"]
                 ]
             }
+        elif stage == "describe":
+            out = {"images": [{"name": n, "description": f"Описание (демо): на картинке «{n}» таблица с цифрами."}
+                              for n in meta.get("images", [])]}
         elif stage == "vote":
             ranking = sorted(meta["labels"], key=lambda l: _h(l) % 100)  # общий «вкус» у всех → консенсус
             out = {"ranking": ranking, "rationale": f"{ranking[0]} лучше всего соответствует критериям."}

@@ -14,7 +14,8 @@ from rich.table import Table
 
 from .client import OpenRouterClient
 from .config import load_config, load_dotenv
-from .estimate import estimate, parse_pricing, unknown_models
+from .attachments import MAX_FILES, AttachmentError, assign_files, human_size, limit_total, load_attachment
+from .estimate import estimate, parse_pricing, unknown_models, vision_map
 from .mock import MockClient
 from .report import save
 from .session import Council, CouncilError
@@ -140,12 +141,13 @@ def _make_client(cfg, mock: bool, *, need_key: bool = True):
                             max_tokens_cap=cfg.max_tokens_cap)
 
 
-async def _preflight(client, cfg, args, *, mode, rounds, options, criteria) -> int | None:
+async def _preflight(client, cfg, args, *, mode, rounds, options, criteria, attachments=()) -> int | None:
     """Проверяет модели на OpenRouter, показывает оценку стоимости и спрашивает подтверждение.
 
     Возвращает код выхода, если запускать заседание не нужно, иначе None.
     """
     pricing: dict = {}
+    models: list = []
     if not args.mock:
         try:
             models = await client.list_models()
@@ -164,8 +166,16 @@ async def _preflight(client, cfg, args, *, mode, rounds, options, criteria) -> i
                               "или исключите участника через --only.")
                 return 2
 
+    args.vision = vision_map(cfg, models or None)
+    imgs = sum(1 for a in attachments if a.kind == "image")
     est = estimate(cfg, pricing, mode=mode, rounds=rounds,
-                   n_options=len(options) if options else None, has_criteria=bool(criteria))
+                   n_options=len(options) if options else None, has_criteria=bool(criteria),
+                   doc_tokens=sum(a.tokens for a in attachments if a.kind == "document"),
+                   images=imgs, vision=args.vision)
+    blind = [m.name for m in cfg.active_members if args.vision.get(m.model) is False]
+    if imgs and blind:
+        console.print(f"[dim]Не видят картинки: {', '.join(blind)} — им передадут описание, "
+                      "которое заранее сделает одна из «зрячих» моделей.[/]")
     t = Table(title=f"План заседания: режим {mode}" + (f", раундов {rounds}" if mode == "debate" else ""))
     for col in ("Участник", "Модель", "Вызовов", "Токены ~вход/выход", "Стоимость ~"):
         t.add_column(col)
@@ -219,14 +229,32 @@ async def _ask(args) -> int:
                         + f"\nЛимит бюджета: ${cfg.max_cost_usd:.2f}" + ("\n[yellow]MOCK-режим[/]" if args.mock else ""),
                         title="Совет нейросетей"))
     options = _read_options(args)
+    atts = []
+    for f in args.file or []:
+        try:
+            p = Path(f)
+            atts.append(load_attachment(p.read_bytes(), p.name))
+        except (OSError, AttachmentError) as e:
+            console.print(f"[red]Не удалось приложить {f}:[/] {e}")
+            return 2
+    if len(atts) > MAX_FILES:
+        console.print(f"[red]Можно приложить не больше {MAX_FILES} файлов[/]")
+        return 2
+    assign_files(atts)
+    for w in limit_total(atts):
+        console.print(f"[yellow]{w}[/]")
+    for a in atts:
+        extra = f" [yellow]— {a.warning}[/]" if a.warning else ""
+        console.print(f"📎 {a.name} ({a.kind}, {human_size(a.size)}){extra}")
     mode = "evaluate" if options else (args.mode or cfg.mode)
     rounds = args.rounds if args.rounds is not None else cfg.debate_rounds
     client = _make_client(cfg, args.mock, need_key=not args.dry_run)
     try:
-        go = await _preflight(client, cfg, args, mode=mode, rounds=rounds, options=options, criteria=criteria)
+        go = await _preflight(client, cfg, args, mode=mode, rounds=rounds, options=options, criteria=criteria,
+                              attachments=atts)
         if go is not None:
             return go
-        council = Council(cfg, client, on_event=_on_event, seed=args.seed)
+        council = Council(cfg, client, on_event=_on_event, seed=args.seed, vision=getattr(args, "vision", None))
 
         async def ticker() -> None:  # секундомеры в живой строке идут, даже пока модели молчат
             while True:
@@ -244,6 +272,7 @@ async def _ask(args) -> int:
                     context=context,
                     mode=mode,
                     rounds=rounds,
+                    attachments=atts,
                 )
             finally:
                 tick.cancel()
@@ -267,7 +296,7 @@ async def _ask(args) -> int:
     if not runs_dir.is_absolute():
         runs_dir = PROJECT_DIR / runs_dir
     with console.status("Готовлю отчёты: PDF, Word и Markdown…", spinner="dots"):
-        paths = save(res, runs_dir)
+        paths = save(res, runs_dir, attachments=atts)
     console.print(f"\nСтоимость: [bold]${res.total_cost:.4f}[/], время: {res.duration_s} с")
     for fmt, title in (("pdf", "PDF"), ("docx", "Word"), ("md", "Markdown"), ("summary.pdf", "Только итог (PDF)"),
                        ("summary.docx", "Только итог (Word)"), ("json", "Стенограмма")):
@@ -373,6 +402,8 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--option", action="append", help="готовый вариант для оценки (можно несколько раз)")
     a.add_argument("--options-file", help="файл с вариантами, разделёнными строкой ---")
     a.add_argument("--context-file", help="файл с дополнительным контекстом")
+    a.add_argument("--file", action="append", metavar="ПУТЬ",
+                   help="приложить файл: картинку, PDF, Word, Excel, текст (можно несколько раз)")
     a.add_argument("--only", help="участвуют только эти участники, через запятую")
     a.add_argument("--budget", type=float, help="лимит стоимости заседания в $")
     a.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))

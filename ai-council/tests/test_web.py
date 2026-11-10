@@ -153,3 +153,40 @@ def test_password_protection(tmp_path, monkeypatch):
         sid = c.post("/api/sessions", json={"question": "Вопрос?", "mock": True},
                      headers=auth("boss", "s3cret-pass")).json()["id"]
         assert c.get(f"/api/sessions/{sid}/events").status_code == 401
+
+
+def test_uploads_and_session_with_attachments(client, tmp_path):
+    import io
+    from PIL import Image
+    b = io.BytesIO()
+    Image.new("RGB", (800, 600), "blue").save(b, "JPEG")
+    r = client.post("/api/uploads?name=схема.jpg", content=b.getvalue())
+    assert r.status_code == 200
+    img = r.json()
+    assert img["kind"] == "image" and img["thumb"].startswith("data:image/jpeg") and len(img["id"]) == 16
+    doc = client.post("/api/uploads?name=заметки.txt", content="Выручка: 10 млн".encode()).json()
+    assert client.post("/api/uploads?name=x.exe", content=b"MZ").status_code == 400
+    assert client.post("/api/sessions", json={"question": "Вопрос?", "mock": True,
+                                              "attachments": ["0123456789abcdef"]}).status_code == 400
+    est = client.post("/api/estimate", json={"question": "Вопрос?", "mock": True, "attachments": [img["id"], doc["id"]]}).json()
+    assert est["calls"] > 0
+    sid = client.post("/api/sessions", json={"question": "Что на схеме?", "mock": True, "mode": "quick",
+                                             "attachments": [img["id"], doc["id"]]}).json()["id"]
+    events = read_events(client, sid)
+    att_ev = next(e for e in events if e["type"] == "attachments")
+    assert [a["name"] for a in att_ev["items"]] == ["схема.jpg", "заметки.txt"]
+    files = {a["name"]: a["file"] for a in att_ev["items"]}
+    f = client.get(f"/api/sessions/{sid}/files/{files['схема.jpg']}")
+    assert f.status_code == 200 and f.headers["content-type"] == "image/jpeg" and f.content[:2] == b"\xff\xd8"
+    assert client.get(f"/api/sessions/{sid}/files/..%2F..%2Fconfig.yaml").status_code == 404
+    assert client.get(f"/api/sessions/{sid}/files/not-listed.txt").status_code == 404
+    # черновики удалены, вложения — в архиве заседания и в отчёте
+    runs = tmp_path / "runs"
+    assert not any((runs / ".uploads").iterdir())
+    assert (runs / f"{sid}.files" / files["заметки.txt"]).read_text(encoding="utf-8") == "Выручка: 10 млн"
+    md = client.get(f"/api/sessions/{sid}/report?format=md").text
+    assert "Вложения (2)" in md and "схема.jpg" in md
+    replay = read_events(client, sid)  # повторное открытие (из архива) тоже показывает вложения
+    assert any(e["type"] == "attachments" for e in replay)
+    assert client.delete(f"/api/sessions/{sid}").json() == {"ok": True}
+    assert not (runs / f"{sid}.files").exists()

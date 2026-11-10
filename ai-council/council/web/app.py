@@ -22,9 +22,11 @@ from pydantic import BaseModel, Field
 
 from ..client import OpenRouterClient
 from ..config import CouncilConfig, Mode, OverrideError, load_config, with_overrides
-from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models
+from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models, vision_map
 from ..mock import MockClient
 from ..archive import MIME, Archive, available_formats, download_name, report_kind
+from ..attachments import (ACCEPT, MAX_FILE_BYTES, MAX_FILES, AttachmentError, assign_files, human_size,
+                           limit_total, load_attachment, safe_name)
 from ..report import make_stem, save
 from ..session import Council, CouncilError
 from .auth import BasicAuth
@@ -58,6 +60,10 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
          "members": list(d.get("stats", {})), "rounds": None},
         {"type": "framing", "refined_question": d.get("refined_question", d["question"]), "criteria": d["criteria"]},
     ]
+    if d.get("attachments"):
+        ev.insert(1, {"type": "attachments", "items": d["attachments"], "blind": []})
+        if d.get("image_notes"):
+            ev.insert(2, {"type": "image_notes", "by": d.get("image_notes_by", ""), "notes": d["image_notes"]})
     if d["mode"] != "evaluate":
         ev.append({"type": "stage", "stage": "proposal", "title": "Независимые предложения"})
     ev.append({"type": "proposals", "proposals": d["initial_proposals"], "authors": d["authors"]})
@@ -95,6 +101,7 @@ class RunRequest(BaseModel):
     devil_advocate: str | None = None  # "" — без адвоката дьявола
     budget: float | None = Field(default=None, gt=0, le=100)
     mock: bool = False
+    attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)  # id загрузок
 
     @property
     def clean_options(self) -> list[str] | None:
@@ -140,6 +147,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     async def lifespan(_app: FastAPI):
         # отчёты PDF/DOCX/MD для заседаний, проведённых до обновления программы
         archive().ensure_all_in_background()
+        cleanup_uploads()
         yield
 
     app = FastAPI(title="Совет нейросетей", docs_url="/api/docs", lifespan=lifespan)
@@ -171,6 +179,92 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             archives[d] = Archive(d)
         return archives[d]
 
+    UPLOAD_ID = re.compile(r"^[0-9a-f]{16}$")
+
+    def uploads_dir() -> Path:
+        return runs_dir(base_config()) / ".uploads"
+
+    def cleanup_uploads(max_age: float = 24 * 3600) -> None:
+        """Черновые загрузки, к которым так и не запустили заседание, удаляются через сутки."""
+        import shutil
+        d = uploads_dir()
+        if not d.is_dir():
+            return
+        for p in d.iterdir():
+            try:
+                if time.time() - p.stat().st_mtime > max_age:
+                    shutil.rmtree(p, ignore_errors=True)
+            except OSError:
+                pass
+
+    def upload_meta(att, uid: str) -> dict[str, Any]:
+        m = att.meta()
+        m.update(id=uid, label=f"{att.name} — {human_size(att.size)}", tokens=att.tokens)
+        if att.kind == "image":
+            from io import BytesIO
+            import base64
+            from PIL import Image
+            img = Image.open(BytesIO(base64.b64decode(att.image_b64)))
+            img.thumbnail((160, 160))
+            buf = BytesIO()
+            img.convert("RGB").save(buf, "JPEG", quality=75)
+            m["thumb"] = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+        return m
+
+    def load_uploads(ids: list[str]) -> list:
+        atts = []
+        for uid in ids:
+            if not UPLOAD_ID.match(uid):
+                raise HTTPException(400, "неверный идентификатор вложения")
+            folder = uploads_dir() / uid
+            meta_p = folder / "meta.json"
+            if not meta_p.is_file():
+                raise HTTPException(400, "вложение не найдено — загрузите файл ещё раз")
+            meta = json.loads(meta_p.read_text(encoding="utf-8"))
+            try:
+                atts.append(load_attachment((folder / "data").read_bytes(), meta["name"]))
+            except AttachmentError as e:
+                raise HTTPException(400, str(e)) from e
+        return atts
+
+    @app.post("/api/uploads")
+    async def upload(request: Request, name: str = "file") -> dict[str, Any]:
+        """Загрузка одного файла (тело запроса — содержимое файла). Возвращает описание для формы."""
+        import secrets
+        name = safe_name(name)
+        data = await request.body()
+        if len(data) > MAX_FILE_BYTES:
+            raise HTTPException(413, f"«{name}» больше {MAX_FILE_BYTES // 1024 // 1024} МБ")
+        try:
+            att = await asyncio.to_thread(load_attachment, data, name)
+        except AttachmentError as e:
+            raise HTTPException(400, str(e)) from e
+        uid = secrets.token_hex(8)
+        folder = uploads_dir() / uid
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "data").write_bytes(data)
+        (folder / "meta.json").write_text(json.dumps({"name": att.name}, ensure_ascii=False), encoding="utf-8")
+        return await asyncio.to_thread(upload_meta, att, uid)
+
+    @app.delete("/api/uploads/{uid}")
+    async def delete_upload(uid: str) -> dict[str, Any]:
+        import shutil
+        if UPLOAD_ID.match(uid):
+            shutil.rmtree(uploads_dir() / uid, ignore_errors=True)
+        return {"ok": True}
+
+    @app.get("/api/sessions/{sid}/files/{file}")
+    async def session_file(sid: str, file: str) -> FileResponse:
+        try:
+            path = archive().attachment(sid, file)
+        except KeyError as e:
+            raise HTTPException(404, "файл не найден") from e
+        import mimetypes
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        inline = mime.startswith("image/") or mime == "application/pdf"
+        return FileResponse(path, media_type=mime, filename=path.name.split("-", 1)[-1],
+                            content_disposition_type="inline" if inline else "attachment")
+
     def find_file(sid: str, ext: str) -> Path:
         if not ID_RE.match(sid):
             raise HTTPException(404, "заседание не найдено")
@@ -185,6 +279,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     async def get_config() -> dict[str, Any]:
         cfg = base_config()
         return {
+            "upload": {"accept": ACCEPT, "max_files": MAX_FILES, "max_mb": MAX_FILE_BYTES // 1024 // 1024},
             "members": [{"name": m.name, "model": m.model, "enabled": m.enabled} for m in cfg.members],
             "chair": cfg.chair,
             "devil_advocate": cfg.devil_advocate,
@@ -201,6 +296,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         warning = None
         pricing: dict = {}
         missing: dict[str, list[str]] = {}
+        models = None
         if not req.mock:
             models = await catalog.get()
             if models is None:
@@ -210,8 +306,17 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 missing = unknown_models(cfg, set(pricing))
         opts = req.clean_options
         rounds = cfg.debate_rounds if req.rounds is None else req.rounds
+        atts = await asyncio.to_thread(load_uploads, req.attachments) if req.attachments else []
+        vision = vision_map(cfg, models)
         est = estimate(cfg, pricing, mode="evaluate" if opts else req.mode, rounds=rounds,
-                       n_options=len(opts) if opts else None, has_criteria=bool(req.clean_criteria))
+                       n_options=len(opts) if opts else None, has_criteria=bool(req.clean_criteria),
+                       doc_tokens=sum(a.tokens for a in atts if a.kind == "document"),
+                       images=sum(1 for a in atts if a.kind == "image"), vision=vision)
+        blind = [m.name for m in cfg.active_members if vision.get(m.model) is False]
+        if any(a.kind == "image" for a in atts) and blind:
+            note = (f"Модели без зрения ({', '.join(blind)}) получат описание картинок, "
+                    f"которое заранее сделает одна из «зрячих» моделей.")
+            warning = f"{warning} {note}" if warning else note
         return {
             "members": [dataclasses.asdict(m) for m in est.members],
             "calls": est.calls,
@@ -228,6 +333,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         opts = req.clean_options
         if req.mode == "evaluate" and (not opts or len(opts) < 2):
             raise HTTPException(400, "для оценки нужно минимум 2 варианта")
+        atts = await asyncio.to_thread(load_uploads, req.attachments) if req.attachments else []
+        assign_files(atts)
+        att_warnings = limit_total(atts)
+        vision = vision_map(cfg, None if req.mock else await catalog.get())
         if req.mock:
             client = MockClient(delay=mock_delay)
         else:
@@ -251,11 +360,17 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 
         async def execute() -> None:
             try:
-                council = Council(cfg, client, on_event=on_event)
+                council = Council(cfg, client, on_event=on_event, vision=vision)
+                for w in att_warnings:
+                    st.push({"type": "member_failed", "stage": "attachments", "member": "вложения", "error": w})
                 res = await council.run(req.question, criteria=req.clean_criteria, options=opts,
-                                        context=req.context or None, mode=req.mode, rounds=rounds)
+                                        context=req.context or None, mode=req.mode, rounds=rounds,
+                                        attachments=atts)
                 st.push({"type": "saving"})
-                await asyncio.to_thread(save, res, runs_dir(cfg), sid)
+                await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts)
+                import shutil
+                for uid in req.attachments:  # черновики больше не нужны: файлы уже в архиве заседания
+                    shutil.rmtree(uploads_dir() / uid, ignore_errors=True)
                 st.status = "done"
                 st.push({"type": "done", "id": sid, "total_cost": res.total_cost, "duration_s": res.duration_s,
                          "stats": jsonable(res.stats)})

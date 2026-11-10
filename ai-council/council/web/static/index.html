@@ -27,6 +27,16 @@
       </label>
 
       <div class="field">
+        <span>Вложения <em>(картинки, PDF, Word, Excel, текст)</em></span>
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Добавить файлы">
+          <input id="fileInput" type="file" multiple hidden>
+          <div>📎 Перетащите файлы сюда, вставьте скриншот <kbd>Ctrl</kbd>+<kbd>V</kbd> или нажмите, чтобы выбрать</div>
+          <div class="hint" id="uploadHint"></div>
+        </div>
+        <ul id="attList" class="att-list"></ul>
+      </div>
+
+      <div class="field">
         <span>Режим</span>
         <div class="segmented" id="modeSeg" role="radiogroup">
           <button type="button" data-mode="debate" role="radio">Дебаты</button>
@@ -143,6 +153,7 @@
               <div id="sQueryBody" class="query-body md"></div>
               <button id="sQueryToggle" type="button" class="link" hidden>Показать запрос полностью</button>
             </div>
+            <div id="sAtts" class="s-atts" hidden></div>
             <div id="sRefined" class="muted"></div>
             <div id="sCriteria" class="chips"></div>
           </div>

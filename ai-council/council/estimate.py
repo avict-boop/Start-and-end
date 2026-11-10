@@ -19,6 +19,7 @@ TOKENS = {
     "verdict": (900, 850, 1500, 0),
 }
 HIGH_FACTOR = 2.5
+ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}  # как в session.Council
 
 
 @dataclass
@@ -109,22 +110,58 @@ def estimate(
     rounds: int,
     n_options: int | None = None,
     has_criteria: bool = False,
+    doc_tokens: int = 0,
+    images: int = 0,
+    vision: dict[str, bool | None] | None = None,
 ) -> Estimate:
+    """doc_tokens/images — объём вложений: они добавляются к запросам этапов, где модели видят материалы."""
+    from .attachments import IMAGE_TOKENS
+
     est = Estimate()
     plan = plan_calls(cfg, mode, rounds, n_options, has_criteria)
+    vision = vision or {}
+    blind = [m for m in cfg.active_members if vision.get(m.model) is False]
+    describer = None
+    if images and blind:
+        seers = [m.name for m in cfg.active_members if vision.get(m.model) is not False]
+        describer = cfg.chair if cfg.chair in seers else (seers[0] if seers else None)
     for member in cfg.active_members:
         me = MemberEstimate(member.name, member.model)
+        sees = vision.get(member.model) is not False
+        att = doc_tokens + (images * IMAGE_TOKENS if sees else images * 350)  # «незрячим» — описание текстом
         for stage, n in plan[member.name]:
             ib, ip, ob, op = TOKENS[stage]
             me.calls += 1
-            me.prompt_tokens += ib + ip * n
+            me.prompt_tokens += ib + ip * n + (att if stage in ATTACHMENT_STAGES else 0)
             me.completion_tokens += min(ob + op * n, member.max_tokens or cfg.max_tokens)
+        if member.name == describer:
+            me.calls += 1
+            me.prompt_tokens += 500 + images * IMAGE_TOKENS
+            me.completion_tokens += 400 * images
         price = pricing.get(member.model)
         me.cost = (
             me.prompt_tokens * price.prompt + me.completion_tokens * price.completion if price else None
         )
         est.members.append(me)
     return est
+
+
+# Запасной вариант, если каталог OpenRouter недоступен: известные модели без зрения
+_BLIND_HINTS = ("deepseek", "kimi-k2", "qwen3-max", "mistral-large")
+
+
+def vision_map(cfg: CouncilConfig, models: list[dict[str, Any]] | None) -> dict[str, bool | None]:
+    """Модель -> умеет ли принимать картинки (по каталогу OpenRouter; без каталога — по известным названиям)."""
+    from .attachments import supports_images
+
+    info = {m.get("id"): m for m in (models or [])}
+    out: dict[str, bool | None] = {}
+    for m in cfg.active_members:
+        v = supports_images(info.get(m.model))
+        if v is None and any(h in m.model for h in _BLIND_HINTS):
+            v = False
+        out[m.model] = v
+    return out
 
 
 class ModelCatalog:

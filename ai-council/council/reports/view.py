@@ -22,6 +22,57 @@ STAGE_NAME = {"framing": "Постановка", "proposal": "Предложен
 class View:
     d: dict[str, Any]
     stem: str = ""
+    files_dir: Any = None  # папка с вложениями заседания (Path) — для картинок в отчёте
+
+    @property
+    def attachments(self) -> list[dict[str, Any]]:
+        return list(self.d.get("attachments") or [])
+
+    @property
+    def image_notes(self) -> dict[str, str]:
+        return dict(self.d.get("image_notes") or {})
+
+    def attachment_label(self, m: dict[str, Any]) -> str:
+        """«отчёт.pdf — PDF, 12 стр., 340 КБ» и т. п."""
+        from ..attachments import human_size
+        bits = []
+        if m.get("kind") == "image":
+            bits.append(f"картинка {m.get('width')}×{m.get('height')}" if m.get("width") else "картинка")
+        else:
+            bits.append(str(m.get("name", "")).rsplit(".", 1)[-1].upper())
+            if m.get("pages"):
+                bits.append(f"{m['pages']} стр.")
+            if m.get("chars"):
+                bits.append(f"{m['chars']:,} симв.".replace(",", " ") + (" (обрезан)" if m.get("truncated") else ""))
+        bits.append(human_size(int(m.get("size") or 0)))
+        return f"{m.get('name', '')} — " + ", ".join(bits)
+
+    def thumb_data_url(self, meta: dict[str, Any], max_side: int = 900) -> str:
+        """Уменьшенная копия картинки для отчёта (data URL) или пустая строка."""
+        data = self.attachment_bytes(meta)
+        if not data:
+            return ""
+        import base64
+        import io
+        try:
+            from PIL import Image, ImageOps
+            img = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
+            img.thumbnail((max_side, max_side))
+            out = io.BytesIO()
+            img.convert("RGB").save(out, "JPEG", quality=82)
+            return "data:image/jpeg;base64," + base64.b64encode(out.getvalue()).decode("ascii")
+        except Exception:  # noqa: BLE001 — битая картинка не должна ломать отчёт
+            return ""
+
+    def attachment_bytes(self, meta: dict[str, Any]) -> bytes | None:
+        if not self.files_dir:
+            return None
+        from pathlib import Path
+        p = Path(self.files_dir) / str(meta.get("file", ""))
+        try:
+            return p.read_bytes() if p.is_file() else None
+        except OSError:
+            return None
 
     # ------------------------------------------------------------ основное
     @property

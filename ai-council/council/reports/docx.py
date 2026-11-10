@@ -300,6 +300,44 @@ def render_docx(view: View, summary: bool = False) -> bytes:
         r.font.size = Pt(8)
         r.font.color.rgb = MUTED
         add_markdown(doc, v.question, breaks=True)
+    if v.attachments:
+        lab = doc.add_paragraph()
+        r = lab.add_run(f"ВЛОЖЕНИЯ ({len(v.attachments)})")
+        r.bold = True
+        r.font.size = Pt(8)
+        r.font.color.rgb = MUTED
+        for m in v.attachments:
+            par = doc.add_paragraph()
+            par.paragraph_format.left_indent = Pt(18)
+            par.paragraph_format.first_line_indent = Pt(-12)
+            par.paragraph_format.space_after = Pt(1)
+            par.add_run("•  " + v.attachment_label(m))
+            if m.get("warning"):
+                w_run = par.add_run(f" — {m['warning']}")
+                w_run.font.color.rgb = RGBColor(0xA0, 0x5A, 0x00)
+        if not summary:
+            from docx.shared import Cm
+            import base64
+            for m in v.attachments:
+                if m.get("kind") != "image":
+                    continue
+                url = v.thumb_data_url(m, 1200)
+                if not url:
+                    continue
+                pic = io.BytesIO(base64.b64decode(url.split(",", 1)[1]))
+                try:
+                    doc.add_picture(pic, width=Cm(min(14.0, 14.0 * (m.get("width") or 1200) / 1200)))
+                    cap = doc.add_paragraph().add_run(str(m.get("name", "")))
+                    cap.font.size = Pt(8)
+                    cap.font.color.rgb = MUTED
+                except Exception:  # noqa: BLE001
+                    pass
+            if v.image_notes:
+                _heading(doc, f"Описание изображений (сделал {v.d.get('image_notes_by') or 'модель'})", 3)
+                for n, t in v.image_notes.items():
+                    par = doc.add_paragraph()
+                    par.add_run(f"{n}: ").bold = True
+                    inline_markdown(par, t)
     if v.refined:
         p = doc.add_paragraph()
         p.add_run("Уточнённая постановка: ").bold = True

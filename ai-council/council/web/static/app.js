@@ -12,7 +12,7 @@ const STAGES = [
   ["vote", "Голосование"],
   ["verdict", "Вердикт"],
 ];
-const STAGE_NAME = Object.fromEntries(STAGES);
+const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения" };
 const MODE_HINT = {
   debate: "Предложения → критика → доработка → голосование → вердикт. Для важных решений.",
   quick: "Предложения → голосование → вердикт. Быстро и дёшево.",
@@ -166,8 +166,83 @@ function payload() {
     devil_advocate: $("devil").value,
     budget: Number($("budget").value) || null,
     mock: $("mock").checked,
+    attachments: uploads.filter((u) => u.status === "ready").map((u) => u.meta.id),
   };
 }
+
+/* ------------------------------------------------------------ вложения в форме */
+
+let uploads = [];          // {key, name, status: uploading|ready|error, meta, error}
+let uploadCfg = { accept: [], max_files: 10, max_mb: 20 };
+let uploadSeq = 0;
+
+function extIcon(name) { return (String(name).split(".").pop() || "файл").slice(0, 4).toUpperCase(); }
+
+function renderUploads() {
+  $("attList").innerHTML = uploads.map((u) => {
+    const m = u.meta || {};
+    const ico = m.thumb ? `<img src="${m.thumb}" alt="">` : u.status === "uploading" ? "" : esc(extIcon(u.name));
+    let sub = "";
+    if (u.status === "uploading") sub = "загружаю и читаю…";
+    else if (u.status === "error") sub = u.error;
+    else {
+      const bits = [];
+      if (m.kind === "image") bits.push(`картинка ${m.width}×${m.height}`);
+      if (m.pages) bits.push(`${m.pages} стр.`);
+      if (m.kind === "document" && m.chars) bits.push(`${m.chars.toLocaleString("ru-RU")} симв.${m.truncated ? " (обрезан)" : ""}`);
+      bits.push(m.label ? m.label.split(" — ").pop() : "");
+      sub = bits.filter(Boolean).join(" · ");
+    }
+    const warn = m.warning ? `<div class="sub warn">⚠ ${esc(m.warning)}</div>` : "";
+    return `<li class="att ${u.status}"><div class="ico">${ico}</div>
+      <div><div class="nm" title="${esc(u.name)}">${esc(u.name)}</div><div class="sub">${esc(sub)}</div>${warn}</div>
+      <button type="button" class="rm" data-rm="${u.key}" aria-label="Убрать ${esc(u.name)}" title="Убрать">×</button></li>`;
+  }).join("");
+  $("estimate").hidden = true;
+}
+
+async function addFiles(files) {
+  for (const file of files) {
+    if (uploads.length >= uploadCfg.max_files) { showFormError(`Можно приложить не больше ${uploadCfg.max_files} файлов`); break; }
+    const u = { key: ++uploadSeq, name: file.name || `скриншот-${new Date().toLocaleTimeString("ru-RU").replace(/:/g, "-")}.png`, status: "uploading" };
+    if (file.size > uploadCfg.max_mb * 1024 * 1024) { u.status = "error"; u.error = `больше ${uploadCfg.max_mb} МБ`; uploads.push(u); continue; }
+    uploads.push(u);
+    renderUploads();
+    try {
+      const res = await fetch(`/api/uploads?name=${encodeURIComponent(u.name)}`, { method: "POST", body: file,
+        headers: { "Content-Type": file.type || "application/octet-stream" } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      u.status = "ready"; u.meta = data; u.name = data.name || u.name;
+    } catch (e) {
+      u.status = "error"; u.error = e.message;
+    }
+    renderUploads();
+  }
+}
+
+$("dropzone").addEventListener("click", () => $("fileInput").click());
+$("dropzone").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("fileInput").click(); } });
+$("fileInput").addEventListener("change", (e) => { addFiles([...e.target.files]); e.target.value = ""; });
+for (const ev of ["dragenter", "dragover"]) $("dropzone").addEventListener(ev, (e) => { e.preventDefault(); $("dropzone").classList.add("over"); });
+for (const ev of ["dragleave", "drop"]) $("dropzone").addEventListener(ev, () => $("dropzone").classList.remove("over"));
+$("dropzone").addEventListener("drop", (e) => { e.preventDefault(); addFiles([...(e.dataTransfer.files || [])]); });
+// вставка скриншота из буфера обмена — в любом месте формы
+$("form").addEventListener("paste", (e) => {
+  const stamp = () => new Date().toLocaleTimeString("ru-RU").replace(/:/g, "-");
+  // браузеры называют вставленный скриншот безлико («image.png») — даём понятное имя
+  const files = [...(e.clipboardData?.files || [])].map((f) => (/^image\.(png|jpe?g|gif|webp)$/i.test(f.name)
+    ? new File([f], `скриншот-${stamp()}.${f.name.split(".").pop()}`, { type: f.type }) : f));
+  if (files.length) { e.preventDefault(); addFiles(files); }
+});
+$("attList").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-rm]");
+  if (!b) return;
+  const u = uploads.find((x) => String(x.key) === b.dataset.rm);
+  uploads = uploads.filter((x) => x !== u);
+  if (u && u.meta && u.meta.id) fetch(`/api/uploads/${u.meta.id}`, { method: "DELETE" }).catch(() => {});
+  renderUploads();
+});
 
 function showFormError(msg) {
   $("formError").hidden = !msg;
@@ -208,6 +283,11 @@ async function doEstimate() {
 
 async function initForm() {
   config = await api("/api/config");
+  if (config.upload) {
+    uploadCfg = config.upload;
+    $("fileInput").accept = uploadCfg.accept.join(",");
+    $("uploadHint").textContent = `до ${uploadCfg.max_files} файлов, каждый до ${uploadCfg.max_mb} МБ`;
+  }
   $("members").innerHTML = config.members.map((m) => `
     <label class="member"><input type="checkbox" value="${esc(m.name)}" ${m.enabled ? "checked" : ""}>
       <b>${esc(m.name)}</b><code title="${esc(m.model)}">${esc(m.model)}</code></label>`).join("");
@@ -246,7 +326,9 @@ $("form").addEventListener("submit", async (ev) => {
       if (!renderEstimate(e)) return;
       if (e.low != null && !confirm(`Оценка стоимости: $${e.low.toFixed(3)} – $${e.high.toFixed(3)}. Начать заседание?`)) return;
     }
+    if (uploads.some((u) => u.status === "uploading")) return showFormError("Дождитесь окончания загрузки файлов");
     const { id } = await api("/api/sessions", { method: "POST", body: p });
+    uploads = []; renderUploads();  // файлы ушли в заседание
     openSession(id);
     loadHistory();
   } catch (e) {
@@ -337,6 +419,7 @@ async function loadArchive() {
   $("archiveList").innerHTML = items.map((it) => {
     const done = it.status === "done";
     const meta = [it.date, it.mode_name, it.members && it.members.length ? `участников: ${it.members.length}` : "",
+      it.attachments ? `📎 ${it.attachments}` : "",
       it.cost != null ? money(it.cost) : "", done ? "" : ({ running: "идёт…", error: "ошибка", cancelled: "остановлено" }[it.status] || "")]
       .filter(Boolean).map(esc).join(" · ");
     const actions = done
@@ -412,6 +495,7 @@ function newState(id) {
     tally: null, verdict: null, failures: [], cost: 0, done: null, error: null,
     startedAt: Date.now(), initial: {},
     calls: {}, log: [], stageStart: null, lastMsg: Date.now(), wrote: {},
+    attachments: [], blind: [], imageNotes: null, imageNotesBy: "",
   };
 }
 
@@ -442,6 +526,16 @@ const approxTokens = (chars) => Math.max(1, Math.round(chars / 3.2));
 function apply(s, ev) {
   switch (ev.type) {
     case "ping":
+      break;
+    case "attachments":
+      s.attachments = ev.items || [];
+      s.blind = ev.blind || [];
+      logAdd(s, `Вложения: ${s.attachments.map((a) => a.name).join(", ")}`
+        + (s.blind.length ? ` · без зрения: ${s.blind.join(", ")} — им опишут картинки` : ""));
+      break;
+    case "image_notes":
+      s.imageNotes = ev.notes || {}; s.imageNotesBy = ev.by;
+      logAdd(s, `${ev.by} описал(а) картинки для моделей без зрения`, "k-ok");
       break;
     case "saving":
       s.saving = true;
@@ -585,6 +679,7 @@ function render(s) {
     return `<li class="${cls}"><b>${name}</b>${esc(sub)}</li>`;
   }).join("");
 
+  renderAttachments(s);
   renderActivity(s);
 
   // участники
@@ -607,6 +702,35 @@ function render(s) {
   $("failures").innerHTML = s.failures.map((f) =>
     `<li><b>${esc(f.member)}</b> (${esc(STAGE_NAME[f.stage] || f.stage)}): ${esc(f.error)}</li>`).join("");
 }
+
+function renderAttachments(s) {
+  const box = $("sAtts");
+  box.hidden = !s.attachments.length;
+  if (!s.attachments.length) { box.innerHTML = ""; return; }
+  const saved = !!s.done || !s.stage && !s.error && s.verdict;  // файлы доступны после сохранения заседания
+  const html = s.attachments.map((a) => {
+    const url = `/api/sessions/${encodeURIComponent(s.id)}/files/${encodeURIComponent(a.file)}`;
+    const pic = a.kind === "image" && saved ? `<img src="${url}" alt="" loading="lazy">` : `<span class="ico">${esc(extIcon(a.name))}</span>`;
+    const title = esc(a.name) + (a.warning ? ` — ${esc(a.warning)}` : "");
+    return saved
+      ? `<a class="s-att" href="${url}" target="_blank" rel="noopener" title="${title}">${pic}<span>${esc(a.name)}</span></a>`
+      : `<span class="s-att" title="${title}">${pic}<span>${esc(a.name)}</span></span>`;
+  });
+  if (s.imageNotes && Object.keys(s.imageNotes).length) {
+    html.push(`<button type="button" class="s-att" id="notesBtn" title="Текстовое описание картинок, которое получили модели без зрения">📝 <span>Описание картинок</span></button>`);
+  }
+  box.innerHTML = html.join("");
+}
+
+$("sAtts").addEventListener("click", (e) => {
+  if (!e.target.closest("#notesBtn") || !current) return;
+  const notes = current.imageNotes || {};
+  openModal({
+    eyebrow: "Вложения", title: "Описание изображений",
+    sub: `Сделал(а) ${esc(current.imageNotesBy || "модель")} для моделей, которые не видят картинки: ${esc((current.blind || []).join(", ") || "—")}`,
+    tabs: [{ name: "Описание", html: Object.entries(notes).map(([n, t]) => `<h3>${esc(n)}</h3><div class="section">${md(t)}</div>`).join("") }],
+  });
+});
 
 const PHASE_TEXT = {
   queued: "в очереди — ждёт свободного слота",

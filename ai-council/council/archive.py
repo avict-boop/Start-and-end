@@ -92,7 +92,7 @@ class Archive:
         return json.loads(p.read_text(encoding="utf-8"))
 
     def view(self, stem: str) -> View:
-        return View(self.load(stem), stem)
+        return View(self.load(stem), stem, files_dir=self.files_dir(stem))
 
     def stems(self) -> list[str]:
         if not self.dir.is_dir():
@@ -118,6 +118,7 @@ class Archive:
                 "started_at": v.d.get("started_at"), "winner": w, "winner_title": v.title(w),
                 "winner_author": v.author(w) if w else "", "cost": round(v.cost, 4),
                 "members": v.members, "proposals": len(v.proposals), "status": "done",
+                "attachments": len(v.attachments),
             }
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
             log.warning("не удалось прочитать %s: %s", p.name, e)
@@ -159,7 +160,7 @@ class Archive:
 
     def build(self, stem: str, formats: list[str] | None = None, data: dict | None = None) -> dict[str, str]:
         """Создаёт отчёты. Возвращает {формат: путь или 'ошибка: …'}."""
-        view = View(data if data is not None else self.load(stem), stem)
+        view = View(data if data is not None else self.load(stem), stem, files_dir=self.files_dir(stem))
         result = {}
         for fmt in formats or all_reports():
             target = self.path(stem, fmt)
@@ -229,8 +230,29 @@ class Archive:
         t.start()
         return t
 
+    def files_dir(self, stem: str) -> Path:
+        return self.path(stem, "files")
+
+    def attachment(self, stem: str, file: str) -> Path:
+        """Путь к сохранённому вложению (только файлы из стенограммы, без выхода за папку)."""
+        metas = self.load(stem).get("attachments") or []
+        if file not in {m.get("file") for m in metas}:
+            raise KeyError(file)
+        p = self.files_dir(stem) / file
+        if not p.is_file() or p.resolve().parent != self.files_dir(stem).resolve():
+            raise KeyError(file)
+        return p
+
     def delete(self, stem: str) -> bool:
+        import shutil
+
         removed = False
+        try:
+            if self.files_dir(stem).is_dir():
+                shutil.rmtree(self.files_dir(stem))
+                removed = True
+        except (OSError, KeyError):
+            pass
         for ext in ("json", *RENDER):
             try:
                 self.path(stem, ext).unlink()

@@ -19,6 +19,13 @@ h1 { font-size: 15pt; line-height: 1.3; margin: 4px 0 8px; overflow-wrap: anywhe
 .query { border-left: 3px solid #c9c9e6; background: #f7f7fb; border-radius: 0 7px 7px 0; padding: 6px 12px; margin: 6px 0 10px; }
 .query-label { font-size: 8.5pt; text-transform: uppercase; letter-spacing: .06em; color: #6b6b80; font-weight: bold; margin-bottom: 2px; }
 .query .md p { margin: 3px 0; }
+.atts { margin: 4px 0 10px; font-size: 9.5pt; }
+.atts ul { margin: 2px 0; }
+.atts .warn { color: #a05a00; }
+.imgs { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.imgs figure { margin: 0; border: 1px solid #e0e0ea; border-radius: 6px; padding: 4px; max-width: 48%; page-break-inside: avoid; }
+.imgs img { max-width: 100%; max-height: 260px; display: block; }
+.imgs figcaption { font-size: 8.5pt; color: #6b6b80; margin-top: 2px; }
 h2 { font-size: 14pt; margin: 26px 0 10px; padding-bottom: 4px; border-bottom: 2px solid #e4e4ee; }
 h3 { font-size: 11.5pt; margin: 18px 0 6px; }
 h4 { font-size: 10.5pt; margin: 12px 0 4px; }
@@ -156,6 +163,26 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False) -> str:
     add(f"<h1>{_e(v.title_text)}</h1>")
     if v.question_is_long:
         add(f'<div class="query"><div class="query-label">Запрос</div><div class="md">{md_to_html(v.question, breaks=True)}</div></div>')
+    if v.attachments:
+        items = "".join(
+            f"<li>{_e(v.attachment_label(m))}"
+            + (f' <span class="warn">— {_e(m["warning"])}</span>' if m.get("warning") else "") + "</li>"
+            for m in v.attachments)
+        add(f'<div class="atts"><div class="query-label">Вложения ({len(v.attachments)})</div><ul>{items}</ul></div>')
+        imgs = [m for m in v.attachments if m.get("kind") == "image"] if not summary else []
+        figs = []
+        for m in imgs:
+            url = v.thumb_data_url(m)
+            if url:
+                figs.append(f'<figure><img src="{url}" alt="{_e(m.get("name"))}"><figcaption>{_e(m.get("name"))}</figcaption></figure>')
+        if figs:
+            add('<div class="imgs">' + "".join(figs) + "</div>")
+        notes = v.image_notes
+        if notes and not summary:
+            by = v.d.get("image_notes_by") or "модель"
+            add(f'<details open><summary class="small muted">Описание изображений для моделей без зрения (сделал {_e(by)})</summary>'
+                + "".join(f'<div class="small"><b>{_e(n)}:</b> {_inline(t)}</div>' for n, t in notes.items())
+                + "</details>")
     if v.refined:
         add(f'<div class="refined"><b>Уточнённая постановка:</b> {_e(v.refined)}</div>')
     add('<div class="meta">')

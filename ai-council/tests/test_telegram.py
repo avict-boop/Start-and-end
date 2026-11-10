@@ -19,6 +19,7 @@ class FakeTelegram:
         self.calls = []
         self.next_id = 100
         self.fail = {}
+        self.files = {}
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         method = request.url.path.rsplit("/", 1)[-1]
@@ -42,6 +43,10 @@ class FakeTelegram:
         if method in ("sendMessage", "sendDocument"):
             self.next_id += 1
             return httpx.Response(200, json={"ok": True, "result": {"message_id": self.next_id}})
+        if request.url.path.startswith("/file/"):
+            return httpx.Response(200, content=self.files.get(request.url.path.rsplit("/", 1)[-1], b""))
+        if method == "getFile":
+            return httpx.Response(200, json={"ok": True, "result": {"file_path": f"docs/{body['file_id']}"}})
         if method == "getUpdates":
             return httpx.Response(200, json={"ok": True, "result": []})
         if method == "getMe":
@@ -353,3 +358,49 @@ def test_progress_shows_each_model():
     assert "готово 1 из 3" in text and "❓ Длинный вопрос." in text
     assert "🤔 a — думает · 50 с" in text and "✍️ b — пишет ответ, ≈200 ток." in text and "✅ c — готово · 12 с" in text
     assert "процесс не завис" in text  # a думает дольше 40 с
+
+
+def test_files_from_telegram(env):
+    import io
+    from PIL import Image
+    bot, fake, tmp = env
+    b = io.BytesIO()
+    Image.new("RGB", (640, 480), "green").save(b, "JPEG")
+    fake.files["PHOTO1"] = b.getvalue()
+    fake.files["DOC1"] = "Бюджет: 1 млн".encode()
+
+    def photo(caption=None):
+        m = {"update_id": 5, "message": {"message_id": 7, "from": {"id": OWNER}, "chat": {"id": CHAT, "type": "private"},
+                                         "photo": [{"file_id": "small", "width": 90, "height": 90},
+                                                   {"file_id": "PHOTO1", "width": 640, "height": 480, "file_size": 9000}]}}
+        if caption:
+            m["message"]["caption"] = caption
+        return m
+
+    async def scenario():
+        await bot.handle_update(photo())               # фото без подписи — в черновик
+        assert "Теперь напишите вопрос" in fake.last("sendMessage")["text"] and len(bot.drafts[CHAT]) == 1
+        await bot.handle_update({"update_id": 6, "message": {"message_id": 8, "from": {"id": OWNER},
+                                 "chat": {"id": CHAT, "type": "private"},
+                                 "document": {"file_id": "DOC1", "file_name": "бриф.txt", "file_size": 20}}})
+        await bot.handle_update(msg("Что на фото и как это связано с брифом?"))
+        p = bot.pending[CHAT]
+        assert [a.name for a in p.attachments] == ["фото-7.jpg", "бриф.txt"] and CHAT not in bot.drafts
+        card = fake.last("sendMessage")
+        assert "Вложения (2)" in card["text"] and "noatt" in buttons(card)
+        await bot.handle_update(press("go", p.card_id))
+        await finish(bot)
+
+    asyncio.run(scenario())
+    saved = list((tmp / "runs").glob("*.files/*"))
+    assert sorted(x.name for x in saved) == ["01-фото-7.jpg", "02-бриф.txt"]
+    # фото с подписью — сразу вопрос; /clear убирает вложения
+    asyncio.run(bot.handle_update(photo("Это вопрос с картинкой")))
+    assert bot.pending[CHAT].question == "Это вопрос с картинкой" and len(bot.pending[CHAT].attachments) == 1
+    asyncio.run(bot.handle_update(msg("/clear")))
+    assert not bot.pending[CHAT].attachments and "Вложения убраны (1)" in fake.texts()[-1]
+    # чужой не может прислать файл
+    n = len(fake.texts())
+    asyncio.run(bot.handle_update({"update_id": 9, "message": {"message_id": 9, "from": {"id": STRANGER},
+                                   "chat": {"id": STRANGER, "type": "private"}, "photo": [{"file_id": "PHOTO1"}]}}))
+    assert "Доступ к боту закрыт" in fake.texts()[-1] and len(fake.texts()) == n + 1

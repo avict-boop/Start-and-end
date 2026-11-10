@@ -14,7 +14,8 @@ from pydantic import BaseModel
 from . import prompts
 from .client import Completion, LLMClient, ProviderError
 from .config import CouncilConfig, MemberConfig, Mode
-from .schemas import Ballot, CritiqueSet, Framing, Proposal, Revision, Verdict
+from .attachments import Attachment, documents_block, image_parts, images_note
+from .schemas import Ballot, CritiqueSet, Framing, ImageNotes, Proposal, Revision, Verdict
 from .voting import (
     TallyRow,
     assign_labels,
@@ -68,6 +69,9 @@ class SessionResult:
     transcript: list[dict[str, Any]]
     started_at: str
     duration_s: float
+    attachments: list[dict[str, Any]] = field(default_factory=list)  # описания вложений (без содержимого)
+    image_notes: dict[str, str] = field(default_factory=dict)         # картинка -> текстовое описание
+    image_notes_by: str = ""
 
     @property
     def total_cost(self) -> float:
@@ -91,6 +95,9 @@ class SessionResult:
             "total_cost_usd": self.total_cost,
             "started_at": self.started_at,
             "duration_s": self.duration_s,
+            "attachments": self.attachments,
+            "image_notes": self.image_notes,
+            "image_notes_by": self.image_notes_by,
             "transcript": self.transcript,
         }
 
@@ -103,7 +110,9 @@ class Council:
         *,
         on_event: EventHandler | None = None,
         seed: int | None = None,
+        vision: dict[str, bool | None] | None = None,
     ) -> None:
+        """vision: модель -> умеет ли принимать картинки (из каталога OpenRouter); неизвестно — пробуем."""
         self.cfg = config
         self.client = client
         self.on_event = on_event or (lambda *a, **k: None)
@@ -112,6 +121,10 @@ class Council:
         self.stats: dict[str, MemberStats] = {m.name: MemberStats() for m in config.active_members}
         self.transcript: list[dict[str, Any]] = []
         self._last_call_emit: dict[tuple[str, str], tuple[str, float]] = {}
+        self.vision = vision or {}
+        self.attachments: list[Attachment] = []
+        self.image_notes: dict[str, str] = {}
+        self.image_notes_by = ""
 
     # ------------------------------------------------------------------ helpers
 
@@ -156,6 +169,7 @@ class Council:
         *,
         check: Callable[[T], T] | None = None,
         meta: dict[str, Any] | None = None,
+        content: list[dict[str, Any]] | None = None,
     ) -> T:
         system = prompts.system(
             member.name,
@@ -163,7 +177,8 @@ class Council:
             devil=member.name == self.cfg.devil_advocate and stage in {"proposal", "critique", "revision"},
             chair=member.name == self.cfg.chair and stage in {"framing", "verdict"},
         )
-        base_messages = [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}]
+        base_messages = [{"role": "system", "content": system},
+                         {"role": "user", "content": content or self._with_attachments(member, stage, user_prompt)}]
         messages = list(base_messages)
         meta = {"stage": stage, "member": member.name, **(meta or {})}
         max_tokens = member.max_tokens or self.cfg.max_tokens
@@ -246,6 +261,52 @@ class Council:
         self._call(name, stage, "failed", started, detail=f"некорректный ответ: {error}"[:300])
         raise InvalidResponse(f"{member.name}: некорректный ответ после {self.cfg.json_retries + 1} попыток: {error}")
 
+    ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}
+
+    def can_see(self, member: MemberConfig) -> bool:
+        return self.vision.get(member.model) is not False
+
+    def _with_attachments(self, member: MemberConfig, stage: str, prompt: str) -> str | list[dict[str, Any]]:
+        """Добавляет к запросу вложения: текст документов и картинки (или их описание для «незрячих»)."""
+        if not self.attachments or stage not in self.ATTACHMENT_STAGES:
+            return prompt
+        sees = self.can_see(member)
+        extra = [x for x in (documents_block(self.attachments),
+                             images_note(self.attachments, self.image_notes, sees)) if x]
+        text = "\n\n".join(extra + [prompt])
+        parts = image_parts(self.attachments) if sees else []
+        if not parts:
+            return text
+        return [{"type": "text", "text": text}, *parts]
+
+    async def _describe_images(self, members: list[MemberConfig], question: str) -> None:
+        """Если среди участников есть модели без зрения — одна из «зрячих» описывает картинки текстом."""
+        images = [a for a in self.attachments if a.kind == "image"]
+        if not images or all(self.can_see(m) for m in members):
+            return
+        seers = [m for m in members if self.can_see(m)]
+        chair = next((m for m in seers if m.name == self.cfg.chair), None)
+        describer = chair or (seers[0] if seers else None)
+        if describer is None:
+            self._emit("member_failed", stage="describe", member="—",
+                       error="ни одна модель совета не умеет смотреть на изображения — картинки будут пропущены")
+            return
+        self._emit("stage", stage="describe", title="Описание изображений для моделей без зрения")
+        names = [a.name for a in images]
+        try:
+            # картинки передаём напрямую: этап describe не входит в ATTACHMENT_STAGES
+            notes = await self._ask(describer, "describe", "", ImageNotes,
+                                    meta={"images": names}, content=[{"type": "text", "text": prompts.describe_images(question, names)},
+                                                                     *image_parts(images)])
+        except (ProviderError, InvalidResponse) as e:
+            self._emit("member_failed", stage="describe", member=describer.name, error=str(e))
+            return
+        by_name = {n.name: n.description for n in notes.images}
+        for i, a in enumerate(images):  # модель могла переименовать — сопоставляем по порядку
+            self.image_notes[a.name] = by_name.get(a.name) or (notes.images[i].description if i < len(notes.images) else "")
+        self.image_notes_by = describer.name
+        self._emit("image_notes", by=describer.name, notes=self.image_notes)
+
     async def _parallel(self, stage: str, jobs: dict[str, Awaitable[T]]) -> dict[str, T]:
         """Запускает запросы параллельно; упавшие участники выбывают из этапа, бюджет — останавливает всё."""
         names = list(jobs)
@@ -276,6 +337,7 @@ class Council:
         context: str | None = None,
         mode: Mode | None = None,
         rounds: int | None = None,
+        attachments: list[Attachment] | None = None,
     ) -> SessionResult:
         mode = "evaluate" if options else (mode or self.cfg.mode)
         if mode == "evaluate" and not options:
@@ -285,6 +347,12 @@ class Council:
         t0 = time.monotonic()
         members = self.cfg.active_members
         chair = self.cfg.member(self.cfg.chair)
+
+        self.attachments = list(attachments or [])
+        if self.attachments:
+            self._emit("attachments", items=[a.meta() for a in self.attachments],
+                       blind=[m.name for m in members if not self.can_see(m)])
+            await self._describe_images(members, question)
 
         # 0. Постановка задачи
         refined = question
@@ -450,6 +518,9 @@ class Council:
             transcript=self.transcript,
             started_at=started,
             duration_s=round(time.monotonic() - t0, 1),
+            attachments=[a.meta() for a in self.attachments],
+            image_notes=dict(self.image_notes),
+            image_notes_by=self.image_notes_by,
         )
 
 

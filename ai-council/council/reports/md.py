@@ -17,6 +17,18 @@ def render_md(view: View, summary: bool = False) -> str:
     if v.question_is_long:
         # запрос целиком, с его переносами строк (два пробела в конце строки — перенос в Markdown)
         out += ["**Запрос:**", ""] + [f"> {line}  " if line.strip() else ">" for line in v.question.splitlines()] + [""]
+    if v.attachments:
+        out += [f"**Вложения ({len(v.attachments)}):**", ""]
+        for m in v.attachments:
+            link = f"{v.stem}.files/{m.get('file')}" if v.stem else ""
+            label = v.attachment_label(m)
+            name = str(m.get("name", ""))
+            text = f"[{name}](<{link}>){label[len(name):]}" if link else label
+            out.append(f"- {text}" + (f" — ⚠️ {m['warning']}" if m.get("warning") else ""))
+        out.append("")
+        if v.image_notes and not summary:
+            out += [f"**Описание изображений** (сделал {v.d.get('image_notes_by') or 'модель'}):", ""]
+            out += [f"- **{n}:** {t}" for n, t in v.image_notes.items()] + [""]
     if v.refined:
         out += [f"**Уточнённая постановка:** {v.refined}", ""]
     if summary:

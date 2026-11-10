@@ -48,6 +48,17 @@ class Ballot(BaseModel):
     rationale: str = ""
 
 
+class ImageNote(BaseModel):
+    name: str
+    description: str
+
+
+class ImageNotes(BaseModel):
+    """Описание картинок для моделей, которые не умеют смотреть на изображения."""
+
+    images: list[ImageNote]
+
+
 class Verdict(BaseModel):
     """Шаг 6: итоговое решение председателя."""
 
