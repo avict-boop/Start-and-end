@@ -224,10 +224,10 @@ class Archive:
             (self.dir / MARKER).write_text(REPORT_VERSION)
         return built, failed
 
-    def ensure_all_in_background(self) -> threading.Thread:
+    def ensure_all_in_background(self, force: bool = False) -> threading.Thread:
         def run() -> None:
             try:
-                built, failed = self.ensure_all()
+                built, failed = self.ensure_all(force=force)
                 if built or failed:
                     log.info("отчёты для архива: обновлено %d заседаний, с ошибками %d", built, failed)
             except Exception:  # noqa: BLE001

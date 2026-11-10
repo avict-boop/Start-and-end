@@ -188,7 +188,17 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
 
+    from .admin import register as register_admin
+    register_admin(app, config_path, base_config, runs_dir, catalog)
+
     archives: dict[Path, Archive] = {}
+
+    @app.post("/api/reports/rebuild")
+    async def rebuild_reports() -> dict[str, Any]:
+        """Пересобрать отчёты всего архива (например, после смены оформления) — в фоне."""
+        arch = archive()
+        arch.ensure_all_in_background(force=True)
+        return {"ok": True, "sessions": len(arch.stems())}
 
     def archive() -> Archive:
         d = runs_dir(base_config())

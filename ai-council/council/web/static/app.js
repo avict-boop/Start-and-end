@@ -412,7 +412,9 @@ function showView(name) {
   $("session").hidden = name !== "session";
   $("archive").hidden = name !== "archive";
   $("stats").hidden = name !== "stats";
+  $("settings").hidden = name !== "settings";
   $("statsBtn").classList.toggle("secondary", name === "stats");
+  $("settingsBtn").classList.toggle("secondary", name === "settings");
   document.body.classList.toggle("has-session", name !== "empty");
   $("archiveBtn").classList.toggle("secondary", name === "archive");
   if (name !== "session") document.title = BASE_TITLE;
@@ -1456,6 +1458,8 @@ function route() {
     if (view !== "archive") openArchive();
   } else if (location.hash === "#/stats") {
     if (view !== "stats") openStats();
+  } else if (location.hash.startsWith("#/settings")) {
+    if (view !== "settings" && window.openSettings) window.openSettings();
   }
 }
 

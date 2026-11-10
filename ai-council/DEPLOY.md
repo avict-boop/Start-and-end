@@ -211,7 +211,8 @@ docker compose --profile web up -d
 | Запустить снова | `docker compose up -d` |
 | Поменять участников/модели | `nano config.yaml`; изменения подхватятся со следующего заседания (если нет — `docker compose restart`) |
 | Поменять ключи в `.env` | `nano .env` и `docker compose up -d --force-recreate` |
-| Обновить программу | `git pull && docker compose up -d --build` |
+| Обновить программу | в веб-интерфейсе: Настройки → Программа → «Обновить программу»; в терминале: `ai-council update` |
+| Включить обновление из браузера (один раз) | `sudo bash /opt/ai-council/ai-council/deploy/web-control.sh install` |
 | Задать вопрос из консоли | `docker compose run --rm bot python -m council ask "вопрос"` |
 
 **Резервная копия отчётов.** Отчёты и так приходят в Telegram файлами. Чтобы забрать весь архив:

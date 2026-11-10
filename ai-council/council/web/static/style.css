@@ -485,3 +485,42 @@ label.check.small:has(#chairProposes) { display: flex; gap: .45rem; align-items:
 .fact-block li { margin: .35rem 0; }
 .fact-refuted > b { color: var(--bad, #c0392b); }
 label.check.small:has(#factCheck) { display: flex; gap: .45rem; align-items: center; margin: -.4rem 0 .8rem; color: var(--muted); }
+
+/* ------------------------------------------------------------ настройки */
+.set-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.set-head h1 { margin: 0; }
+.set-actions { display: flex; align-items: center; gap: .8rem; }
+.set-tabs { display: flex; gap: .3rem; flex-wrap: wrap; margin: 1rem 0 1.1rem; border-bottom: 1px solid var(--border); }
+.set-tabs button { background: none; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted);
+  padding: .5rem .7rem; font-weight: 600; cursor: pointer; }
+.set-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+.set-notice { border-radius: 8px; padding: .55rem .8rem; margin: .6rem 0; font-size: .92rem; background: var(--surface-2); }
+.set-notice.ok { background: var(--ok-soft); }
+.set-notice.warn { background: var(--warn-soft); }
+.set-notice.bad { background: var(--bad-soft); }
+.set-notice ul { margin: .3rem 0 0; padding-left: 1.1rem; }
+.set-notice code, .upg code, .sys-grid code { font-size: .85em; word-break: break-all; }
+.set-members td { vertical-align: top; }
+.set-members tr.off td { opacity: .55; }
+.set-members input[type="text"], .set-members select { width: 100%; }
+.w-name { min-width: 7rem; }
+.w-model { min-width: 16rem; }
+.bad-text { color: var(--bad); }
+.upg { padding: .6rem 0; border-bottom: 1px solid var(--border); }
+.upg-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin: .35rem 0 0 1rem; }
+.small-btn { padding: .2rem .6rem; font-size: .85rem; }
+.color-row, .logo-row { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+.color-row input[type="color"] { width: 3rem; height: 2.3rem; padding: 0; border: 1px solid var(--border); border-radius: 6px; }
+.logo-prev { max-height: 48px; max-width: 160px; border: 1px solid var(--border); border-radius: 6px; padding: 2px; background: #fff; }
+.sys-grid { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; align-items: flex-start; margin-bottom: .6rem; }
+.sys-btns { display: flex; gap: .5rem; flex-wrap: wrap; }
+.sys-status { margin: .6rem 0; }
+.sys-log { max-height: 280px; overflow: auto; background: var(--surface-2); padding: .6rem; border-radius: 8px; font-size: .8rem; white-space: pre-wrap; }
+.commits { margin: .4rem 0 0; padding-left: 1.1rem; font-weight: 400; }
+.backups { margin: .3rem 0; padding-left: 1.1rem; }
+#settingsBtn { position: relative; }
+.upd-dot { position: absolute; top: 4px; right: 4px; width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+@media (max-width: 640px) {
+  .w-model { min-width: 11rem; }
+  .set-tabs button { padding: .45rem .5rem; font-size: .88rem; }
+}

@@ -707,6 +707,11 @@ start_services() {
   fi
 }
 
+setup_web_control() {  # служба для кнопок «Обновить» и «Перезапустить» в веб-интерфейсе
+  [[ "${SKIP_DEPS:-0}" == 1 ]] && return 0
+  bash "$APP_DIR/deploy/web-control.sh" install >&2 || warn "Не удалось включить обновление из веб-интерфейса — обновляйте командой ai-council update"
+}
+
 install_helper() {
   mkdir -p "$BIN_DIR"
   cat >"$BIN_DIR/ai-council" <<EOF
@@ -723,7 +728,7 @@ case "\${1:-help}" in
   restart) dc up -d --force-recreate ;;
   stop)    docker compose --profile https down ;;
   start)   dc up -d ;;
-  update)  git -C "$INSTALL_DIR" pull -q --ff-only --autostash && dc build -q && dc up -d --force-recreate && echo "Обновлено." ;;
+  update)  bash "$APP_DIR/deploy/web-control.sh" update-now ;;
   ask)     shift; docker compose run --rm bot python -m council ask "\$@" ;;
   archive) shift; docker compose run --rm bot python -m council archive "\$@" ;;
   reports) shift; docker compose run --rm bot python -m council reports "\$@" ;;
@@ -834,6 +839,7 @@ main() {
   setup_web
   start_services
   install_helper
+  setup_web_control
   write_access_file
   summary
 }

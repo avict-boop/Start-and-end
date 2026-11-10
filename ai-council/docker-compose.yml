@@ -26,6 +26,13 @@ services:
     <<: *common
     profiles: ["web", "https"]
     command: ["python", "-m", "council", "web", "--host", "0.0.0.0", "--port", "8000"]
+    # Веб-интерфейс может менять настройки (config.yaml, логотип) и оставлять заявки на обновление
+    # и перезапуск в control/ — их выполняет служба на сервере (deploy/web-control.sh install).
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - council-runs:/app/runs
+      - ./branding:/app/branding
+      - ./control:/app/control
     environment:
       TRUST_PROXY: "1"   # реальный IP клиента берётся из X-Forwarded-For (для защиты от перебора пароля)
     # Наружу порт открыт только на самом сервере; из интернета — через Caddy (профиль https)

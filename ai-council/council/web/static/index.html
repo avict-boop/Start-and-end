@@ -13,6 +13,7 @@
   <div class="topbar-right">
     <span id="keyStatus" class="pill"></span>
     <button id="statsBtn" class="ghost" type="button" title="Статистика">📊<span class="hide-sm">&nbsp;Статистика</span></button>
+    <button id="settingsBtn" class="ghost" type="button" title="Настройки">⚙️<span class="hide-sm">&nbsp;Настройки</span><span id="updDot" class="upd-dot" hidden></span></button>
     <button id="archiveBtn" class="ghost" type="button">Архив</button>
     <button id="newBtn" class="ghost" type="button">+ Новое<span class="hide-sm">заседание</span></button>
   </div>
@@ -155,6 +156,26 @@
       <div id="archiveList" class="archive-list"></div>
     </section>
 
+    <section id="settings" class="card" hidden>
+      <div class="set-head">
+        <h1>Настройки</h1>
+        <div class="set-actions">
+          <span id="setState" class="muted small"></span>
+          <button id="setSave" type="button" disabled>Сохранить</button>
+        </div>
+      </div>
+      <div id="setNotice"></div>
+      <nav class="set-tabs" id="setTabs">
+        <button type="button" data-tab="members" class="active">Участники и модели</button>
+        <button type="button" data-tab="session">Заседание</button>
+        <button type="button" data-tab="facts">Проверка фактов и голос</button>
+        <button type="button" data-tab="brand">Оформление отчётов</button>
+        <button type="button" data-tab="system">Программа</button>
+      </nav>
+      <div id="setBody"><div class="muted">Загрузка…</div></div>
+      <datalist id="modelList"></datalist>
+    </section>
+
     <section id="stats" class="card" hidden>
       <h1>Статистика</h1>
       <div id="statsBody"><div class="muted">Загрузка…</div></div>
@@ -271,5 +292,6 @@
 </div>
 
 <script src="/static/app.js"></script>
+<script src="/static/settings.js"></script>
 </body>
 </html>
