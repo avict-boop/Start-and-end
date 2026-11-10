@@ -728,6 +728,7 @@ case "\${1:-help}" in
   archive) shift; docker compose run --rm bot python -m council archive "\$@" ;;
   reports) shift; docker compose run --rm bot python -m council reports "\$@" ;;
   stats)   docker compose run --rm bot python -m council stats ;;
+  models)  shift; docker compose run --rm bot python -m council models "\$@" ;;
   config)  "\${EDITOR:-nano}" config.yaml && echo "Сохранено: изменения подхватятся со следующего заседания." ;;
   password)
     read -r -s -p "Новый пароль веб-интерфейса (от 10 символов): " p1 && echo
@@ -748,6 +749,7 @@ ai-council — управление «Советом нейросетей»
   access         адреса и пароли        backup                копия всех отчётов
   ask "вопрос"   заседание из консоли   archive [поиск]       список заседаний
   stats          статистика: расходы и успехи моделей
+  models --upgrades  чем обновить модели совета    models [поиск]  свежие модели OpenRouter
   reports [--force]  создать недостающие отчёты PDF/Word/MD для всего архива
 HELP
   ;;

@@ -74,3 +74,29 @@ def test_fact_check_in_plan_and_estimate():
     est = estimate(cfg, pricing, mode="debate", rounds=1)
     fc = next(m for m in est.members if m.name == "факт-чек")
     assert fc.calls == 2 and fc.cost > 2 * 0.005
+
+
+def test_catalog_upgrades_and_families():
+    from council.catalog import family, upgrades
+    from council.config import CouncilConfig
+    assert family("anthropic/claude-sonnet-4.5") == family("anthropic/claude-sonnet-5") == "anthropic/claude-sonnet"
+    assert family("google/gemini-2.5-pro") == family("google/gemini-3-pro-preview") == "google/gemini-pro"
+    assert family("openai/gpt-5") == family("openai/gpt-5.1") == "openai/gpt"
+    assert family("google/gemini-2.5-pro") != family("google/gemini-2.5-flash")
+    cat = [
+        {"id": "anthropic/claude-sonnet-4.5", "created": 1_750_000_000},
+        {"id": "anthropic/claude-sonnet-5", "created": 1_780_000_000, "architecture": {"input_modalities": ["text", "image"]}},
+        {"id": "anthropic/claude-opus-5", "created": 1_781_000_000},
+        {"id": "anthropic/claude-3-haiku", "created": 1_700_000_000},
+        {"id": "google/gemini-2.5-pro", "created": 1_745_000_000},
+        {"id": "google/gemini-3-image", "created": 1_790_000_000, "architecture": {"output_modalities": ["image"]}},
+        {"id": "deepseek/deepseek-chat", "created": 1_790_000_000},
+    ]
+    cfg = CouncilConfig.model_validate({"chair": "claude", "members": [
+        {"name": "claude", "model": "anthropic/claude-sonnet-4.5"}, {"name": "gemini", "model": "google/gemini-2.5-pro"},
+        {"name": "old", "model": "x/gone-model"}]})
+    u = {x["name"]: x for x in upgrades(cfg, cat)}
+    assert [m["id"] for m in u["claude"]["same_family"]] == ["anthropic/claude-sonnet-5"]
+    assert [m["id"] for m in u["claude"]["newest"]] == ["anthropic/claude-opus-5"]  # старый haiku не предлагается
+    assert u["gemini"]["same_family"] == [] and u["gemini"]["newest"] == []  # модель только для картинок — не участник
+    assert u["old"]["found"] is False

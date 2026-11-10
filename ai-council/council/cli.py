@@ -362,6 +362,8 @@ async def _ask(args) -> int:
 
 
 async def _models(args) -> int:
+    from .catalog import date, is_text_model, modalities, sort_newest, upgrades
+
     client = OpenRouterClient(os.environ.get("OPENROUTER_API_KEY", ""))
     try:
         models = await client.list_models()
@@ -371,16 +373,47 @@ async def _models(args) -> int:
         return 1
     finally:
         await client.aclose()
+
+    def price(m, k):
+        return f"{float((m.get('pricing') or {}).get(k) or 0) * 1e6:.2f}"
+
+    def marks(m):
+        mod = modalities(m)
+        return " ".join(x for x, ok in (("🖼", "image" in mod), ("🎤", "audio" in mod)) if ok)
+
+    if args.upgrades:
+        cfg = load_config(args.config)
+        console.print("[bold]Чем можно обновить участников совета[/] (модели новее текущих, по дате выхода на OpenRouter)\n")
+        for u in upgrades(cfg, models):
+            state = "" if u["enabled"] else " [dim](выключен)[/]"
+            cur = u["current"]
+            head = (f"[bold]{u['name']}[/]{state}: {u['model']} — "
+                    + (f"вышла {date(cur)}" if cur else "[red]такой модели больше нет на OpenRouter[/]"))
+            console.print(head)
+            rows = [("того же семейства", m) for m in u["same_family"]] + [("новинка разработчика", m) for m in u["newest"]]
+            if not rows:
+                console.print("   [green]новее ничего нет[/]")
+            for kind, m in rows:
+                console.print(f"   → {m['id']}  [dim]{date(m)} · {kind} · вход ${price(m, 'prompt')} / выход "
+                              f"${price(m, 'completion')} за 1M · контекст {m.get('context_length', '?')}[/] {marks(m)}")
+        console.print("\nЗаменить: в config.yaml поменяйте model у участника (на сервере: ai-council config).\n"
+                      "Перед заменой стоит прогнать одно заседание и сравнить с прежним составом.")
+        return 0
+
     q = (args.search or "").lower()
-    t = Table(title="Модели OpenRouter (цена за 1M токенов, $)")
-    for col in ("id", "контекст", "вход", "выход"):
+    t = Table(title="Модели OpenRouter — сначала новые (цена за 1M токенов, $; 🖼 картинки, 🎤 звук)")
+    for col in ("id", "вышла", "контекст", "вход", "выход", ""):
         t.add_column(col)
-    for m in sorted(models, key=lambda m: m["id"]):
+    shown = 0
+    for m in sort_newest(models):
         if q and q not in m["id"].lower() and q not in (m.get("name") or "").lower():
             continue
-        pr = m.get("pricing") or {}
-        price = lambda k: f"{float(pr.get(k) or 0) * 1e6:.2f}"  # noqa: E731
-        t.add_row(m["id"], str(m.get("context_length", "")), price("prompt"), price("completion"))
+        if not args.all and not is_text_model(m):
+            continue
+        t.add_row(m["id"], date(m), str(m.get("context_length", "")), price(m, "prompt"), price(m, "completion"), marks(m))
+        shown += 1
+        if args.limit and shown >= args.limit:
+            break
     console.print(t)
     return 0
 
@@ -511,8 +544,12 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--dry-run", action="store_true", help="только проверить модели и оценить стоимость")
     a.add_argument("-y", "--yes", action="store_true", help="не спрашивать подтверждение перед запуском")
 
-    m = sub.add_parser("models", help="список моделей OpenRouter (чтобы найти точные id)")
-    m.add_argument("search", nargs="?", help="фильтр, напр. kimi или deepseek")
+    m = sub.add_parser("models", help="модели OpenRouter: сначала новые; --upgrades — чем обновить совет")
+    m.add_argument("search", nargs="?", help="фильтр, напр. claude, gpt, gemini, kimi, deepseek")
+    m.add_argument("--upgrades", action="store_true", help="для каждого участника — более новые модели")
+    m.add_argument("--limit", type=int, default=40, help="сколько строк показать (0 — все)")
+    m.add_argument("--all", action="store_true", help="включая модели не для текста (картинки, эмбеддинги)")
+    m.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
 
     w = sub.add_parser("web", help="запустить веб-интерфейс")
     w.add_argument("--host", default="127.0.0.1", help="адрес (0.0.0.0 — доступ из локальной сети)")
