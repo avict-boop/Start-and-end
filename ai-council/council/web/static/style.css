@@ -528,7 +528,7 @@ tr.winner td { background: var(--gold-soft); }
 .arc-empty { padding: 2.5rem 1rem; text-align: center; color: var(--muted); background: var(--surface); border: 1px dashed var(--line-strong); border-radius: 14px; }
 @media (max-width: 600px) {
   .arc-item { grid-template-columns: minmax(0, 1fr); }
-  .arc-actions { grid-column: 1; grid-row: auto; margin-top: .35rem; }
+  .arc-actions { grid-column: 1; grid-row: auto; margin-top: .35rem; order: 9; }
   .arc-actions .menu { position: fixed; top: auto; }
 }
 
