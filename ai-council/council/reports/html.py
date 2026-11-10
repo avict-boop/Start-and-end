@@ -68,9 +68,47 @@ tr.win td { background: #fff6d8; }
 [id] { scroll-margin-top: 64px; }
 .toc { columns: 2; font-size: 9.5pt; margin: 6px 0; }
 .toc a { text-decoration: none; }
+/* Широкие таблицы из ответов моделей.
+   PDF (print): таблица всегда в ширину страницы — мельче шрифт, переносы по слогам и внутри длинных слов.
+   Экран: таблица прокручивается внутри своего блока, а не раздвигает страницу. */
+.md, .md p, .md li { overflow-wrap: anywhere; }
+.md pre { overflow-wrap: anywhere; }
+table.mdt th, table.mdt td { hyphens: auto; }
+table.mdt.wide { font-size: 8pt; }
+table.mdt.wide th, table.mdt.wide td { padding: 3px 4px; }
+table.mdt.xwide { font-size: 7pt; }
+table.mdt.xwide th, table.mdt.xwide td { padding: 2px 3px; }
+@media print {
+  table.mdt { width: 100%; table-layout: auto; }
+  table.mdt td { overflow-wrap: anywhere; }
+  /* заголовки колонок — только по словам и слогам: колонка получает ширину хотя бы своего названия */
+  table.mdt th { overflow-wrap: normal; word-break: normal; }
+}
+@media screen {
+  .tbl { overflow-x: auto; max-width: 100%; margin: 8px 0; -webkit-overflow-scrolling: touch; }
+  .tbl > table { margin: 0; width: auto; min-width: 100%; }
+  table.mdt th, table.mdt td { min-width: 7em; max-width: 26em; overflow-wrap: break-word; }
+  table.mdt.wide, table.mdt.xwide { font-size: 9pt; }
+  .tbl.more-right { box-shadow: inset -16px 0 14px -14px rgba(0, 0, 0, .45); }
+  .tbl.more-left { box-shadow: inset 16px 0 14px -14px rgba(0, 0, 0, .45); }
+  .tbl.more-left.more-right { box-shadow: inset -16px 0 14px -14px rgba(0,0,0,.45), inset 16px 0 14px -14px rgba(0,0,0,.45); }
+}
 @media (max-width: 640px) { .page { padding: 16px; } .toc { columns: 1; } h1 { font-size: 16pt; }
-  table { display: block; overflow-x: auto; } }
+  .page > table, .verdict table:not(.mdt) { display: block; overflow-x: auto; } }
 """
+
+
+# В браузере: тень у края широкой таблицы, если её можно прокрутить. При печати и в PDF не используется.
+SCROLL_HINT = """<script>
+function markScroll(el) {
+  const max = el.scrollWidth - el.clientWidth;
+  el.classList.toggle("more-right", max > 1 && el.scrollLeft < max - 1);
+  el.classList.toggle("more-left", max > 1 && el.scrollLeft > 1);
+}
+function markAll() { document.querySelectorAll(".tbl").forEach(markScroll); }
+document.addEventListener("scroll", (e) => { if (e.target.classList && e.target.classList.contains("tbl")) markScroll(e.target); }, true);
+window.addEventListener("resize", markAll); markAll();
+</script>"""
 
 
 def _e(x: object) -> str:
@@ -239,4 +277,4 @@ def render_html(view: View, *, toolbar: str = "") -> str:
     return (f'<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{_e(v.question[:80])} — Совет нейросетей</title><style>{CSS}</style></head>"
-            f"<body>{toolbar}{body}</body></html>")
+            f"<body>{toolbar}{body}{SCROLL_HINT}</body></html>")

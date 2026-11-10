@@ -198,9 +198,21 @@ def normalize_md(text: str) -> str:
     return "\n".join(out)
 
 
+_TABLE_HTML = re.compile(r"<table>(.*?)</table>", re.S)
+
+
+def _wrap_table(m: re.Match) -> str:
+    """Оборачивает таблицу и помечает её ширину: широким — мельче шрифт (PDF) и прокрутка (экран)."""
+    body = m.group(1)
+    first_row = re.search(r"<tr>(.*?)</tr>", body, re.S)
+    cols = len(re.findall(r"<t[hd][ >]", first_row.group(1))) if first_row else 0
+    size = "xwide" if cols >= 8 else "wide" if cols >= 6 else "normal"
+    return f'<div class="tbl"><table class="mdt {size}" data-cols="{cols}">{body}</table></div>'
+
+
 def md_to_html(text: str) -> str:
     """Безопасно: сырой HTML из ответа модели не исполняется, а выводится как текст."""
     md = _markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists"], output_format="html")
     md.preprocessors.deregister("html_block")
     md.inlinePatterns.deregister("html")
-    return md.convert(normalize_md(text))
+    return _TABLE_HTML.sub(_wrap_table, md.convert(normalize_md(text)))

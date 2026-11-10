@@ -154,6 +154,9 @@ class _Writer:
             self.table(el)
         elif tag == "hr":
             self.c.add_paragraph("—" * 20)
+        elif tag in ("div", "section"):  # обёртки (например, блок прокрутки таблицы) — заходим внутрь
+            for child in el:
+                self.block(child, level)
         elif tag:
             self.inline(self.c.add_paragraph(), el)
 
@@ -183,11 +186,17 @@ class _Writer:
         ncols = max(len(r.xpath("./th|./td")) for r in rows)
         t = self.c.add_table(rows=len(rows), cols=ncols)
         t.style = "Table Grid"
+        t.autofit = True
+        # широкие таблицы — мельче шрифт, чтобы колонки поместились на страницу
+        size = Pt(7.5) if ncols >= 8 else Pt(8.5) if ncols >= 6 else None
         for i, r in enumerate(rows):
             for j, cell_el in enumerate(r.xpath("./th|./td")):
                 cell = t.cell(i, j)
                 par = cell.paragraphs[0]
                 self.inline(par, cell_el, {"bold": cell_el.tag == "th"})
+                if size:
+                    for run in par.runs:
+                        run.font.size = size
                 if cell_el.tag == "th":
                     _shade(cell, "F2F2F8")
 

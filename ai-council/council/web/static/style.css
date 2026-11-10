@@ -241,8 +241,14 @@ tr.winner td { background: color-mix(in srgb, var(--win) 12%, transparent); }
 .md code { background: var(--surface-2); padding: .05rem .3rem; border-radius: 4px; font-size: .88em; }
 .md pre { background: var(--surface-2); padding: .7rem; border-radius: 8px; overflow-x: auto; }
 .md pre code { background: none; padding: 0; }
-.md table { border-collapse: collapse; margin: .5rem 0; display: block; overflow-x: auto; }
-.md th, .md td { border: 1px solid var(--border); padding: .3rem .5rem; }
+.md-table { overflow-x: auto; max-width: 100%; margin: .5rem 0; -webkit-overflow-scrolling: touch;
+  border: 1px solid var(--border); border-radius: 8px; }
+.md table { border-collapse: collapse; margin: 0; min-width: 100%; }
+.md th, .md td { border: 1px solid var(--border); padding: .35rem .55rem; min-width: 6.5em; max-width: 24em;
+  vertical-align: top; text-align: left; overflow-wrap: break-word; }
+.md th { background: var(--surface-2); font-weight: 600; }
+.md-table table tr > :first-child { border-left: 0; } .md-table table tr > :last-child { border-right: 0; }
+.md-table thead tr:first-child > * { border-top: 0; } .md-table tbody tr:last-child > * { border-bottom: 0; }
 .md a { color: var(--accent); }
 .md blockquote { margin: .4rem 0; padding-left: .8rem; border-left: 3px solid var(--border); color: var(--muted); }
 
@@ -327,3 +333,10 @@ body.modal-open { overflow: hidden; }
   .topbar-right button { padding: .45rem .6rem; }
   .archive-filters input { max-width: none; }
 }
+
+/* подсказка, что таблицу можно прокрутить: тень у края с продолжением */
+.md-table.more-right, .table-wrap.more-right { box-shadow: inset -16px 0 14px -14px rgba(0, 0, 0, .45); }
+.md-table.more-left, .table-wrap.more-left { box-shadow: inset 16px 0 14px -14px rgba(0, 0, 0, .45); }
+.md-table.more-left.more-right, .table-wrap.more-left.more-right {
+  box-shadow: inset -16px 0 14px -14px rgba(0, 0, 0, .45), inset 16px 0 14px -14px rgba(0, 0, 0, .45); }
+.md td { hyphens: auto; }

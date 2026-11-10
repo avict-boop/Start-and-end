@@ -48,8 +48,9 @@ function md(src) {
       i += 2;
       const rows = [];
       while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(cells(lines[i++]));
-      out.push(`<table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${
-        rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+      // широкая таблица прокручивается внутри своего блока и не раздвигает карточку/окно
+      out.push(`<div class="md-table"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${
+        rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
       continue;
     }
     if (listRe.test(line)) {
@@ -636,7 +637,7 @@ let renderQueued = false;
 function scheduleRender() {
   if (renderQueued) return;
   renderQueued = true;
-  requestAnimationFrame(() => { renderQueued = false; if (current) { render(current); tick(); } });
+  requestAnimationFrame(() => { renderQueued = false; if (current) { render(current); tick(); markAllScroll($("session")); } });
 }
 
 function openSession(id) {
@@ -694,6 +695,7 @@ function openModal({ eyebrow = "", title = "", sub = "", tabs = [], foot = "" })
   const show = (i) => {
     $("mBody").innerHTML = tabs[i] ? tabs[i].html : "";
     $("mBody").scrollTop = 0;
+    requestAnimationFrame(() => markAllScroll($("mBody")));
     for (const b of nav.querySelectorAll("button")) b.setAttribute("aria-selected", String(+b.dataset.tab === i));
   };
   nav.onclick = (e) => { const b = e.target.closest("[data-tab]"); if (b) show(+b.dataset.tab); };
@@ -767,6 +769,17 @@ $("matrix").addEventListener("click", (e) => {
   const th = e.target.closest("[data-reviewer]");
   if (th && current) openReviewer(current, th.dataset.reviewer);
 });
+
+/* ------------------------------------------------------------ широкие таблицы: тень у края, где есть продолжение */
+
+function markScroll(el) {
+  const max = el.scrollWidth - el.clientWidth;
+  el.classList.toggle("more-right", max > 1 && el.scrollLeft < max - 1);
+  el.classList.toggle("more-left", max > 1 && el.scrollLeft > 1);
+}
+function markAllScroll(root = document) { for (const el of root.querySelectorAll(".md-table, .table-wrap")) markScroll(el); }
+document.addEventListener("scroll", (e) => { if (e.target.classList && (e.target.classList.contains("md-table") || e.target.classList.contains("table-wrap"))) markScroll(e.target); }, true);
+window.addEventListener("resize", () => markAllScroll());
 
 /* ------------------------------------------------------------ адреса: #/archive, #/s/<id>, #/s/<id>/p/<метка> */
 
