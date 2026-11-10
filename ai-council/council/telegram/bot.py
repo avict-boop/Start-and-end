@@ -19,7 +19,7 @@ from typing import Any
 
 from ..client import LLMClient, OpenRouterClient, ProviderError
 from ..config import CouncilConfig, OverrideError, load_config, with_overrides
-from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models, vision_map
+from ..estimate import ModelCatalog, estimate, learn_lengths, parse_pricing, similar_actual, unknown_models, vision_map
 from ..mock import MockClient
 from ..archive import MIME, Archive, all_reports, available_formats, download_name, key_of
 from ..attachments import (MAX_FILE_BYTES, MAX_FILES, Attachment, AttachmentError, assign_files, limit_total,
@@ -770,17 +770,24 @@ class CouncilBot:
         models = None if s.demo else await self.catalog.get()
         vision = vision_map(cfg, models)
         imgs = sum(1 for a in p.attachments if a.kind == "image")
+        lengths = await asyncio.to_thread(learn_lengths, self.runs_dir)
         est = estimate(cfg, pricing, mode=mode, rounds=s.rounds,
                        n_options=len(p.options) if p.options else None, has_criteria=False,
                        doc_tokens=sum(a.tokens for a in p.attachments if a.kind == "document"),
-                       images=imgs, vision=vision)
+                       images=imgs, vision=vision, question_chars=len(p.question),
+                       options_chars=sum(len(o) for o in p.options or []), lengths=lengths)
+        sim = similar_actual(lengths, mode, len(cfg.active_members))
         blind = [m.name for m in cfg.active_members if vision.get(m.model) is False]
         if imgs and blind and not problem:
             problem = f"ℹ️ {', '.join(blind)} не видят картинки — им передадут их описание."
         if s.demo:
             line = f"<b>Стоимость:</b> демо-режим, бесплатно ({est.calls} вызовов)"
         elif pricing:
-            line = f"<b>Стоимость:</b> ≈ ${est.low:.3f} – ${est.high:.3f} ({est.calls} вызовов, лимит ${cfg.max_cost_usd:g})"
+            line = f"<b>Стоимость:</b> ≈ ${est.low:.2f} – ${est.high:.2f} ({est.calls} вызовов, лимит ${cfg.max_cost_usd:g})"
+            if sim:
+                line += f"\n<i>Похожие заседания ({sim['count']}) стоили ${sim['min']:.2f}–${sim['max']:.2f}</i>"
+            if est.high > cfg.max_cost_usd:
+                line += "\n⚠️ <i>Верхняя оценка выше лимита — заседание может остановиться по бюджету (/budget).</i>"
             key = os.environ.get("OPENROUTER_API_KEY")
             if key:
                 bc = OpenRouterClient(key, timeout=10)

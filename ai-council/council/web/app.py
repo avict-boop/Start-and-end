@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from ..client import OpenRouterClient, ProviderError
 from ..config import CouncilConfig, Mode, OverrideError, load_config, with_overrides
-from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models, vision_map
+from ..estimate import ModelCatalog, estimate, learn_lengths, parse_pricing, similar_actual, unknown_models, vision_map
 from ..mock import MockClient
 from ..archive import MIME, Archive, available_formats, download_name, report_kind
 from ..attachments import (ACCEPT, MAX_FILE_BYTES, MAX_FILES, AttachmentError, assign_files, human_size,
@@ -398,10 +398,14 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         rounds = cfg.debate_rounds if req.rounds is None else req.rounds
         atts = await asyncio.to_thread(load_uploads, req.attachments) if req.attachments else []
         vision = vision_map(cfg, models)
-        est = estimate(cfg, pricing, mode="evaluate" if opts else req.mode, rounds=rounds,
+        lengths = await asyncio.to_thread(learn_lengths, runs_dir(cfg))
+        mode_eff = "evaluate" if opts else req.mode
+        est = estimate(cfg, pricing, mode=mode_eff, rounds=rounds,
                        n_options=len(opts) if opts else None, has_criteria=bool(req.clean_criteria),
                        doc_tokens=sum(a.tokens for a in atts if a.kind == "document"),
-                       images=sum(1 for a in atts if a.kind == "image"), vision=vision)
+                       images=sum(1 for a in atts if a.kind == "image"), vision=vision,
+                       question_chars=len(req.question) + len(req.context or ""),
+                       options_chars=sum(len(o) for o in opts or []), lengths=lengths)
         blind = [m.name for m in cfg.active_members if vision.get(m.model) is False]
         if any(a.kind == "image" for a in atts) and blind:
             note = (f"Модели без зрения ({', '.join(blind)}) получат описание картинок, "
@@ -416,6 +420,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             finally:
                 await bc.aclose()
         return {
+            "basis": est.basis,
+            "similar": similar_actual(lengths, mode_eff, len(cfg.active_members)),
             "balance": balance,
             "members": [dataclasses.asdict(m) for m in est.members],
             "calls": est.calls,

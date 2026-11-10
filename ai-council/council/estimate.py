@@ -7,20 +7,21 @@ from typing import Any
 
 from .config import CouncilConfig, Mode
 
-# Грубые оценки токенов на один вызов: (вход_база, вход_на_вариант, выход_база, выход_на_вариант).
-# n — число вариантов на заседании. Reasoning-модели могут тратить заметно больше на выходе,
-# поэтому верхняя граница оценки берётся с запасом (HIGH_FACTOR).
-TOKENS = {
-    "framing": (450, 0, 250, 0),
-    "proposal": (650, 0, 900, 0),
-    "critique": (650, 700, 0, 260),
-    "revision": (1700, 900, 1200, 0),  # чужие варианты показываются целиком
-    "vote": (550, 750, 200, 0),
-    "verdict": (900, 850, 1500, 0),
-    "factcheck": (1400, 0, 900, 0),  # один вариант на вызов; поиск у Perplexity оплачивается ещё и за запрос
-}
+# Как считается оценка.
+# Вход каждого запроса = инструкции этапа + вопрос (уточнённый и исходный) + вложения + то, что модель читает
+# на этом этапе: на критике, доработке, голосовании и итоге — ВСЕ чужие варианты целиком. Поэтому главное,
+# от чего зависит цена, — длина вариантов. Её программа берёт из ваших прошлых заседаний (сколько токенов модели
+# реально пишут на каждом этапе, включая продолжения длинных ответов, повторы и скрытые рассуждения);
+# если истории нет — значения по умолчанию ниже.
+INSTR = {"framing": 500, "proposal": 800, "critique": 1100, "revision": 1400, "vote": 700, "verdict": 1400,
+         "factcheck": 700, "describe": 500}
+DEFAULT_OUT = {"framing": 300, "proposal": 2500, "critique": 350, "revision": 3000, "vote": 500,
+               "verdict": 4000, "factcheck": 900}   # critique — на ОДИН оцениваемый вариант
+FEEDBACK_PER_REVIEW = 250   # отзыв одного рецензента на доработке
+NOTES_PER_PROPOSAL = 150    # сводка критики для председателя
 FACT_CHECKER = "факт-чек"  # как в session.FACT_CHECKER
-HIGH_FACTOR = 2.5
+HIGH_FACTOR = 2.5           # верхняя граница без истории
+HIGH_FACTOR_LEARNED = 1.6   # верхняя граница, когда длины взяты из прошлых заседаний
 ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}  # как в session.Council
 VOTE_DOC_CHARS = 20_000  # как Council.VOTE_DOC_CHARS
 
@@ -45,6 +46,9 @@ class MemberEstimate:
 @dataclass
 class Estimate:
     members: list[MemberEstimate] = field(default_factory=list)
+    learned_from: int = 0          # по скольким прошлым заседаниям взяты длины ответов
+    lengths: dict[str, int] = field(default_factory=dict)
+    question_tokens: int = 0
 
     @property
     def low(self) -> float:
@@ -52,7 +56,18 @@ class Estimate:
 
     @property
     def high(self) -> float:
-        return self.low * HIGH_FACTOR
+        return self.low * (HIGH_FACTOR_LEARNED if self.learned_from >= 3 else HIGH_FACTOR)
+
+    @property
+    def basis(self) -> str:
+        """Пояснение, на чём основана оценка."""
+        src = (f"длина ответов — по {self.learned_from} последним заседаниям" if self.learned_from
+               else "длина ответов — по умолчанию (истории заседаний пока нет)")
+        def n(x: int) -> str:
+            return f"{x:,}".replace(",", " ")
+        return (f"{src}: вариант ≈ {n(self.lengths.get('proposal', 0))} ток., после доработки ≈ "
+                f"{n(self.lengths.get('revision', 0))}, итог ≈ {n(self.lengths.get('verdict', 0))}; "
+                f"вопрос ≈ {n(self.question_tokens)} ток. в каждом запросе")
 
     @property
     def calls(self) -> int:
@@ -124,12 +139,42 @@ def estimate(
     doc_tokens: int = 0,
     images: int = 0,
     vision: dict[str, bool | None] | None = None,
+    question_chars: int = 0,
+    options_chars: int = 0,
+    lengths: dict[str, Any] | None = None,
 ) -> Estimate:
-    """doc_tokens/images — объём вложений: они добавляются к запросам этапов, где модели видят материалы."""
+    """doc_tokens/images — объём вложений: они добавляются к запросам этапов, где модели видят материалы.
+    question_chars — длина вопроса; options_chars — суммарная длина вариантов пользователя (режим «Оценка»);
+    lengths — длины ответов по этапам из прошлых заседаний (learn_lengths), иначе значения по умолчанию."""
     from .attachments import IMAGE_TOKENS
 
-    est = Estimate()
+    learned = dict(lengths or {})
+    out = {k: int(learned.get(k) or v) for k, v in DEFAULT_OUT.items()}
+    est = Estimate(learned_from=int(learned.get("sessions") or 0), lengths=out)
+    q = int(question_chars / 3 * 1.3)  # уточнённый вопрос + исходный дословно
+    est.question_tokens = q
     plan = plan_calls(cfg, mode, rounds, n_options, has_criteria)
+    opt_len = int(options_chars / 3 / n_options) + 100 if n_options and options_chars else out["proposal"]
+    first_len = opt_len if n_options else out["proposal"]           # вариант до доработки
+    final_len = out["revision"] if mode == "debate" else first_len  # вариант, который читают голосующие и председатель
+    small_docs = 0 < doc_tokens * 3 <= VOTE_DOC_CHARS
+
+    def call_tokens(stage: str, n: int, att: int, critique_round: int) -> tuple[int, int]:
+        cur = first_len if critique_round == 0 else out["revision"]  # на втором раунде критикуют доработанные
+        base = INSTR[stage] + q
+        if stage == "framing":
+            return base + att, out["framing"]
+        if stage == "proposal":
+            return base + att, out["proposal"]
+        if stage == "critique":
+            return base + n * cur + att, out["critique"] * n
+        if stage == "revision":
+            return base + cur + n * FEEDBACK_PER_REVIEW + n * cur + att, out["revision"]
+        if stage == "vote":
+            return base + n * final_len + (doc_tokens if small_docs else 0), out["vote"]
+        if stage == "verdict":
+            return base + n * final_len + n * NOTES_PER_PROPOSAL + att, out["verdict"]
+        return base, out.get(stage, 500)
     vision = vision or {}
     blind = [m for m in cfg.active_members if vision.get(m.model) is False]
     describer = None
@@ -140,12 +185,14 @@ def estimate(
         me = MemberEstimate(member.name, member.model)
         sees = vision.get(member.model) is not False
         att = doc_tokens + (images * IMAGE_TOKENS if sees else images * 350)  # «незрячим» — описание текстом
+        rounds_seen = 0
         for stage, n in plan[member.name]:
-            ib, ip, ob, op = TOKENS[stage]
             me.calls += 1
-            on_vote = stage == "vote" and 0 < doc_tokens * 3 <= VOTE_DOC_CHARS  # небольшие документы — и на голосование
-            me.prompt_tokens += ib + ip * n + (att if stage in ATTACHMENT_STAGES else doc_tokens if on_vote else 0)
-            me.completion_tokens += min(ob + op * n, member.max_tokens or cfg.max_tokens)
+            inp, outp = call_tokens(stage, n, att if stage in ATTACHMENT_STAGES else 0, rounds_seen)
+            if stage == "critique":
+                rounds_seen += 1
+            me.prompt_tokens += inp
+            me.completion_tokens += outp  # длинные ответы продолжаются, поэтому лимит длины их не обрезает
         if member.name == describer:
             me.calls += 1
             me.prompt_tokens += 500 + images * IMAGE_TOKENS
@@ -158,11 +205,10 @@ def estimate(
     if FACT_CHECKER in plan:
         fc = cfg.fact_check
         me = MemberEstimate(FACT_CHECKER, fc.model)
-        for stage, _ in plan[FACT_CHECKER]:
-            ib, _, ob, _ = TOKENS[stage]
+        for _stage, _ in plan[FACT_CHECKER]:
             me.calls += 1
-            me.prompt_tokens += ib
-            me.completion_tokens += min(ob, fc.max_tokens)
+            me.prompt_tokens += INSTR["factcheck"] + q + final_len
+            me.completion_tokens += min(out["factcheck"], fc.max_tokens)
         price = pricing.get(fc.model)
         me.cost = (me.prompt_tokens * price.prompt + me.completion_tokens * price.completion + me.calls * price.request
                    if price else None)
@@ -215,3 +261,76 @@ class ModelCatalog:
             await client.aclose()
         self._models, self._ts = models, time.time()
         return models
+
+
+# ------------------------------------------------------------------ длины ответов по прошлым заседаниям
+
+_LEARN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def learn_lengths(runs_dir: str | Any, limit: int = 30) -> dict[str, Any]:
+    """Сколько токенов модели реально пишут на каждом этапе — по стенограммам последних заседаний.
+
+    Для каждого участника и этапа суммируются выходные токены ВСЕХ попыток (продолжения длинных ответов,
+    повторы, скрытые рассуждения) и делятся на число принятых ответов. Критика — на один оцениваемый вариант.
+    Берётся медиана по заседаниям. Возвращает {"proposal": …, "revision": …, …, "sessions": N, "recent": [...]}.
+    """
+    import json
+    from pathlib import Path
+    from statistics import median
+
+    d = Path(runs_dir)
+    files = sorted((p for p in d.glob("*.json") if not p.name.endswith(".events.json")), reverse=True)[:limit] \
+        if d.is_dir() else []
+    stamp = max((p.stat().st_mtime for p in files), default=0.0)
+    key = str(d.resolve()) if d.exists() else str(d)
+    hit = _LEARN_CACHE.get(key)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    per_stage: dict[str, list[float]] = {}
+    recent = []
+    used = 0
+    for p in files:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        tr = data.get("transcript") or []
+        if not tr:
+            continue
+        groups: dict[tuple[str, str], dict[str, float]] = {}
+        for e in tr:
+            g = groups.setdefault((e.get("member", ""), e.get("stage", "")), {"out": 0.0, "ok": 0, "labels": 0})
+            toks = e.get("tokens") or [0, 0]
+            g["out"] += float(toks[1] if len(toks) > 1 else 0)
+            if "parsed" in e:
+                g["ok"] += 1
+                if e.get("stage") == "critique":
+                    g["labels"] += len((e.get("parsed") or {}).get("reviews") or [])
+        session_vals: dict[str, list[float]] = {}
+        for (_, stage), g in groups.items():
+            if not g["ok"] or not g["out"]:
+                continue
+            val = g["out"] / (g["labels"] if stage == "critique" and g["labels"] else g["ok"])
+            session_vals.setdefault(stage, []).append(val)
+        for stage, vals in session_vals.items():
+            per_stage.setdefault(stage, []).append(median(vals))
+        used += 1
+        recent.append({"cost": float(data.get("total_cost_usd") or 0), "mode": data.get("mode", ""),
+                       "members": len(data.get("stats") or {}), "duration": float(data.get("duration_s") or 0)})
+    out: dict[str, Any] = {stage: int(median(v)) for stage, v in per_stage.items() if v and stage in DEFAULT_OUT}
+    out["sessions"] = used
+    out["recent"] = recent
+    _LEARN_CACHE[key] = (stamp, out)
+    return out
+
+
+def similar_actual(lengths: dict[str, Any] | None, mode: str, members: int) -> dict[str, Any] | None:
+    """Сколько реально стоили последние похожие заседания (тот же режим, похожее число участников)."""
+    rec = [r for r in (lengths or {}).get("recent", []) if r["mode"] == mode and abs(r["members"] - members) <= 1
+           and r["cost"] > 0]
+    if not rec:
+        return None
+    costs = sorted(r["cost"] for r in rec)
+    return {"count": len(costs), "min": round(costs[0], 4), "max": round(costs[-1], 4),
+            "avg": round(sum(costs) / len(costs), 4)}

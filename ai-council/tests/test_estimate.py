@@ -101,3 +101,43 @@ def test_catalog_upgrades_and_families():
     assert [m["id"] for m in u["claude"]["newest"]] == ["anthropic/claude-opus-5"]  # старый haiku не предлагается
     assert u["gemini"]["same_family"] == [] and u["gemini"]["newest"] == []  # модель только для картинок — не участник
     assert u["old"]["found"] is False
+
+
+def _pricing(cfg):
+    from council.estimate import Price
+    return {m.model: Price(1e-6, 1e-5) for m in cfg.members}
+
+
+def test_estimate_counts_question_and_answer_length():
+    cfg = make_cfg(chair_proposes=False)
+    base = estimate(cfg, _pricing(cfg), mode="debate", rounds=1)
+    long_q = estimate(cfg, _pricing(cfg), mode="debate", rounds=1, question_chars=9000)
+    assert long_q.low > base.low * 1.1 and long_q.question_tokens == 3900  # вопрос уходит в каждый запрос
+    long_answers = estimate(cfg, _pricing(cfg), mode="debate", rounds=1,
+                            lengths={"proposal": 8000, "revision": 9000, "verdict": 6000, "sessions": 5})
+    assert long_answers.low > base.low * 2  # чужие варианты читают все — цена растёт с их длиной
+    assert long_answers.high / long_answers.low == pytest.approx(1.6)  # по истории — узкий диапазон
+    assert base.high / base.low == pytest.approx(2.5)
+    assert "по 5 последним заседаниям" in long_answers.basis and "вариант ≈ 8 000" in long_answers.basis
+
+
+def test_learn_lengths_from_transcripts(tmp_path):
+    import json
+    from council.estimate import learn_lengths, similar_actual
+    for i in range(3):
+        tr = [
+            # предложение: обрезано и продолжено — 2 записи, принята одна → 6000 токенов на ответ
+            {"member": "a", "stage": "proposal", "tokens": [500, 4000]},
+            {"member": "a", "stage": "proposal", "tokens": [900, 2000], "parsed": {}},
+            {"member": "b", "stage": "proposal", "tokens": [500, 6000], "parsed": {}},
+            {"member": "a", "stage": "critique", "tokens": [5000, 900], "parsed": {"reviews": [{}, {}, {}]}},
+            {"member": "c", "stage": "verdict", "tokens": [9000, 5000], "parsed": {}},
+        ]
+        (tmp_path / f"2026010{i}-000000-s.json").write_text(json.dumps(
+            {"transcript": tr, "total_cost_usd": 1.0 + i, "mode": "debate", "stats": {"a": {}, "b": {}, "c": {}}}))
+    (tmp_path / "20260109-000000-s.events.jsonl").write_text("{}")  # журналы не мешают
+    got = learn_lengths(tmp_path)
+    assert got["proposal"] == 6000 and got["critique"] == 300 and got["verdict"] == 5000 and got["sessions"] == 3
+    sim = similar_actual(got, "debate", 3)
+    assert sim == {"count": 3, "min": 1.0, "max": 3.0, "avg": 2.0}
+    assert similar_actual(got, "quick", 3) is None

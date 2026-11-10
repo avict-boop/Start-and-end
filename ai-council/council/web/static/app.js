@@ -319,6 +319,8 @@ function renderEstimate(e) {
     html += `<div class="big">≈ $${e.low.toFixed(3)} – $${e.high.toFixed(3)}</div>`;
     html += `<div class="muted">${e.calls} вызовов · лимит $${e.budget}</div>`;
     if (e.high > e.budget) html += `<div class="warnbox">Верхняя оценка выше лимита — заседание может остановиться по бюджету.</div>`;
+    if (e.similar) html += `<div class="muted">Фактически похожие заседания (${e.similar.count}) стоили $${e.similar.min.toFixed(2)}–$${e.similar.max.toFixed(2)}, в среднем $${e.similar.avg.toFixed(2)}</div>`;
+    if (e.basis) html += `<div class="muted small">Как посчитано: ${esc(e.basis)}. Модели читают все чужие варианты, поэтому цена растёт с длиной ответов и числом участников.</div>`;
     if (e.balance != null) {
       html += `<div class="muted">Баланс OpenRouter: $${e.balance.toFixed(2)}</div>`;
       if (e.balance < e.high) html += `<div class="warnbox">На балансе меньше верхней оценки — пополните баланс, иначе заседание может прерваться.</div>`;

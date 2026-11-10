@@ -200,10 +200,19 @@ async def _preflight(client, cfg, args, *, mode, rounds, options, criteria, atta
 
     args.vision = vision_map(cfg, models or None)
     imgs = sum(1 for a in attachments if a.kind == "image")
+    from .estimate import learn_lengths, similar_actual
+    lengths = learn_lengths(_runs_dir(cfg))
     est = estimate(cfg, pricing, mode=mode, rounds=rounds,
                    n_options=len(options) if options else None, has_criteria=bool(criteria),
                    doc_tokens=sum(a.tokens for a in attachments if a.kind == "document"),
-                   images=imgs, vision=args.vision)
+                   images=imgs, vision=args.vision, question_chars=len(args.question or "") + (Path(args.context_file).stat().st_size
+                                                                       if getattr(args, "context_file", None) else 0),
+                   options_chars=sum(len(o) for o in options or []), lengths=lengths)
+    console.print(f"[dim]Как посчитано: {est.basis}.[/]")
+    sim = similar_actual(lengths, mode, len(cfg.active_members))
+    if sim:
+        console.print(f"[dim]Похожие заседания ({sim['count']}) стоили ${sim['min']:.2f}–${sim['max']:.2f}, "
+                      f"в среднем ${sim['avg']:.2f}.[/]")
     blind = [m.name for m in cfg.active_members if args.vision.get(m.model) is False]
     if imgs and blind:
         console.print(f"[dim]Не видят картинки: {', '.join(blind)} — им передадут описание, "
