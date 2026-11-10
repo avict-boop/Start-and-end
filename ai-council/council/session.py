@@ -229,7 +229,10 @@ class Council:
                 ev["detail"] = f"попытка {ev['attempt']}"
             self._call(name, stage, phase, started, **ev)
 
-        for attempt in range(self.cfg.json_retries + 1):
+        attempt = 0          # попытки получить корректный ответ (исправление формата, ссылки на файлы)
+        continuations = 0    # продолжения длинного ответа, упёршегося в лимит (попытками не считаются)
+        acc = ""             # уже полученная часть ответа, который продолжается
+        while attempt <= self.cfg.json_retries:
             if self.total_cost >= self.cfg.max_cost_usd:
                 raise BudgetExceeded(
                     f"достигнут лимит бюджета ${self.cfg.max_cost_usd:g} (потрачено ${self.total_cost:.4f})"
@@ -255,6 +258,7 @@ class Council:
             self._account(member, comp)
             self._call(name, stage, "checking", started, tokens=comp.completion_tokens)
             max_tokens = max(max_tokens, comp.max_tokens or 0)  # клиент мог уже увеличить лимит
+            text = acc + comp.text if acc else comp.text
             entry = {
                 "stage": stage,
                 "member": member.name,
@@ -264,8 +268,10 @@ class Council:
                 "cost": comp.cost,
                 "tokens": [comp.prompt_tokens, comp.completion_tokens],
             }
+            if acc:
+                entry["continuation"] = continuations
             try:
-                obj = schema.model_validate(extract_json(comp.text))
+                obj = self._parse(schema, text, comp.text if acc else None)
                 if check:
                     obj = check(obj)
                 refs = refs_in(obj.model_dump()) if stage in self.FILE_STAGES else []
@@ -279,36 +285,52 @@ class Council:
                                text=f"ответ ссылается на несуществующий файл: {'; '.join(refs)}")
             except FileRefError as e:
                 error = str(e)
-                messages += [
-                    {"role": "assistant", "content": comp.text},
+                messages = list(base_messages) + [
+                    {"role": "assistant", "content": text},
                     {"role": "user", "content": prompts.fix_json(error)},
                 ]
+                acc = ""
                 self._call(name, stage, "retry", started,
                            detail="ответ ссылается на файл вместо содержимого — прошу вставить всё в ответ")
                 entry["error"] = error
                 entry["finish_reason"] = comp.finish_reason
                 self.transcript.append(entry)
+                attempt += 1
                 continue
             except ValueError as e:  # pydantic.ValidationError тоже ValueError
-                error = str(e).splitlines()[0][:500] if str(e) else repr(e)
-                if comp.finish_reason in ("length", "max_tokens", "MAX_TOKENS"):
-                    # Ответ обрезан по лимиту: повторяем тот же запрос с вдвое большим лимитом,
-                    # не пересылая обрывок (он только тратит токены).
-                    error = f"ответ обрезан на лимите {max_tokens} токенов ({error})"
-                    max_tokens = min(max_tokens * 2, self.cfg.max_tokens_cap)
-                    messages = list(base_messages)
-                    hint = f"ответ обрезан — повтор с лимитом {max_tokens} токенов"
-                else:
-                    messages += [
-                        {"role": "assistant", "content": comp.text},
-                        {"role": "user", "content": prompts.fix_json(error)},
-                    ]
-                    hint = "ответ не в нужном формате — прошу модель исправить"
-                if attempt < self.cfg.json_retries:
-                    self._call(name, stage, "retry", started, detail=hint)
+                error = readable_error(e)
+                truncated = comp.finish_reason in ("length", "max_tokens", "MAX_TOKENS")
                 entry["error"] = error
                 entry["finish_reason"] = comp.finish_reason
                 self.transcript.append(entry)
+                if truncated and continuations < self.MAX_CONTINUATIONS and comp.text.strip():
+                    # Длинный ответ упёрся в лимит: просим продолжить с места остановки, а не писать заново —
+                    # так работает и у моделей с жёстким потолком длины ответа (например, Perplexity).
+                    continuations += 1
+                    acc = text
+                    messages = list(base_messages) + [
+                        {"role": "assistant", "content": acc},
+                        {"role": "user", "content": prompts.continue_answer()},
+                    ]
+                    self._call(name, stage, "retry", started,
+                               detail=f"ответ длинный, упёрся в лимит {max_tokens} токенов — прошу продолжить "
+                                      f"с места остановки (часть {continuations + 1})")
+                    continue
+                acc = ""
+                if truncated:
+                    error = f"ответ обрезан на лимите {max_tokens} токенов даже после продолжений ({error})"
+                    max_tokens = min(max_tokens * 2, self.cfg.max_tokens_cap)
+                    messages = list(base_messages) + [{"role": "user", "content": prompts.shorter_answer()}]
+                    hint = "ответ слишком длинный даже после продолжений — прошу уложиться короче"
+                else:
+                    messages = list(base_messages) + [
+                        {"role": "assistant", "content": text},
+                        {"role": "user", "content": prompts.fix_json(error)},
+                    ]
+                    hint = f"ответ не в нужном формате ({error[:120]}) — прошу модель исправить"
+                if attempt < self.cfg.json_retries:
+                    self._call(name, stage, "retry", started, detail=hint)
+                attempt += 1
                 continue
             entry["parsed"] = obj.model_dump()
             self.transcript.append(entry)
@@ -316,6 +338,23 @@ class Council:
             return obj
         self._call(name, stage, "failed", started, detail=f"некорректный ответ: {error}"[:300])
         raise InvalidResponse(f"{member.name}: некорректный ответ после {self.cfg.json_retries + 1} попыток: {error}")
+
+    MAX_CONTINUATIONS = 4  # сколько раз можно попросить продолжить длинный ответ
+
+    @staticmethod
+    def _parse(schema: type[T], text: str, last_part: str | None) -> T:
+        """Разбор ответа. Для продолжения пробуем склейку частей, затем — только последнюю часть
+        (модель могла начать ответ заново целиком)."""
+        try:
+            return schema.model_validate(extract_json(text))
+        except ValueError:
+            if last_part is None:
+                raise
+            try:
+                return schema.model_validate(extract_json(last_part))
+            except ValueError:
+                pass
+            raise
 
     ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}
     FILE_STAGES = {"proposal", "revision", "verdict"}  # здесь модели пишут содержательный ответ
@@ -670,6 +709,26 @@ POSITION_ALIASES = {"kept": "kept", "keep": "kept", "same": "kept", "сохра�
 def _normalize_revision(r: Revision) -> Revision:
     pos = POSITION_ALIASES.get(str(r.position).strip().lower().split()[0] if str(r.position).strip() else "", "improved")
     return r.model_copy(update={"position": pos})
+
+
+def readable_error(e: Exception) -> str:
+    """Понятное описание ошибки разбора: какие поля не так (вместо «2 validation errors for Proposal»)."""
+    errors = getattr(e, "errors", None)
+    if callable(errors):
+        try:
+            items = errors()
+        except Exception:  # noqa: BLE001
+            items = []
+        parts = []
+        for it in items[:5]:
+            loc = ".".join(str(x) for x in it.get("loc", ())) or "answer"
+            got = it.get("input")
+            kind = type(got).__name__ if got is not None else "nothing"
+            parts.append(f"field '{loc}': {it.get('msg', '')}" + (f" (got {kind})" if it.get("type") != "missing" else ""))
+        if parts:
+            return "; ".join(parts)[:500]
+    text = str(e)
+    return text.splitlines()[0][:500] if text else repr(e)
 
 
 def normalize_status(raw: str) -> str:

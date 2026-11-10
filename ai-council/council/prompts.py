@@ -317,6 +317,18 @@ JSON format:
 {{"images": [{{"name": "exact image name", "description": "detailed description"}}]}}"""
 
 
+def continue_answer() -> str:
+    return ("Your reply was cut off by the length limit. Continue EXACTLY from the last character you wrote: "
+            "do not repeat anything, do not restart the JSON and do not add any comments — just the rest of the text, "
+            "so that the previous part plus this continuation form one valid JSON object.")
+
+
+def shorter_answer() -> str:
+    return ("Your previous reply was too long and was cut off several times. Write the answer again as ONE valid "
+            "JSON object, more compact: keep every required section and the key content, but shorten wording, "
+            "examples and repetition.")
+
+
 def fix_json(error: str) -> str:
     return f"""Your previous reply could not be accepted: {error}
 Reply again with ONE valid JSON object in the required format, and nothing else."""

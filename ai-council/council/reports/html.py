@@ -354,7 +354,7 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
             add("<h4>Взято у других</h4>" + _list(p["borrowed"]))
         if p.get("changes"):
             pos = v.position(l)
-            add(f'<div class="box"><b>Что изменено после критики'
+            add('<div class="box"><b>Что изменено после критики'
                 + (f" ({_e(v.POSITION_NAME.get(pos, pos))})" if pos else "") + f':</b> {_inline(p["changes"])}</div>')
         ini = v.initial(l)
         if v.revised(l) and ini:

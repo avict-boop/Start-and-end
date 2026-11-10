@@ -1,7 +1,71 @@
-"""Строгие схемы ответов моделей на каждом этапе заседания."""
+"""Схемы ответов моделей на каждом этапе заседания.
+
+Схемы строгие по смыслу, но терпимые к форме: модели часто присылают раздел ответа объектом или списком
+вместо строки (особенно когда запрос задаёт разделы), называют поля по-своему или заворачивают ответ
+в лишний уровень ({"proposal": {...}}). Такие ответы приводятся к нужному виду, а не отбрасываются.
+"""
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import re
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+def to_text(v: Any, level: int = 3) -> str:
+    """Любое значение -> Markdown-текст (объект с разделами -> заголовки, список -> пункты)."""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (int, float, bool)):
+        return str(v)
+    if isinstance(v, dict):
+        parts = []
+        for k, val in v.items():
+            body = to_text(val, min(level + 1, 6))
+            if isinstance(val, (dict, list)):
+                parts.append(f"{'#' * level} {k}\n\n{body}")
+            else:
+                parts.append(f"**{k}:** {body}")
+        return "\n\n".join(p for p in parts if p.strip())
+    if isinstance(v, (list, tuple)):
+        lines = []
+        for x in v:
+            t = to_text(x, level)
+            if t.strip():
+                lines.append(f"- {t}" if "\n" not in t else t)
+        return "\n".join(lines)
+    return str(v)
+
+
+def to_list(v: Any) -> list[str]:
+    """Строка/объект/список -> список строк."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v] if v.strip() else []
+    if isinstance(v, dict):
+        return [f"{k}: {to_text(val)}" for k, val in v.items()]
+    if isinstance(v, (list, tuple)):
+        return [t for t in (to_text(x) for x in v) if t.strip()]
+    return [str(v)]
+
+
+def _pick(d: dict, *names: str) -> Any:
+    for n in names:
+        if n in d and d[n] not in (None, "", [], {}):
+            return d[n]
+    return None
+
+
+def _unwrap(data: Any, required: tuple[str, ...]) -> Any:
+    """{"proposal": {...нужные поля...}} -> {...}."""
+    if isinstance(data, dict) and not any(k in data for k in required) and len(data) == 1:
+        inner = next(iter(data.values()))
+        if isinstance(inner, dict):
+            return inner
+    return data
 
 
 class Framing(BaseModel):
@@ -9,6 +73,31 @@ class Framing(BaseModel):
 
     refined_question: str
     criteria: list[str] = Field(min_length=1, max_length=7)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _shape(cls, data: Any) -> Any:
+        data = _unwrap(data, ("refined_question", "criteria"))
+        if isinstance(data, dict):
+            data = dict(data)
+            if "refined_question" not in data:
+                data["refined_question"] = _pick(data, "question", "refined", "task") or ""
+            crit = data.get("criteria")
+            if isinstance(crit, str):
+                crit = [c.strip(" -•\t") for c in re.split(r"[,;\n]", crit) if c.strip(" -•\t")]
+            if isinstance(crit, dict):
+                crit = list(crit)
+            if isinstance(crit, list):
+                crit = [to_text(c.get("name") if isinstance(c, dict) and c.get("name") else c) for c in crit][:7]
+            data["criteria"] = crit
+            data["refined_question"] = to_text(data["refined_question"])
+        return data
+
+
+TEXT_ALIASES = ("answer", "content", "text", "proposal", "response", "solution", "body", "details", "description",
+                "option", "result", "report")
+KNOWN_PROPOSAL = {"title", "summary", "reasoning", "pros", "risks", "confidence",
+                  "changes", "comparison", "borrowed", "position"}
 
 
 class Proposal(BaseModel):
@@ -21,6 +110,58 @@ class Proposal(BaseModel):
     risks: list[str] = Field(default_factory=list)
     confidence: float = Field(default=0.5, ge=0, le=1)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _shape(cls, data: Any) -> Any:
+        data = _unwrap(data, ("title", "summary"))
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if data.get("summary") in (None, "", [], {}):
+            alt = _pick(data, *TEXT_ALIASES)
+            if alt is not None:
+                data["summary"] = alt
+            else:
+                # разделы ответа лежат прямо на верхнем уровне — собираем их в текст
+                extra = {k: v for k, v in data.items() if k not in KNOWN_PROPOSAL}
+                if extra:
+                    data["summary"] = extra
+        if data.get("title") in (None, "", [], {}):
+            alt = _pick(data, "name", "heading", "option_title", "headline")
+            if alt is not None:
+                data["title"] = alt
+        if data.get("title") in (None, "", [], {}) and data.get("summary") not in (None, "", [], {}):
+            first = next((ln for ln in to_text(data["summary"]).splitlines() if ln.strip()), "")
+            data["title"] = re.sub(r"^[#*\-\s]+|[*]+$", "", first).strip()[:80] or "Вариант"
+        if "reasoning" not in data:
+            alt = _pick(data, "rationale", "justification", "why")
+            if alt is not None:
+                data["reasoning"] = alt
+        return data
+
+    @field_validator("title", "summary", "reasoning", mode="before")
+    @classmethod
+    def _text(cls, v: Any) -> str:
+        return to_text(v)
+
+    @field_validator("pros", "risks", mode="before")
+    @classmethod
+    def _list(cls, v: Any) -> list[str]:
+        return to_list(v)
+
+    @field_validator("confidence", mode="before")
+    @classmethod
+    def _conf(cls, v: Any) -> float:
+        if v is None or v == "":
+            return 0.5
+        try:
+            x = float(str(v).strip().rstrip("%").replace(",", "."))
+        except ValueError:
+            return 0.5
+        if 1 < x <= 100:
+            x /= 100
+        return min(max(x, 0.0), 1.0)
+
 
 class Revision(Proposal):
     """Шаг 4: доработанное предложение после критики и сравнения с чужими вариантами."""
@@ -30,6 +171,27 @@ class Revision(Proposal):
     borrowed: list[str] = Field(default_factory=list)     # что взято у других (с меткой варианта)
     position: str = "improved"                            # kept | improved | switched (нормализуется в session)
 
+    @field_validator("changes", "comparison", "position", mode="before")
+    @classmethod
+    def _rtext(cls, v: Any) -> str:
+        return to_text(v)
+
+    @field_validator("borrowed", mode="before")
+    @classmethod
+    def _rlist(cls, v: Any) -> list[str]:
+        return to_list(v)
+
+
+def _score(v: Any) -> Any:
+    """«7», «7/10», «7.5 из 10» -> 7.0."""
+    if isinstance(v, str):
+        m = re.match(r"\s*(\d+(?:[.,]\d+)?)", v)
+        if m:
+            return float(m.group(1).replace(",", "."))
+    if isinstance(v, dict):
+        return _score(_pick(v, "score", "value", "rating"))
+    return v
+
 
 class Review(BaseModel):
     label: str
@@ -37,11 +199,47 @@ class Review(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     weaknesses: list[str] = Field(default_factory=list)
 
+    @field_validator("label", mode="before")
+    @classmethod
+    def _label(cls, v: Any) -> str:
+        return to_text(v)
+
+    @field_validator("scores", mode="before")
+    @classmethod
+    def _scores(cls, v: Any) -> Any:
+        if isinstance(v, list):  # [{"criterion": "Цена", "score": 7}, ...]
+            v = {to_text(_pick(x, "criterion", "name", "key")): _pick(x, "score", "value", "rating")
+                 for x in v if isinstance(x, dict)}
+        if isinstance(v, dict):
+            return {str(k): _score(x) for k, x in v.items()}
+        return v
+
+    @field_validator("strengths", "weaknesses", mode="before")
+    @classmethod
+    def _list(cls, v: Any) -> list[str]:
+        return to_list(v)
+
 
 class CritiqueSet(BaseModel):
     """Шаг 3: оценки участником чужих вариантов."""
 
     reviews: list[Review]
+
+    @model_validator(mode="before")
+    @classmethod
+    def _shape(cls, data: Any) -> Any:
+        if isinstance(data, list):
+            return {"reviews": data}
+        if isinstance(data, dict) and "reviews" not in data:
+            alt = _pick(data, "critique", "critiques", "evaluations", "assessments")
+            if isinstance(alt, list):
+                return {"reviews": alt}
+            # {"A": {...}, "B": {...}} — отзывы по меткам
+            if data and all(isinstance(v, dict) for v in data.values()):
+                return {"reviews": [{"label": k, **v} for k, v in data.items()]}
+        if isinstance(data, dict) and isinstance(data.get("reviews"), dict):
+            return {"reviews": [{"label": k, **v} if isinstance(v, dict) else v for k, v in data["reviews"].items()]}
+        return data
 
 
 class Ballot(BaseModel):
@@ -50,10 +248,29 @@ class Ballot(BaseModel):
     ranking: list[str]
     rationale: str = ""
 
+    @field_validator("ranking", mode="before")
+    @classmethod
+    def _ranking(cls, v: Any) -> Any:
+        if isinstance(v, str):  # «B > A > C», «B, A, C»
+            return [x.strip() for x in re.split(r"[>,;\n]|\s+-\s+", v) if x.strip()]
+        if isinstance(v, list):
+            return [to_text(_pick(x, "label", "proposal", "option") if isinstance(x, dict) else x) for x in v]
+        return v
+
+    @field_validator("rationale", mode="before")
+    @classmethod
+    def _text(cls, v: Any) -> str:
+        return to_text(v)
+
 
 class ImageNote(BaseModel):
     name: str
     description: str
+
+    @field_validator("name", "description", mode="before")
+    @classmethod
+    def _text(cls, v: Any) -> str:
+        return to_text(v)
 
 
 class ImageNotes(BaseModel):
@@ -68,12 +285,27 @@ class Claim(BaseModel):
     note: str = ""
     sources: list[str] = Field(default_factory=list)
 
+    @field_validator("claim", "status", "note", mode="before")
+    @classmethod
+    def _text(cls, v: Any) -> str:
+        return to_text(v)
+
+    @field_validator("sources", mode="before")
+    @classmethod
+    def _list(cls, v: Any) -> list[str]:
+        return to_list(v)
+
 
 class FactCheck(BaseModel):
     """Проверка ключевых фактических утверждений одного варианта."""
 
     claims: list[Claim] = Field(default_factory=list)
     summary: str = ""
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def _text(cls, v: Any) -> str:
+        return to_text(v)
 
 
 class Verdict(BaseModel):
@@ -84,3 +316,28 @@ class Verdict(BaseModel):
     why: str
     dissent: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _shape(cls, data: Any) -> Any:
+        data = _unwrap(data, ("winner", "final_answer"))
+        if not isinstance(data, dict):
+            return data
+        data = dict(data)
+        if data.get("final_answer") in (None, "", [], {}):
+            alt = _pick(data, "answer", "final", "decision", "summary", "content", "text", "result")
+            if alt is not None:
+                data["final_answer"] = alt
+        if data.get("why") in (None, "", [], {}):
+            data["why"] = _pick(data, "reasoning", "rationale", "justification") or ""
+        return data
+
+    @field_validator("winner", "final_answer", "why", mode="before")
+    @classmethod
+    def _text(cls, v: Any) -> str:
+        return to_text(v)
+
+    @field_validator("dissent", "risks", mode="before")
+    @classmethod
+    def _list(cls, v: Any) -> list[str]:
+        return to_list(v)

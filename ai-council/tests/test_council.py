@@ -182,33 +182,52 @@ def test_extract_json_tolerates_model_quirks():
         extract_json('{"title": "Вариант", "summary": "длинный текст без конца')
 
 
-class TruncatedOnce(MockClient):
-    """Первый ответ на proposal обрезан по лимиту (finish_reason=length)."""
+class TruncatedThenContinues(MockClient):
+    """Ответ m/a на proposal упирается в лимит дважды, потом дописывается (как у моделей с потолком длины)."""
 
-    def __init__(self):
+    PARTS = ['{"title": "Длинный отчёт", "summary": "Раздел 1. Начало. ',
+             'Раздел 2. Середина. ',
+             'Раздел 3. Конец.", "reasoning": "потому что", "pros": ["полно"], "risks": [], "confidence": 0.8}']
+
+    def __init__(self, restart=False):
         super().__init__(delay=0)
+        self.restart = restart  # модель вместо продолжения начинает ответ заново целиком
         self.proposal_calls = []
 
     async def complete(self, model, messages, **kw):
         meta = kw.get("meta") or {}
-        if meta.get("stage") == "proposal":
-            self.proposal_calls.append((model, kw["max_tokens"], len(messages)))
-            if sum(1 for m, *_ in self.proposal_calls if m == model) == 1:
-                return Completion(text='{"title": "Обрыв", "summary": "текст', model=model,
-                                  finish_reason="length", cost=0.002)
+        if meta.get("stage") == "proposal" and model == "m/a":
+            i = len(self.proposal_calls)
+            self.proposal_calls.append((kw["max_tokens"], messages))
+            self.calls.append({"model": model, "meta": meta})
+            if self.restart and i == 1:
+                return Completion(text="".join(self.PARTS), model=model, finish_reason="stop", cost=0.001)
+            return Completion(text=self.PARTS[i], model=model, cost=0.001,
+                              finish_reason="length" if i < 2 else "stop")
         return await super().complete(model, messages, **kw)
 
 
-def test_truncated_json_is_retried_with_bigger_limit():
-    client = TruncatedOnce()
-    cfg = make_cfg(max_tokens=1000, reasoning_effort="medium")
-    res = run(Council(cfg, client).run("Q", mode="quick", criteria=["x"]))
-    assert len(res.proposals) == 4
-    first, second = [c for c in client.proposal_calls if c[0] == "m/a"]
-    assert (first[1], second[1]) == (1000, 2000)   # лимит удвоен
-    assert second[2] == first[2] == 2              # обрывок не пересылается обратно
-    errors = [e for e in res.transcript if e.get("error")]
-    assert errors and "обрезан" in errors[0]["error"] and errors[0]["finish_reason"] == "length"
+def test_truncated_answer_is_continued_not_restarted():
+    client = TruncatedThenContinues()
+    cfg = make_cfg(max_tokens=1000)
+    res = run(Council(cfg, client, seed=1).run("Q", mode="quick", criteria=["x"]))
+    label = next(l for l, a in res.authors.items() if a == "a")
+    p = res.proposals[label]
+    assert p.summary == "Раздел 1. Начало. Раздел 2. Середина. Раздел 3. Конец." and p.reasoning == "потому что"
+    assert [t for t, _ in client.proposal_calls] == [1000, 1000, 1000]  # лимит не раздувается
+    last = client.proposal_calls[-1][1]
+    assert last[-2]["role"] == "assistant" and last[-2]["content"] == "".join(TruncatedThenContinues.PARTS[:2])
+    assert "Continue EXACTLY from the last character" in last[-1]["content"]
+    assert not res.stats["a"].failures
+    cont = [e for e in res.transcript if e["member"] == "a" and e["stage"] == "proposal"]
+    assert len(cont) == 3 and cont[-1]["continuation"] == 2
+
+
+def test_continuation_that_restarts_whole_answer_is_accepted():
+    client = TruncatedThenContinues(restart=True)
+    res = run(Council(make_cfg(max_tokens=1000), client, seed=1).run("Q", mode="quick", criteria=["x"]))
+    label = next(l for l, a in res.authors.items() if a == "a")
+    assert res.proposals[label].summary.endswith("Раздел 3. Конец.")
 
 
 def test_failed_attempts_cost_is_counted():
@@ -488,3 +507,40 @@ def test_revision_position_is_normalized_and_saved():
     assert v.position_line.startswith("После доработки:")
     html = render_html(v)
     assert "Сравнение с другими вариантами" in html and "Взято у других" in html and "После доработки:" in html
+
+
+def test_lenient_shapes_are_accepted():
+    from council.schemas import Ballot, CritiqueSet, Framing, Proposal, Verdict
+    # разделы ответа объектом вместо строки, плюсы строкой, уверенность в процентах
+    p = Proposal.model_validate({"title": "План", "summary": {"1. Вывод": "кратко", "2. Таблица": ["а", "б"]},
+                                 "pros": "быстро", "confidence": "80%"})
+    assert "**1. Вывод:** кратко" in p.summary and "### 2. Таблица" in p.summary and "- а" in p.summary
+    assert p.pros == ["быстро"] and p.confidence == 0.8
+    # лишняя обёртка и другие названия полей
+    p = Proposal.model_validate({"proposal": {"name": "Вариант X", "answer": "текст", "rationale": "так"}})
+    assert (p.title, p.summary, p.reasoning) == ("Вариант X", "текст", "так")
+    # без title, разделы прямо на верхнем уровне
+    p = Proposal.model_validate({"Краткий вывод": "Всё хорошо", "Риски": ["r1"]})
+    assert "Краткий вывод" in p.summary and p.title
+    p = Proposal.model_validate({"summary": "## Итог\nтекст"})
+    assert p.title == "Итог"
+    # критика: оценки строками и отзывы по меткам
+    cs = CritiqueSet.model_validate({"A": {"scores": {"Цена": "7/10"}, "strengths": "дёшево"}})
+    assert cs.reviews[0].label == "A" and cs.reviews[0].scores == {"Цена": 7.0} and cs.reviews[0].strengths == ["дёшево"]
+    assert Ballot.model_validate({"ranking": "B > A > C"}).ranking == ["B", "A", "C"]
+    f = Framing.model_validate({"refined_question": "Q", "criteria": "цена, риски, сроки, качество, удобство, польза, вкус, цвет"})
+    assert len(f.criteria) == 7
+    v = Verdict.model_validate({"winner": "B", "answer": {"Вывод": "да"}, "reasoning": "так"})
+    assert "Вывод" in v.final_answer and v.why == "так"
+
+
+def test_readable_validation_error():
+    from pydantic import ValidationError
+
+    from council.schemas import Proposal
+    from council.session import readable_error
+    try:
+        Proposal.model_validate({"reasoning": "x"})
+    except ValidationError as e:
+        msg = readable_error(e)
+    assert "field 'title'" in msg and "field 'summary'" in msg and "validation errors for" not in msg
