@@ -323,9 +323,9 @@ def _masthead(v: View, kind: str) -> str:
     if b.logo_png and b.logo_is_wordmark:
         logo, name = f'<img class="wordmark" src="{b.logo_data_url}" alt="{_e(b.title)}">', ""
     elif b.logo_png:
-        logo = f'<img src="{b.logo_data_url}" alt="">'
+        logo = f'<img src="{b.logo_data_url}" alt="Логотип">'
     elif b.title == brand.DEFAULT_TITLE and _mark_url():
-        logo = f'<img src="{_mark_url()}" alt="">'
+        logo = f'<img src="{_mark_url()}" alt="Знак «Совета нейросетей»">'
     else:
         logo = ""
     return (f'<header class="masthead"><div class="brand-box">{logo}{name}</div>'
