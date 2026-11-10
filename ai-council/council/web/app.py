@@ -497,7 +497,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         rounds = cfg.debate_rounds if req.rounds is None else req.rounds
         st.push({"type": "start", "id": sid, "question": req.question, "mode": "evaluate" if opts else req.mode,
                  "rounds": rounds, "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
-                 "budget": cfg.max_cost_usd, "mock": req.mock,
+                 "budget": cfg.max_cost_usd, "mock": req.mock, "fact_check": cfg.fact_check.enabled,
                  "parent": {"id": req.parent, "title": parent_title} if req.parent else None})
 
         def on_event(event: str, **data: Any) -> None:

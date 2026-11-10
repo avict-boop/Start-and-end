@@ -9,7 +9,8 @@ const MODES = [["debate", "Дебаты"], ["quick", "Быстрый"]];
 function setDirty() {
   const dirty = JSON.stringify(SET.data) !== SET.orig;
   $("setSave").disabled = !dirty || !SET.writable;
-  $("setState").textContent = dirty ? "есть несохранённые изменения" : "";
+  $("setState").textContent = dirty ? "Есть несохранённые изменения" : "";
+  $("saveBar").classList.toggle("clean", !dirty);
   return dirty;
 }
 
@@ -64,7 +65,10 @@ function sel(id, options, value, attrs = "") {
 }
 
 function renderSettings() {
-  for (const b of $("setTabs").querySelectorAll("button")) b.classList.toggle("active", b.dataset.tab === SET.tab);
+  for (const b of $("setTabs").querySelectorAll("button")) {
+    b.classList.toggle("active", b.dataset.tab === SET.tab);
+    b.setAttribute("aria-selected", String(b.dataset.tab === SET.tab));
+  }
   const d = SET.data;
   if (!d) return;
   const ro = SET.writable ? "" : "disabled";
@@ -77,22 +81,22 @@ function renderSettings() {
       <div class="table-wrap"><table class="table set-members">
         <thead><tr><th>Вкл.</th><th>Имя</th><th>Модель</th><th>Глубина рассуждений</th><th></th></tr></thead>
         <tbody>${d.members.map((m, i) => `<tr class="${m.enabled ? "" : "off"}">
-          <td><input type="checkbox" data-mi="${i}" data-f="enabled" ${m.enabled ? "checked" : ""} ${ro}></td>
-          <td><input type="text" data-mi="${i}" data-f="name" value="${esc(m.name)}" ${m._new ? "" : "readonly"} ${ro} class="w-name"></td>
-          <td><input type="text" data-mi="${i}" data-f="model" value="${esc(m.model)}" list="modelList" ${ro} class="w-model">
+          <td class="c-on"><label class="switch small" title="Участвует в заседаниях"><input type="checkbox" data-mi="${i}" data-f="enabled" ${m.enabled ? "checked" : ""} ${ro} aria-label="${esc(m.name)} участвует"><span class="sw" aria-hidden="true"></span></label></td>
+          <td class="c-name" data-th="Имя"><input type="text" data-mi="${i}" data-f="name" value="${esc(m.name)}" ${m._new ? "" : "readonly"} ${ro} class="w-name" aria-label="Имя участника"></td>
+          <td data-th="Модель на OpenRouter"><input type="text" data-mi="${i}" data-f="model" value="${esc(m.model)}" list="modelList" ${ro} class="w-model" aria-label="Модель ${esc(m.name)}">
             <div class="muted small" data-info="${i}">${modelInfo(m.model)}</div></td>
-          <td>${sel(`eff${i}`, EFFORTS, m.reasoning_effort || "", `data-mi="${i}" data-f="reasoning_effort" ${ro}`)}</td>
-          <td><button type="button" class="link" data-del="${i}" ${ro} title="Удалить участника">✕</button></td></tr>`).join("")}</tbody>
+          <td data-th="Глубина рассуждений">${sel(`eff${i}`, EFFORTS, m.reasoning_effort || "", `data-mi="${i}" data-f="reasoning_effort" ${ro} aria-label="Глубина рассуждений ${esc(m.name)}"`)}</td>
+          <td class="c-del"><button type="button" class="icon-btn" data-del="${i}" ${ro} title="Удалить участника" aria-label="Удалить участника ${esc(m.name)}"><svg class="ic"><use href="#i-trash"/></svg></button></td></tr>`).join("")}</tbody>
       </table></div>
-      <button type="button" class="secondary" id="addMember" ${ro}>+ Добавить участника</button>
+      <button type="button" class="secondary" id="addMember" ${ro} style="margin-top:.4rem"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Добавить участника</button>
       <div class="row2" style="margin-top:1rem">
         <label class="field"><span>Председатель</span>${sel("sChair", enabled, d.chair, ro)}</label>
         <label class="field"><span>Адвокат дьявола</span>${sel("sDevil", [["", "— нет —"], ...enabled], d.devil_advocate || "", ro)}</label>
       </div>
-      <label class="check small"><input type="checkbox" id="sChairProposes" ${d.chair_proposes ? "checked" : ""} ${ro}>
-        Председатель тоже предлагает свой вариант (по умолчанию — только ставит задачу, оценивает и пишет итог)</label>
-      <label class="check small"><input type="checkbox" id="sChairFollows" ${d.chair_follows_vote ? "checked" : ""} ${ro}>
-        Председатель следует голосованию: другой вариант — только при опровергнутых фактах, серьёзном риске или если лидер не отвечает на вопрос</label>
+      <label class="switch"><input type="checkbox" id="sChairProposes" ${d.chair_proposes ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span>
+        <span><b>Председатель тоже предлагает решение</b><small>По умолчанию он только ставит задачу, голосует и пишет итог.</small></span></label>
+      <label class="switch"><input type="checkbox" id="sChairFollows" ${d.chair_follows_vote ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span>
+        <span><b>Председатель следует голосованию</b><small>Другой вариант — только при опровергнутых фактах, серьёзном риске или если лидер не отвечает на вопрос.</small></span></label>
       <h2 style="margin-top:1.4rem">Более новые модели</h2>
       <p class="muted small">Сравнение моделей совета с каталогом OpenRouter: что вышло новее того же семейства и у того же разработчика.</p>
       <button type="button" class="secondary" id="checkUpgrades">Проверить, есть ли модели новее</button>
@@ -111,9 +115,8 @@ function renderSettings() {
         <label class="field"><span>Язык ответов <em>(по-английски: Russian, English…)</em></span><input type="text" id="sLang" value="${esc(d.language)}" ${ro}></label>
       </div>
       <h2 style="margin-top:1rem">Экономия</h2>
-      <label class="check small"><input type="checkbox" id="sCompact" ${d.compact_proposals ? "checked" : ""} ${ro}>
-        Компактные варианты по умолчанию: участники пишут суть сжато, полный ответ в нужном формате — только председатель
-        (примерно в 2–3 раза дешевле; в форме вопроса можно поменять для отдельного заседания)</label>
+      <label class="switch"><input type="checkbox" id="sCompact" ${d.compact_proposals ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span>
+        <span><b>Компактные варианты по умолчанию</b><small>Участники пишут суть сжато, полный ответ — только председатель. Примерно в 2–3 раза дешевле; в «Параметрах» вопроса можно поменять для отдельного заседания.</small></span></label>
       <label class="field" style="max-width:20rem;margin-top:.6rem"><span>Длина компактного варианта, слов</span>
         <input type="number" id="sCompactWords" min="150" max="5000" step="50" value="${d.compact_words}" ${ro}></label>`;
   } else if (SET.tab === "facts") {
@@ -121,7 +124,7 @@ function renderSettings() {
     html = `
       <h2>Проверка фактов</h2>
       <p class="muted small">После голосования модель с поиском в интернете проверяет ключевые факты лидеров; председатель учитывает результат.</p>
-      <label class="check small"><input type="checkbox" id="fEnabled" ${fc.enabled ? "checked" : ""} ${ro}> Включена по умолчанию</label>
+      <label class="switch"><input type="checkbox" id="fEnabled" ${fc.enabled ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Включена по умолчанию</b></span></label>
       <div class="row2" style="margin-top:.6rem">
         <label class="field"><span>Модель с поиском</span><input type="text" id="fModel" list="modelList" value="${esc(fc.model)}" ${ro}>
           <div class="muted small">${modelInfo(fc.model)}</div></label>
@@ -144,7 +147,7 @@ function renderSettings() {
           <input type="text" id="bColor" value="${esc(b.color)}" placeholder="#0a7d5a" ${ro}></div></label>
         <div class="field"><span>Логотип <em>(PNG или JPG до 2 МБ)</em></span>
           <div class="logo-row">${b.logo ? `<img src="/api/branding/logo?t=${Date.now()}" alt="логотип" class="logo-prev">` : '<span class="muted small">не задан</span>'}
-            <label class="button secondary">Загрузить<input type="file" id="bLogo" accept="image/png,image/jpeg" hidden ${SET.logoWritable ? "" : "disabled"}></label>
+            <label class="btn secondary">Загрузить<input type="file" id="bLogo" accept="image/png,image/jpeg" hidden ${SET.logoWritable ? "" : "disabled"}></label>
             ${b.logo ? `<button type="button" class="link" id="bLogoDel" ${ro}>Убрать</button>` : ""}</div></div>
       </div>
       <button type="button" class="secondary" id="bRebuild">Пересобрать отчёты архива</button>
@@ -173,9 +176,9 @@ function bindSettings() {
     });
   }
   for (const b of $("setBody").querySelectorAll("[data-del]")) {
-    b.addEventListener("click", () => {
+    b.addEventListener("click", async () => {
       const m = d.members[+b.dataset.del];
-      if (!confirm(`Удалить участника «${m.name}»? (Выключить можно галочкой.)`)) return;
+      if (!(await ask({ title: `Удалить участника «${m.name}»?`, html: "<p>Если нужно на время — просто выключите его переключателем.</p>", ok: "Удалить", danger: true }))) return;
       d.members.splice(+b.dataset.del, 1); fixRoles(); renderSettings(); setDirty();
     });
   }
@@ -211,7 +214,7 @@ function bindSettings() {
   on("bColorPick", "input", (e) => { d.branding.color = e.target.value; $("bColor").value = e.target.value; setDirty(); });
   on("bLogo", "change", uploadLogo);
   on("bRebuild", "click", async () => {
-    if (setDirty() && !confirm("Есть несохранённые изменения — отчёты соберутся по сохранённым настройкам. Продолжить?")) return;
+    if (setDirty() && !(await ask({ title: "Пересобрать отчёты?", html: "<p>Есть несохранённые изменения — отчёты соберутся по уже сохранённым настройкам.</p>", ok: "Пересобрать" }))) return;
     try {
       const r = await api("/api/reports/rebuild", { method: "POST" });
       $("bRebuildState").textContent = `Запущено: ${r.sessions} заседаний, отчёты обновятся в фоне за несколько минут.`;
@@ -338,7 +341,7 @@ async function renderSystem(first) {
     <p class="muted small">Журнал программы и прерванные заседания одним архивом — его можно прислать для разбора.
       Ключи и пароли в журналах скрываются; вопросы и ответы моделей — внутри. Журнал отдельного заседания —
       в его «Журнале событий».</p>
-    <a class="button secondary" href="/api/diagnostics">🧾 Скачать журналы программы</a>
+    <a class="btn secondary" href="/api/diagnostics"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>Скачать журналы программы</a>
     <div id="failedList" class="small" style="margin-top:.6rem"></div>
     <h2 style="margin-top:1.2rem">Резервные копии настроек</h2>
     <p class="muted small">Перед каждым сохранением прежняя версия config.yaml сохраняется — можно вернуть.</p>
@@ -353,11 +356,6 @@ async function renderSystem(first) {
   if (!running && SET.poll && !SET.restarting) { clearInterval(SET.poll); SET.poll = null; }
 }
 
-function plural(n, one, few, many) {
-  const m10 = n % 10, m100 = n % 100;
-  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
-}
-
 async function checkVersion(force) {
   try { SET.check = await api(`/api/system/check${force ? "?force=1" : ""}`); }
   catch (e) { SET.check = { error: e.message }; }
@@ -369,7 +367,7 @@ async function requestAction(action) {
   const text = action === "update"
     ? "Обновить программу? Она скачает новую версию, пересоберётся и перезапустится (1–5 минут). Идущие заседания прервутся."
     : "Перезапустить программу? Идущие заседания прервутся.";
-  if (!confirm(text)) return;
+  if (!(await ask({ title: action === "update" ? "Обновить программу?" : "Перезапустить программу?", html: `<p>${esc(text)}</p>`, ok: action === "update" ? "Обновить" : "Перезапустить" }))) return;
   try {
     await api(`/api/system/${action}`, { method: "POST" });
     SET.restarting = true;
@@ -429,7 +427,7 @@ async function showBackups() {
       <button type="button" class="link" data-restore="${esc(n)}" ${SET.writable ? "" : "disabled"}>Вернуть</button></li>`).join("")}</ul>`;
     for (const b of $("backups").querySelectorAll("[data-restore]")) {
       b.addEventListener("click", async () => {
-        if (!confirm(`Вернуть настройки от ${label(b.dataset.restore)}? Текущие будут заменены (их копия тоже сохранится).`)) return;
+        if (!(await ask({ title: "Вернуть настройки?", html: `<p>Настройки от ${esc(label(b.dataset.restore))} заменят текущие. Копия текущих тоже сохранится.</p>`, ok: "Вернуть" }))) return;
         try { await api(`/api/settings/restore/${encodeURIComponent(b.dataset.restore)}`, { method: "POST" });
           notice("✓ Настройки возвращены.", "ok"); await openSettings(); SET.tab = "system"; renderSettings();
         } catch (e) { notice(esc(e.message), "bad"); }

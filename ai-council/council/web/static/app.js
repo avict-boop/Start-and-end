@@ -14,11 +14,79 @@ const STAGES = [
 ];
 const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения",
   factcheck: "Проверка фактов" };
-const MODE_HINT = {
-  debate: "Предложения → критика → доработка → голосование → вердикт. Для важных решений.",
-  quick: "Предложения → голосование → вердикт. Быстро и дёшево.",
-  evaluate: "Вы даёте готовые варианты, совет их критикует и выбирает лучший.",
+// что происходит на этапе — простыми словами
+const STAGE_HINT = {
+  framing: "председатель уточняет вопрос и критерии",
+  proposal: "каждая модель вслепую предлагает решение",
+  critique: "модели анонимно оценивают чужие решения",
+  revision: "авторы улучшают решения с учётом критики",
+  vote: "модели ранжируют чужие решения",
+  factcheck: "модель с поиском проверяет факты лидеров",
+  verdict: "председатель пишет итоговое решение",
 };
+const MODE_HINT = {
+  debate: "Подробное обсуждение: решения, критика, доработка, голосование.",
+  quick: "Быстрый ответ: решения и голосование, без критики.",
+  evaluate: "Выбор из ваших вариантов: совет их обсуждает и выбирает лучший.",
+};
+const MODE_NAME = { debate: "Подробное обсуждение", quick: "Быстрый ответ", evaluate: "Выбор из вариантов" };
+
+/* ------------------------------------------------------------ мелкие помощники интерфейса */
+
+function plural(n, one, few, many) {
+  const m10 = n % 10, m100 = n % 100;
+  return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many;
+}
+
+let toastTimer = null;
+function toast(text, ms = 3500) {
+  const t = $("toast");
+  t.textContent = text;
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.hidden = true; }, ms);
+}
+
+// своё окно подтверждения вместо системного confirm(): крупные кнопки, понятный текст, работает с клавиатуры
+function ask({ title, html = "", ok = "OK", cancel = "Отмена", danger = false }) {
+  return new Promise((resolve) => {
+    const d = $("dialog");
+    const back = document.activeElement;
+    $("dTitle").textContent = title;
+    $("dBody").innerHTML = html;
+    $("dOk").textContent = ok;
+    $("dOk").className = `btn ${danger ? "danger" : "primary"}`;
+    $("dCancel").textContent = cancel;
+    $("dCancel").hidden = cancel === null;
+    d.hidden = false;
+    document.body.classList.add("modal-open");
+    const done = (v) => {
+      d.hidden = true;
+      if ($("modal").hidden) document.body.classList.remove("modal-open");
+      d.removeEventListener("keydown", onKey);
+      $("dOk").onclick = $("dCancel").onclick = d.onclick = null;
+      if (back && back.focus) back.focus();
+      resolve(v);
+    };
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); done(false); } trapFocus(e, d); };
+    d.addEventListener("keydown", onKey);
+    $("dOk").onclick = () => done(true);
+    $("dCancel").onclick = () => done(false);
+    d.onclick = (e) => { if (e.target === d) done(false); };
+    (danger ? $("dCancel") : $("dOk")).focus();
+  });
+}
+
+// Tab не выходит за пределы открытого окна
+function trapFocus(e, box) {
+  if (e.key !== "Tab") return;
+  const items = [...box.querySelectorAll('button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
+    .filter((el) => !el.disabled && !el.hidden && el.offsetParent !== null);
+  if (!items.length) return;
+  const first = items[0], last = items[items.length - 1];
+  if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+  else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+}
 
 /* ------------------------------------------------------------ markdown (минимальный, безопасный) */
 
@@ -122,15 +190,69 @@ let mode = "debate";
 
 function setMode(m) {
   mode = m;
-  for (const b of $("modeSeg").querySelectorAll("button")) b.setAttribute("aria-checked", String(b.dataset.mode === m));
+  for (const r of $("modeSeg").querySelectorAll("input[name=mode]")) r.checked = r.value === m;
   $("roundsField").hidden = m !== "debate";
   $("optionsField").hidden = m !== "evaluate";
   $("modeHint").textContent = MODE_HINT[m];
-  $("estimate").hidden = true;
+  formChanged();
 }
 
 function selectedMembers() {
   return [...$("members").querySelectorAll("input:checked")].map((i) => i.value);
+}
+
+// строка под «Параметрами»: что будет использовано, без открытия списка
+function updateParamsSummary() {
+  if (!config) return;
+  const n = selectedMembers().length;
+  const bits = [`${n} ${plural(n, "модель", "модели", "моделей")}`];
+  if ($("chair").value) bits.push(`председатель ${$("chair").value}`);
+  if (mode === "debate") { const r = Number($("rounds").value) || 1; bits.push(`${r} ${plural(r, "раунд", "раунда", "раундов")}`); }
+  bits.push(`лимит $${Number($("budget").value) || config.budget}`);
+  if ($("compact").checked) bits.push("компактно");
+  if ($("factCheck").checked) bits.push("проверка фактов");
+  if ($("mock").checked) bits.push("демо");
+  $("paramsSummary").textContent = bits.join(" · ");
+}
+
+/* ------------------------------------------------------------ оценка стоимости — сама, по мере ввода */
+
+let estTimer = null, estSeq = 0, lastEstimate = null;
+function formChanged() {
+  if (!config) return;
+  updateParamsSummary();
+  lastEstimate = null;
+  clearTimeout(estTimer);
+  estTimer = setTimeout(autoEstimate, 700);
+}
+
+async function autoEstimate() {
+  const p = payload();
+  const line = $("estLine");
+  $("estimateBtn").className = "est-line";
+  if (p.question.length < 3) { line.textContent = "Напишите вопрос — покажу примерную стоимость"; $("estimate").hidden = true; return; }
+  if (p.members.length < 2) { line.textContent = "Выберите хотя бы двух участников"; $("estimateBtn").classList.add("warn"); return; }
+  const seq = ++estSeq;
+  line.textContent = "Считаю стоимость…";
+  let e;
+  try { e = await api("/api/estimate", { method: "POST", body: p }); } catch (err) {
+    if (seq === estSeq) { line.textContent = `Не удалось оценить: ${err.message}`; $("estimateBtn").classList.add("warn"); }
+    return;
+  }
+  if (seq !== estSeq) return;
+  lastEstimate = e;
+  renderEstimate(e);
+}
+
+function estimateSummary(e) {
+  if ((Object.keys(e.unknown || {})).length) return ["Есть модели, которых нет на OpenRouter — нажмите, чтобы посмотреть", "bad"];
+  if (e.low == null) return [$("mock").checked ? `Демо-режим: бесплатно · ${e.calls} обращений к моделям` : `${e.calls} обращений · цены неизвестны`, ""];
+  let txt = `Оценка: $${e.low.toFixed(2)} – $${e.high.toFixed(2)}`;
+  let kind = "";
+  if (e.balance != null && e.balance < e.high) { txt += " · баланса может не хватить"; kind = "bad"; }
+  else if (e.high > e.budget) { txt += ` · выше лимита $${e.budget}`; kind = "warn"; }
+  else if (e.balance != null) txt += " · баланса хватит";
+  return [txt, kind];
 }
 
 function refreshRoleSelects() {
@@ -145,11 +267,15 @@ function refreshRoleSelects() {
   };
   fill($("chair"), false, config.chair);
   fill($("devil"), true, config.devil_advocate);
+}
+
+// переключатели — по умолчаниям из config.yaml (только при загрузке, чтобы смена участников их не сбрасывала)
+function resetToggles() {
   $("chairProposes").checked = !!config.chair_proposes;
   $("factCheck").checked = !!(config.fact_check && config.fact_check.enabled);
   $("compact").checked = !!(config.compact && config.compact.enabled);
-  $("compactHint").textContent = config.compact ? `(до ${config.compact.words} слов; полный формат — только в итоге)` : "";
-  $("factCheckHint").textContent = config.fact_check ? `(${config.fact_check.model}, топ-${config.fact_check.top})` : "";
+  $("compactHint").textContent = config.compact ? `До ${config.compact.words} слов на вариант.` : "";
+  $("factCheckHint").textContent = config.fact_check ? `Модель: ${config.fact_check.model}, лидеров: ${config.fact_check.top}. Дороже на пару запросов.` : "";
 }
 
 function parseOptions(text) {
@@ -196,8 +322,10 @@ function setFormMode(mode) {
 $("formBannerX").addEventListener("click", () => setFormMode(null));
 
 function focusForm() {
-  $("form").scrollIntoView({ behavior: "smooth", block: "start" });
-  setTimeout(() => $("question").focus(), 300);
+  goCompose();
+  window.scrollTo({ top: 0 });
+  setTimeout(() => $("question").focus(), 100);
+  formChanged();
 }
 
 $("followBtn").addEventListener("click", () => {
@@ -212,7 +340,7 @@ $("repeatBtn").addEventListener("click", async () => {
   if (!current) return;
   let data;
   try { data = await api(`/api/sessions/${encodeURIComponent(current.id)}/repeat`, { method: "POST" }); }
-  catch (e) { alert(e.message); return; }
+  catch (e) { toast(e.message); return; }
   const r = data.request || {};
   $("question").value = r.question || "";
   setMode(["debate", "quick", "evaluate"].includes(r.mode) ? r.mode : "debate");
@@ -233,6 +361,7 @@ $("repeatBtn").addEventListener("click", async () => {
   uploads = (data.uploads || []).map((m) => ({ key: ++uploadSeq, name: m.name, status: "ready", meta: m }));
   renderUploads();
   setFormMode({ kind: "repeat", id: current.id, title: data.title });
+  $("params").open = true;  // при повторе обычно меняют модели или режим
   focusForm();
 });
 
@@ -261,10 +390,10 @@ function renderUploads() {
     }
     const warn = m.warning ? `<div class="sub warn">⚠ ${esc(m.warning)}</div>` : "";
     return `<li class="att ${u.status}"><div class="ico">${ico}</div>
-      <div><div class="nm" title="${esc(u.name)}">${esc(u.name)}</div><div class="sub">${esc(sub)}</div>${warn}</div>
-      <button type="button" class="rm" data-rm="${u.key}" aria-label="Убрать ${esc(u.name)}" title="Убрать">×</button></li>`;
+      <div style="min-width:0"><div class="nm" title="${esc(u.name)}">${esc(u.name)}</div><div class="sub">${esc(sub)}</div>${warn}</div>
+      <button type="button" class="rm" data-rm="${u.key}" aria-label="Убрать ${esc(u.name)}" title="Убрать"><svg class="ic"><use href="#i-x"/></svg></button></li>`;
   }).join("");
-  $("estimate").hidden = true;
+  formChanged();
 }
 
 async function addFiles(files) {
@@ -287,12 +416,13 @@ async function addFiles(files) {
   }
 }
 
-$("dropzone").addEventListener("click", () => $("fileInput").click());
-$("dropzone").addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("fileInput").click(); } });
+$("attachBtn").addEventListener("click", () => $("fileInput").click());
 $("fileInput").addEventListener("change", (e) => { addFiles([...e.target.files]); e.target.value = ""; });
-for (const ev of ["dragenter", "dragover"]) $("dropzone").addEventListener(ev, (e) => { e.preventDefault(); $("dropzone").classList.add("over"); });
-for (const ev of ["dragleave", "drop"]) $("dropzone").addEventListener(ev, () => $("dropzone").classList.remove("over"));
-$("dropzone").addEventListener("drop", (e) => { e.preventDefault(); addFiles([...(e.dataTransfer.files || [])]); });
+// файлы можно бросить на поле вопроса
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+for (const ev of ["dragenter", "dragover"]) $("dropzone").addEventListener(ev, (e) => { if (!hasFiles(e)) return; e.preventDefault(); $("dropzone").classList.add("over"); });
+$("dropzone").addEventListener("dragleave", (e) => { if (!$("dropzone").contains(e.relatedTarget)) $("dropzone").classList.remove("over"); });
+$("dropzone").addEventListener("drop", (e) => { $("dropzone").classList.remove("over"); if (!hasFiles(e)) return; e.preventDefault(); addFiles([...(e.dataTransfer.files || [])]); });
 // вставка скриншота из буфера обмена — в любом месте формы
 $("form").addEventListener("paste", (e) => {
   const stamp = () => new Date().toLocaleTimeString("ru-RU").replace(/:/g, "-");
@@ -317,67 +447,81 @@ function showFormError(msg) {
 
 function renderEstimate(e) {
   const rows = e.members.map((m) =>
-    `<tr><td>${esc(m.name)}</td><td>${m.calls} выз.</td><td>${m.cost == null ? "?" : money(m.cost)}</td></tr>`).join("");
+    `<tr><td>${esc(m.name)}</td><td>${m.calls} ${plural(m.calls, "обращение", "обращения", "обращений")}</td><td>${m.cost == null ? "?" : money(m.cost)}</td></tr>`).join("");
   let html = "";
   if (e.low != null) {
-    html += `<div class="big">≈ $${e.low.toFixed(3)} – $${e.high.toFixed(3)}</div>`;
-    html += `<div class="muted">${e.calls} вызовов · лимит $${e.budget}</div>`;
-    if (e.high > e.budget) html += `<div class="warnbox">Верхняя оценка выше лимита — заседание может остановиться по бюджету.</div>`;
-    if (e.similar) html += `<div class="muted">Фактически похожие заседания (${e.similar.count}) стоили $${e.similar.min.toFixed(2)}–$${e.similar.max.toFixed(2)}, в среднем $${e.similar.avg.toFixed(2)}</div>`;
-    if (e.basis) html += `<div class="muted small">Как посчитано: ${esc(e.basis)}. Модели читают все чужие варианты, поэтому цена растёт с длиной ответов и числом участников.</div>`;
+    html += `<div class="big">≈ $${e.low.toFixed(2)} – $${e.high.toFixed(2)}</div>`;
+    html += `<div class="muted">${e.calls} обращений к моделям · лимит $${e.budget}</div>`;
+    if (e.high > e.budget) html += `<div class="warnbox">Верхняя оценка выше лимита — заседание может остановиться, не дойдя до решения. Поднимите лимит в «Параметрах».</div>`;
+    if (e.similar) html += `<div class="muted">Похожие заседания (${e.similar.count}) на деле стоили $${e.similar.min.toFixed(2)}–$${e.similar.max.toFixed(2)}, в среднем $${e.similar.avg.toFixed(2)}.</div>`;
+    if (e.basis) html += `<div class="muted small">Как посчитано: ${esc(e.basis)}. Каждая модель читает все чужие варианты, поэтому цена растёт с длиной ответов и числом участников.</div>`;
     if (e.balance != null) {
-      html += `<div class="muted">Баланс OpenRouter: $${e.balance.toFixed(2)}</div>`;
+      html += `<div>Баланс OpenRouter: <b>$${e.balance.toFixed(2)}</b></div>`;
       if (e.balance < e.high) html += `<div class="warnbox">На балансе меньше верхней оценки — пополните баланс, иначе заседание может прерваться.</div>`;
-      else if (e.balance < e.high * 4) html += `<div class="warnbox">Баланс небольшой: OpenRouter заранее резервирует средства под все одновременные запросы, поэтому часть запросов будет ждать — заседание пройдёт, но медленнее. Пополнение баланса это снимет.</div>`;
+      else if (e.balance < e.high * 4) html += `<div class="muted small">Баланс небольшой: OpenRouter резервирует деньги под все одновременные запросы, поэтому часть запросов подождёт — заседание пройдёт, но медленнее.</div>`;
     }
   } else {
-    html += `<div class="big">${e.calls} вызовов</div><div class="muted">${$("mock").checked ? "Демо-режим: бесплатно." : "Цены неизвестны."}</div>`;
-    if (e.balance != null) html += `<div class="muted">Баланс OpenRouter: $${e.balance.toFixed(2)}</div>`;
+    html += `<div class="big">${e.calls} обращений к моделям</div><div class="muted">${$("mock").checked ? "Демо-режим: бесплатно, ответы ненастоящие." : "Цены моделей неизвестны."}</div>`;
+    if (e.balance != null) html += `<div>Баланс OpenRouter: $${e.balance.toFixed(2)}</div>`;
   }
   if (e.warning) html += `<div class="warnbox">${esc(e.warning)}</div>`;
   const unknown = Object.entries(e.unknown || {});
   if (unknown.length) {
-    html += `<div class="error">Этих моделей нет на OpenRouter — исправьте config.yaml или снимите участника:\n${
+    html += `<div class="error">Этих моделей нет на OpenRouter — снимите участника в «Параметрах» или поправьте модель в «Настройках»:\n${
       unknown.map(([m, s]) => `• ${m}${s.length ? ` (возможно: ${s.join(", ")})` : ""}`).join("\n")}</div>`;
   }
   html += `<table>${rows}</table>`;
   $("estimate").innerHTML = html;
-  $("estimate").hidden = false;
+  const [txt, kind] = estimateSummary(e);
+  $("estLine").textContent = txt;
+  $("estimateBtn").className = `est-line ${kind}`;
+  if (kind === "bad") { $("estimate").hidden = false; $("estimateBtn").setAttribute("aria-expanded", "true"); }
+  for (const m of document.querySelectorAll(".mode-meta")) m.textContent = "";
+  const meta = document.querySelector(`.mode-meta[data-meta="${mode}"]`);
+  if (meta && e.low != null) meta.textContent = `≈ $${e.low.toFixed(2)}–${e.high.toFixed(2)}`;
   return unknown.length === 0;
 }
 
 async function doEstimate() {
   showFormError("");
   const p = payload();
-  if (p.question.length < 3) { showFormError("Введите вопрос"); return null; }
+  if (p.question.length < 3) { showFormError("Напишите вопрос для совета"); return null; }
   try {
-    return await api("/api/estimate", { method: "POST", body: p });
+    const e = await api("/api/estimate", { method: "POST", body: p });
+    lastEstimate = e;
+    return e;
   } catch (e) { showFormError(e.message); return null; }
 }
 
+let membersBound = false;
 async function initForm() {
   config = await api("/api/config");
   if (config.upload) {
     uploadCfg = config.upload;
     $("fileInput").accept = uploadCfg.accept.join(",");
-    $("uploadHint").textContent = `до ${uploadCfg.max_files} файлов, каждый до ${uploadCfg.max_mb} МБ`;
+    $("uploadHint").textContent = `Картинки, PDF, Word, Excel — до ${uploadCfg.max_files} файлов по ${uploadCfg.max_mb} МБ. Скриншот можно вставить: Ctrl+V`;
   }
   $("members").innerHTML = config.members.map((m) => `
-    <label class="member"><input type="checkbox" value="${esc(m.name)}" ${m.enabled ? "checked" : ""}>
-      <b>${esc(m.name)}</b><code title="${esc(m.model)}">${esc(m.model)}</code></label>`).join("");
-  $("members").addEventListener("change", () => { refreshRoleSelects(); $("estimate").hidden = true; });
+    <label class="member" title="${esc(m.model)}"><input type="checkbox" value="${esc(m.name)}" ${m.enabled ? "checked" : ""}>
+      <span><b>${esc(m.name)}</b><code>${esc(m.model.split("/").pop())}</code></span></label>`).join("");
+  if (!membersBound) {
+    membersBound = true;
+    $("members").addEventListener("change", () => { refreshRoleSelects(); formChanged(); });
+  }
   refreshRoleSelects();
+  resetToggles();
   $("budget").value = config.budget;
   $("rounds").value = Math.max(1, config.rounds);
   $("mock").checked = !config.has_key;
   const ks = $("keyStatus");
-  ks.textContent = config.has_key ? "Ключ OpenRouter подключён" : "Нет ключа — только демо";
+  ks.innerHTML = config.has_key ? "OpenRouter подключён" : '<span class="hide-sm">Нет ключа — </span>только демо';
   ks.className = `pill ${config.has_key ? "ok" : "warn"}`;
+  ks.title = config.has_key ? "" : "Ключ OpenRouter не задан — доступен только демо-режим";
   if (config.has_key) refreshBalance();
   setMode(config.mode === "evaluate" ? "debate" : config.mode);
 }
 
-/* остаток на балансе OpenRouter — в верхней панели, обновляется раз в 2 минуты и после заседания */
+/* остаток на балансе OpenRouter — внизу меню (на телефоне — вверху), обновляется раз в 2 минуты и после заседания */
 let balanceTimer = null;
 async function refreshBalance(force = false) {
   const ks = $("keyStatus");
@@ -385,13 +529,16 @@ async function refreshBalance(force = false) {
     const r = await api(`/api/balance${force ? "?force=1" : ""}`);
     if (!r.has_key) return;
     if (r.balance == null) {
-      ks.textContent = "OpenRouter: баланс недоступен";
+      ks.textContent = "Баланс недоступен";
       ks.className = "pill";
+      ks.disabled = true;
     } else {
       const b = r.balance;
-      ks.innerHTML = `<span class="hide-sm">Баланс OpenRouter: </span>$${b.toFixed(2)}`;
+      ks.innerHTML = `<span class="hide-sm">Баланс </span>$${b.toFixed(2)}`;
       ks.className = `pill clickable ${b < 0.5 ? "bad" : b < 3 ? "warn" : "ok"}`;
-      ks.title = "Остаток на балансе OpenRouter (обновляется раз в 2 минуты и после заседания). Нажмите, чтобы пополнить.";
+      ks.disabled = false;
+      ks.title = "Остаток на балансе OpenRouter. Нажмите, чтобы пополнить.";
+      ks.setAttribute("aria-label", `Баланс OpenRouter: ${b.toFixed(2)} долларов. Открыть пополнение`);
     }
   } catch { /* оставляем прежнее значение */ }
   if (!balanceTimer) balanceTimer = setInterval(() => { if (!document.hidden) refreshBalance(); }, 120000);
@@ -400,35 +547,66 @@ $("keyStatus").addEventListener("click", () => {
   if ($("keyStatus").classList.contains("clickable")) window.open("https://openrouter.ai/settings/credits", "_blank", "noopener");
 });
 
-$("modeSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setMode(b.dataset.mode); });
-for (const id of ["question", "options", "criteria", "rounds", "mock", "budget", "compact", "factCheck"]) $(id).addEventListener("input", () => { $("estimate").hidden = true; });
+$("modeSeg").addEventListener("change", (e) => { if (e.target.name === "mode") setMode(e.target.value); });
+for (const id of ["question", "options", "criteria", "rounds", "budget", "context"]) $(id).addEventListener("input", formChanged);
+for (const id of ["mock", "compact", "factCheck", "chairProposes", "chair", "devil"]) $(id).addEventListener("change", formChanged);
+for (const b of document.querySelectorAll("[data-step]")) {
+  b.addEventListener("click", () => {
+    const r = $("rounds");
+    r.value = Math.max(1, Math.min(5, (Number(r.value) || 1) + Number(b.dataset.step)));
+    formChanged();
+  });
+}
+// поле вопроса растёт вместе с текстом, чтобы не прокручивать внутри маленького окна
+$("question").addEventListener("input", () => {
+  const q = $("question");
+  const max = window.innerHeight * 0.55;
+  if (q.scrollHeight > q.clientHeight && q.clientHeight < max) { q.style.height = "auto"; q.style.height = `${Math.min(q.scrollHeight + 4, max)}px`; }
+});
 
 $("estimateBtn").addEventListener("click", async () => {
-  const e = await doEstimate();
-  if (e) renderEstimate(e);
+  const box = $("estimate");
+  if (!box.hidden) { box.hidden = true; $("estimateBtn").setAttribute("aria-expanded", "false"); return; }
+  if (!lastEstimate) {
+    const e = await doEstimate();
+    if (!e) return;
+    renderEstimate(e);
+  }
+  box.hidden = false;
+  $("estimateBtn").setAttribute("aria-expanded", "true");
 });
 
 $("form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   showFormError("");
   const p = payload();
-  if (p.question.length < 3) return showFormError("Введите вопрос");
-  if (p.members.length < 2) return showFormError("Выберите хотя бы двух участников");
-  if (mode === "evaluate" && p.options.length < 2) return showFormError("Для оценки нужно минимум 2 варианта");
+  if (p.question.length < 3) { showFormError("Напишите вопрос для совета"); $("question").focus(); return; }
+  if (p.members.length < 2) { showFormError("Выберите хотя бы двух участников в «Параметрах»"); $("params").open = true; return; }
+  if (mode === "evaluate" && p.options.length < 2) { showFormError("Для выбора нужно минимум 2 варианта"); $("options").focus(); return; }
+  if (uploads.some((u) => u.status === "uploading")) return showFormError("Дождитесь окончания загрузки файлов");
   const btn = $("startBtn");
   btn.disabled = true;
   try {
     if (!p.mock) {
       const e = await doEstimate();
       if (!e) return;
-      if (!renderEstimate(e)) return;
-      if (e.low != null && !confirm(`Оценка стоимости: $${e.low.toFixed(3)} – $${e.high.toFixed(3)}. Начать заседание?`)) return;
+      if (!renderEstimate(e)) { $("estimate").hidden = false; return; }
+      if (e.low != null) {
+        const warn = e.balance != null && e.balance < e.high ? `<p class="warnbox">На балансе $${e.balance.toFixed(2)} — может не хватить.</p>`
+          : e.high > e.budget ? `<p class="warnbox">Верхняя оценка выше лимита $${e.budget} — заседание может остановиться раньше.</p>` : "";
+        const go = await ask({ title: "Начать заседание?",
+          html: `<p>Примерная стоимость: <b>$${e.low.toFixed(2)} – $${e.high.toFixed(2)}</b></p>
+            <p class="muted">${esc(MODE_NAME[mode])} · ${p.members.length} ${plural(p.members.length, "модель", "модели", "моделей")} · лимит $${e.budget}</p>${warn}`,
+          ok: "Начать" });
+        if (!go) return;
+      }
     }
-    if (uploads.some((u) => u.status === "uploading")) return showFormError("Дождитесь окончания загрузки файлов");
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
     const { id } = await api("/api/sessions", { method: "POST", body: p });
     uploads = []; renderUploads();  // файлы ушли в заседание
-    setFormMode(null); $("question").placeholder = "Например: какой стек выбрать для MVP интернет-магазина с бюджетом 1 млн ₽?";
+    setFormMode(null);
+    $("question").value = ""; $("question").style.height = ""; $("context").value = ""; $("options").value = "";
+    lastEstimate = null; $("estimate").hidden = true; $("estLine").textContent = "Напишите вопрос — покажу примерную стоимость";
     openSession(id);
     loadHistory();
   } catch (e) {
@@ -444,25 +622,29 @@ const FORMAT_NAME = { pdf: "PDF", docx: "Word", md: "Markdown" };
 
 function showView(name) {
   view = name;
-  $("empty").hidden = name !== "empty";
-  $("session").hidden = name !== "session";
-  $("archive").hidden = name !== "archive";
-  $("stats").hidden = name !== "stats";
-  $("settings").hidden = name !== "settings";
-  $("statsBtn").classList.toggle("secondary", name === "stats");
-  $("settingsBtn").classList.toggle("secondary", name === "settings");
-  document.body.classList.toggle("has-session", name !== "empty");
-  $("archiveBtn").classList.toggle("secondary", name === "archive");
+  for (const v of ["empty", "session", "archive", "stats", "settings"]) $(v).hidden = name !== v;
+  // в меню подсвечен текущий раздел; заседание открывается из «Нового» или архива — подсвечиваем «Архив»
+  const navOf = { empty: "newBtn", archive: "archiveBtn", stats: "statsBtn", settings: "settingsBtn", session: "" };
+  for (const b of document.querySelectorAll(".nav-item")) {
+    if (b.id === navOf[name]) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  }
+  closeMenus();
   if (name !== "session") document.title = BASE_TITLE;
 }
 
-$("newBtn").addEventListener("click", () => {
+function goCompose() {
   closeStream();
   current = null;
-  history.replaceState(null, "", location.pathname);
+  if (location.hash) history.replaceState(null, "", location.pathname);
   showView("empty");
   markActiveHistory();
-  $("question").focus();
+}
+
+$("newBtn").addEventListener("click", () => {
+  const wasHere = view === "empty";
+  goCompose();
+  window.scrollTo({ top: 0 });
+  if (wasHere || !matchMedia("(max-width: 899px)").matches) $("question").focus();
 });
 
 // part: "" — полный отчёт, "summary" — итог с обоснованием, "decision" — только решение совета
@@ -475,39 +657,79 @@ function formatLinks(id, cls, part) {
     : `<a class="${cls}" href="${reportUrl(id, f, true, part)}">${FORMAT_NAME[f]}</a>`).join("");
 }
 const REPORT_PARTS = [
-  ["", "Полный отчёт", "Решение, все варианты, критика, голосование, расходы"],
-  ["summary", "Итог", "Итоговое решение с обоснованием, особыми мнениями и рисками"],
-  ["decision", "Только решение", "Только вопрос и ответ совета — без обоснования, вариантов и голосования"],
+  ["decision", "Только решение", "Вопрос и ответ совета — чтобы переслать"],
+  ["summary", "Итог с обоснованием", "Решение, почему, риски и особые мнения"],
+  ["", "Полный отчёт", "Всё заседание: варианты, критика, голосование, расходы"],
 ];
-// три строки: полный отчёт, итог с обоснованием и только решение совета
-function downloadLinks(id, cls = "button secondary") {
+// меню скачивания: три вида отчёта, у каждого — форматы и «открыть в браузере»
+function downloadLinks(id, cls = "btn small") {
   return REPORT_PARTS.map(([part, label, hint]) =>
-    `<div class="dl-row"><span class="dl-label" title="${hint}">${label}</span>${formatLinks(id, cls, part)}`
-    + `<a class="${cls}" href="${reportUrl(id, "html", false, part)}" target="_blank" rel="noopener" title="${label} — в новой вкладке">Открыть ↗</a></div>`).join("");
+    `<div class="dl-group"><span class="dl-label">${label}</span><span class="dl-hint">${hint}</span><div class="dl-row">${formatLinks(id, cls, part)}`
+    + `<a class="${cls}" href="${reportUrl(id, "html", false, part)}" target="_blank" rel="noopener" aria-label="${label} — открыть в новой вкладке">Открыть<svg class="ic" aria-hidden="true" style="width:15px;height:15px"><use href="#i-ext"/></svg></a></div></div>`).join("");
 }
 
-/* ------------------------------------------------------------ история */
+/* выпадающие меню (скачать): одно открыто за раз, закрываются по клику мимо и Esc */
+function toggleMenu(btn, menu) {
+  const open = menu.hidden;
+  closeMenus();
+  menu.hidden = !open;
+  btn.setAttribute("aria-expanded", String(open));
+  if (open) { const first = menu.querySelector("a, button"); if (first) first.focus(); }
+}
+function closeMenus() {
+  for (const m of document.querySelectorAll(".menu")) m.hidden = true;
+  for (const b of document.querySelectorAll("[aria-haspopup]")) b.setAttribute("aria-expanded", "false");
+}
+document.addEventListener("click", (e) => { if (!e.target.closest(".menu-wrap")) closeMenus(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const open = document.querySelector(".menu:not([hidden])");
+  if (open) { const b = open.parentElement.querySelector("[aria-haspopup]"); closeMenus(); if (b) b.focus(); }
+});
+$("dlBtn").addEventListener("click", () => toggleMenu($("dlBtn"), $("downloads")));
+
+/* ------------------------------------------------------------ недавние заседания (в меню слева) */
 
 const HISTORY_LIMIT = 12;
+const STATUS_TEXT = { running: "идёт", error: "прервано", cancelled: "остановлено" };
+function niceDate(it) {
+  const d = it.date || it.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/, "$3.$2.$1 $4:$5");
+  const m = String(d).match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}:\d{2})/);
+  if (!m) return d;
+  const day = new Date(+m[3], +m[2] - 1, +m[1]);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((today - day) / 86400000);
+  if (diff === 0) return `сегодня, ${m[4]}`;
+  if (diff === 1) return `вчера, ${m[4]}`;
+  return day.toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: day.getFullYear() === today.getFullYear() ? undefined : "numeric" });
+}
+
 async function loadHistory() {
   let data;
   try { data = await api("/api/sessions"); } catch { return; }
   formats = data.formats || formats;
   const items = data.items || [];
   const ul = $("history");
-  $("allArchiveBtn").hidden = !items.length;
+  $("allArchiveBtn").hidden = items.length <= HISTORY_LIMIT;
   $("allArchiveBtn").textContent = `Весь архив (${data.total}) →`;
-  if (!items.length) { ul.innerHTML = '<li class="muted">Пока пусто</li>'; return; }
-  const statusText = { running: "идёт…", error: "ошибка", cancelled: "остановлено" };
+  if (!items.length) { ul.innerHTML = '<li class="muted small" style="padding:0 .75rem">Пока пусто</li>'; return; }
   ul.innerHTML = items.slice(0, HISTORY_LIMIT).map((it) => {
-    const date = it.date || it.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/, "$3.$2 $4:$5");
     const meta = it.status === "done"
-      ? `${esc(date)} · ${esc(it.winner_title || "")}${it.cost != null ? ` · ${money(it.cost)}` : ""}`
-      : `${esc(date)} · ${statusText[it.status] || it.status}`;
-    return `<li class="item" data-id="${esc(it.id)}"><div class="q"><div title="${esc(it.question)}">${esc(shortTitle(it.question))}</div><div class="meta">${meta}</div></div>
-      ${it.status === "running" ? "" : `<button class="del" title="Удалить" data-del="${esc(it.id)}" aria-label="Удалить">×</button>`}</li>`;
+      ? `${esc(niceDate(it))}${it.winner ? ` · решение ${esc(it.winner)}` : ""}`
+      : `${it.status === "running" ? '<span class="dot-run"></span>' : ""}${esc(niceDate(it))} · ${STATUS_TEXT[it.status] || esc(it.status)}`;
+    return `<li class="item" data-id="${esc(it.id)}"><button type="button" class="open" data-open-id="${esc(it.id)}" title="${esc(shortTitle(it.question, 300))}">
+      <span class="q">${esc(shortTitle(it.question))}</span><span class="meta">${meta}</span></button>
+      ${it.status === "running" ? "" : `<button type="button" class="icon-btn del" data-del="${esc(it.id)}" aria-label="Удалить заседание «${esc(shortTitle(it.question, 60))}»" title="Удалить"><svg class="ic" style="width:16px;height:16px"><use href="#i-trash"/></svg></button>`}</li>`;
   }).join("");
   markActiveHistory();
+}
+
+async function deleteSession(id, title) {
+  const ok = await ask({ title: "Удалить заседание?", html: `<p>«${esc(title)}» и все его отчёты будут удалены. Это нельзя отменить.</p>`, ok: "Удалить", danger: true });
+  if (!ok) return false;
+  try { await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" }); } catch (err) { toast(err.message); return false; }
+  toast("Заседание удалено");
+  return true;
 }
 
 /* ------------------------------------------------------------ архив */
@@ -521,26 +743,27 @@ async function loadArchive() {
   catch (e) { $("archiveList").innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
   formats = data.formats || formats;
   const items = data.items || [];
-  $("archiveCount").textContent = q || mode ? `Найдено: ${items.length}` : `Всего заседаний: ${items.length}`;
+  $("archiveCount").textContent = q || mode ? `Найдено: ${items.length}` : `${items.length} ${plural(items.length, "заседание", "заседания", "заседаний")}`;
   if (!items.length) {
-    $("archiveList").innerHTML = `<div class="arc-empty">${q || mode ? "Ничего не найдено" : "Архив пуст — проведите первое заседание"}</div>`;
+    $("archiveList").innerHTML = `<div class="arc-empty">${q || mode ? "Ничего не найдено. Попробуйте другое слово." : "Здесь появятся ваши заседания. Задайте первый вопрос в разделе «Новый»."}</div>`;
     return;
   }
   $("archiveList").innerHTML = items.map((it) => {
     const done = it.status === "done";
-    const meta = [it.date, it.mode_name, it.members && it.members.length ? `участников: ${it.members.length}` : "",
-      it.attachments ? `📎 ${it.attachments}` : "",
-      it.followup_of ? "↳ уточнение" : "",
-      it.cost != null ? money(it.cost) : "", done ? "" : ({ running: "идёт…", error: "ошибка", cancelled: "остановлено" }[it.status] || "")]
+    const meta = [niceDate(it), MODE_NAME[it.mode] || it.mode_name, it.members && it.members.length ? `${it.members.length} ${plural(it.members.length, "модель", "модели", "моделей")}` : "",
+      it.attachments ? `${it.attachments} ${plural(it.attachments, "файл", "файла", "файлов")}` : "",
+      it.followup_of ? "уточнение" : "", it.cost != null ? money(it.cost) : ""]
       .filter(Boolean).map(esc).join(" · ");
-    const del = `<button type="button" class="ghost" data-arc-del="${esc(it.id)}" title="Удалить">Удалить</button>`;
-    const actions = done ? `${downloadLinks(it.id, "button ghost")}${del}` : it.status === "running" ? "" : del;
-    return `<div class="arc-item">
-      <div class="arc-q" data-open="${esc(it.id)}" tabindex="0" role="link" title="${esc(it.question)}">${esc(shortTitle(it.question))}</div>
-      <div class="arc-actions">${actions}</div>
-      ${done && it.winner ? `<div class="arc-win">🏆 <b>${esc(it.winner)}</b>: ${esc(it.winner_title)} <span class="muted">(${esc(it.winner_author)})</span></div>` : ""}
+    const status = done ? "" : `<span class="arc-status ${esc(it.status)}">${STATUS_TEXT[it.status] || esc(it.status)}</span> `;
+    const del = it.status === "running" ? "" : `<button type="button" class="icon-btn" data-arc-del="${esc(it.id)}" aria-label="Удалить" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>`;
+    const dl = done ? `<div class="menu-wrap"><button type="button" class="btn small" aria-haspopup="true" aria-expanded="false" data-menu="m-${esc(it.key || it.id)}"><svg class="ic" aria-hidden="true"><use href="#i-dl"/></svg>Скачать</button>
+      <div class="menu" id="m-${esc(it.key || it.id)}" hidden>${downloadLinks(it.id)}</div></div>` : "";
+    return `<article class="arc-item">
+      <div class="arc-q" data-open="${esc(it.id)}" tabindex="0" role="link" title="${esc(shortTitle(it.question, 300))}">${status}${esc(shortTitle(it.question))}</div>
+      <div class="arc-actions">${dl}${del}</div>
+      ${done && it.winner ? `<div class="arc-win"><span class="lbl" style="width:24px;height:24px;font-size:.78rem;margin-right:.35rem;vertical-align:-2px">${esc(it.winner)}</span>${esc(it.winner_title)} <span class="muted">· ${esc(it.winner_author)}</span></div>` : ""}
       <div class="arc-meta">${meta}</div>
-    </div>`;
+    </article>`;
   }).join("");
 }
 
@@ -558,11 +781,12 @@ $("allArchiveBtn").addEventListener("click", openArchive);
 $("archiveSearch").addEventListener("input", () => { clearTimeout(archiveTimer); archiveTimer = setTimeout(loadArchive, 250); });
 $("archiveMode").addEventListener("change", loadArchive);
 $("archiveList").addEventListener("click", async (e) => {
+  const menuBtn = e.target.closest("[data-menu]");
+  if (menuBtn) { toggleMenu(menuBtn, $(menuBtn.dataset.menu)); return; }
   const del = e.target.closest("[data-arc-del]");
   if (del) {
-    if (!confirm("Удалить это заседание и все его отчёты?")) return;
-    try { await api(`/api/sessions/${encodeURIComponent(del.dataset.arcDel)}`, { method: "DELETE" }); } catch (err) { alert(err.message); }
-    loadArchive(); loadHistory();
+    const title = del.closest(".arc-item").querySelector(".arc-q").textContent;
+    if (await deleteSession(del.dataset.arcDel, title)) { loadArchive(); loadHistory(); }
     return;
   }
   const open = e.target.closest("[data-open]");
@@ -570,25 +794,31 @@ $("archiveList").addEventListener("click", async (e) => {
 });
 $("archiveList").addEventListener("keydown", (e) => {
   const open = e.target.closest("[data-open]");
-  if (open && e.key === "Enter") openSession(open.dataset.open);
+  if (open && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openSession(open.dataset.open); }
 });
 
 $("history").addEventListener("click", async (e) => {
   const del = e.target.closest("[data-del]");
   if (del) {
     e.stopPropagation();
-    if (!confirm("Удалить это заседание из истории?")) return;
-    try { await api(`/api/sessions/${encodeURIComponent(del.dataset.del)}`, { method: "DELETE" }); } catch (err) { alert(err.message); }
-    if (current && current.id === del.dataset.del) $("newBtn").click();
-    loadHistory();
+    const title = del.closest("li").querySelector(".q").textContent;
+    if (await deleteSession(del.dataset.del, title)) {
+      if (current && current.id === del.dataset.del) goCompose();
+      loadHistory();
+    }
     return;
   }
-  const li = e.target.closest("li.item");
-  if (li) openSession(li.dataset.id);
+  const b = e.target.closest("[data-open-id]");
+  if (b) openSession(b.dataset.openId);
 });
 
 function markActiveHistory() {
-  for (const li of $("history").querySelectorAll("li.item")) li.classList.toggle("active", !!current && li.dataset.id === current.id);
+  for (const li of $("history").querySelectorAll("li.item")) {
+    const on = !!current && li.dataset.id === current.id;
+    li.classList.toggle("active", on);
+    const b = li.querySelector(".open");
+    if (b) { if (on) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current"); }
+  }
 }
 
 /* ------------------------------------------------------------ заседание: состояние */
@@ -681,7 +911,7 @@ function apply(s, ev) {
     }
     case "start":
       Object.assign(s, { question: ev.question, mode: ev.mode, rounds: ev.rounds, members: ev.members || [],
-        chair: ev.chair || null, mock: !!ev.mock, parent: ev.parent || null });
+        chair: ev.chair || null, mock: !!ev.mock, parent: ev.parent || null, factPlanned: !!ev.fact_check });
       break;
     case "stage": {
       s.stageStart = Date.now();
@@ -771,7 +1001,15 @@ function authorOf(s, label) {
 function scoreColor(v) {
   const t = Math.max(0, Math.min(1, (v - 1) / 9));
   const hue = Math.round(t * 130);
-  return `background: hsl(${hue} 65% 50% / .22)`;
+  return `background: hsl(${hue} 65% 50% / .2)`;
+}
+
+// этапы, которые реально будут в этом заседании
+function stagePlan(s) {
+  const skip = new Set(s.mode === "quick" ? ["critique", "revision"] : s.mode === "evaluate" ? ["proposal", "revision"] : []);
+  const plan = STAGES.filter(([k]) => !skip.has(k));
+  if (s.stageTitle.factcheck || s.facts || s.factPlanned) plan.splice(plan.length - 1, 0, ["factcheck", STAGE_NAME.factcheck]);
+  return plan;
 }
 
 function render(s) {
@@ -779,9 +1017,8 @@ function render(s) {
   updateTitle();
   const finished = !!(s.done || s.error);
 
-  const modeName = { debate: "Дебаты", quick: "Быстро", evaluate: "Оценка вариантов" }[s.mode] || s.mode;
-  $("sMeta").textContent = [modeName, s.mode === "debate" && s.rounds ? `раундов: ${s.rounds}` : "",
-    s.members.length ? `участников: ${s.members.length}` : "", s.mock ? "демо" : ""].filter(Boolean).join(" · ");
+  $("sMeta").textContent = [MODE_NAME[s.mode] || s.mode, s.mode === "debate" && s.rounds > 1 ? `${s.rounds} раунда` : "",
+    s.members.length ? `${s.members.length} ${plural(s.members.length, "модель", "модели", "моделей")}` : "", s.mock ? "демо-режим" : ""].filter(Boolean).join(" · ");
   $("sParent").hidden = !s.parent;
   if (s.parent) $("sParent").innerHTML = `↳ Уточнение к заседанию <a href="#/s/${encodeURIComponent(s.parent.id)}">${esc(s.parent.title || "…")}</a>`;
   $("nextActions").hidden = !s.done;
@@ -801,36 +1038,19 @@ function render(s) {
       $("sQueryToggle").textContent = "Показать запрос полностью";
     });
   }
-  $("sRefined").textContent = s.refined && s.refined !== s.question ? `Постановка: ${s.refined}` : "";
-  $("sCriteria").innerHTML = s.criteria.map((c) => `<span class="chip">${esc(c)}</span>`).join("")
-    + ((s.requirements || []).length ? `<div class="reqs" title="Жёсткие требования запроса: их нарушение не компенсируется другими достоинствами"><b>Обязательно:</b> ${s.requirements.map((r, i) => `<span class="chip req">R${i + 1}. ${esc(r)}</span>`).join("")}</div>` : "");
   $("sCost").textContent = money(s.cost);
-  $("cancelBtn").hidden = finished;
   $("sError").hidden = !s.error;
-  $("sError").innerHTML = s.error ? `Заседание прервано: ${esc(s.error)}<br><a href="/api/sessions/${encodeURIComponent(s.id)}/diagnostics">🧾 Скачать журнал для разбора</a>` : "";
+  $("sError").innerHTML = s.error ? `<b>Заседание прервано.</b> ${esc(s.error)}<br><a href="/api/sessions/${encodeURIComponent(s.id)}/diagnostics">Скачать журнал для разбора</a>` : "";
   $("diagLink").href = `/api/sessions/${encodeURIComponent(s.id)}/diagnostics`;
-
-  // таймлайн
-  const skip = new Set(s.mode === "quick" ? ["critique", "revision"] : s.mode === "evaluate" ? ["proposal", "revision"] : []);
-  $("timeline").innerHTML = STAGES.map(([key, name]) => {
-    const cls = s.stage === key ? "active" : s.doneStages.has(key) ? "done" : skip.has(key) ? "skip" : "";
-    const sub = s.stage === key ? (s.stageTitle[key] || "идёт…") : s.doneStages.has(key) ? "готово" : skip.has(key) ? "не нужно" : "ожидание";
-    return `<li class="${cls}"><b>${name}</b>${esc(sub)}</li>`;
-  }).join("");
 
   renderAttachments(s);
   renderActivity(s);
 
-  // участники
-  $("memberStatus").hidden = !s.done;
+  // расходы по моделям — в журнале
   if (s.done && s.done.stats) {
     $("memberStatus").innerHTML = Object.entries(s.done.stats).map(([n, st]) =>
-      `<span class="chip ${st.failures && st.failures.length ? "fail" : "done"}" title="${st.calls} вызовов">${esc(n)} · ${money(st.cost)}</span>`).join("");
-  } else {
-    const label = { work: "думает", done: "готово", fail: "сбой" };
-    $("memberStatus").innerHTML = Object.entries(s.work).map(([n, st]) =>
-      `<span class="chip ${st}" title="${label[st]}">${esc(n)}</span>`).join("");
-  }
+      `<span class="chip ${st.failures && st.failures.length ? "fail" : "done"}" title="${st.calls} обращений">${esc(n)} · ${money(st.cost)}</span>`).join("");
+  } else $("memberStatus").innerHTML = "";
 
   renderVerdict(s);
   renderTally(s);
@@ -856,7 +1076,7 @@ function renderAttachments(s) {
       : `<span class="s-att" title="${title}">${pic}<span>${esc(a.name)}</span></span>`;
   });
   if (s.imageNotes && Object.keys(s.imageNotes).length) {
-    html.push(`<button type="button" class="s-att" id="notesBtn" title="Текстовое описание картинок, которое получили модели без зрения">📝 <span>Описание картинок</span></button>`);
+    html.push(`<button type="button" class="s-att" id="notesBtn" title="Текстовое описание картинок, которое получили модели без зрения"><span class="ico">Aa</span><span>Описание картинок</span></button>`);
   }
   box.innerHTML = html.join("");
 }
@@ -872,8 +1092,8 @@ $("sAtts").addEventListener("click", (e) => {
 });
 
 const PHASE_TEXT = {
-  queued: "в очереди — ждёт свободного слота",
-  sent: "запрос отправлен, ждём начала ответа",
+  queued: "в очереди",
+  sent: "запрос отправлен",
   thinking: "думает",
   writing: "пишет ответ",
   checking: "проверяю ответ",
@@ -894,106 +1114,158 @@ function phaseText(c) {
   return t;
 }
 
-function renderActivity(s) {
-  const box = $("activity");
-  const finished = !!(s.done || s.error);
-  const live = !finished && (s.stage || !s.stageStart);
-  box.hidden = !(live || s.log.length);
-  if (box.hidden) return;
-  const now = Date.now();
+function readyCount(s) {
+  const names = Object.keys(s.work);
+  return [names.filter((n) => s.work[n] !== "work"
+    || (s.calls[n] && s.calls[n].stage === s.stage && ["done", "failed"].includes(s.calls[n].phase))).length, names.length];
+}
 
-  // текущий этап и прогресс
+// подписи под пройденными этапами — что получилось
+function stageResult(s, key) {
+  const n = Object.keys(s.proposals).length;
+  if (key === "framing") return s.criteria.length ? `${s.criteria.length} ${plural(s.criteria.length, "критерий", "критерия", "критериев")}${(s.requirements || []).length ? `, ${s.requirements.length} обязательных ${plural(s.requirements.length, "требование", "требования", "требований")}` : ""}` : "готово";
+  if (key === "proposal") return n ? `${n} ${plural(n, "вариант", "варианта", "вариантов")}: ${Object.keys(s.proposals).sort().join(", ")}` : "готово";
+  if (key === "critique") { const k = Object.keys(s.critiques).length; return k ? `${k} ${plural(k, "рецензия", "рецензии", "рецензий")}` : "готово"; }
+  if (key === "revision") { const k = Object.keys(s.revised).length; return k ? `доработано: ${k}` : "готово"; }
+  if (key === "vote") return s.tally && s.tally[0] ? `лидирует вариант ${s.tally[0].label}` : "готово";
+  if (key === "factcheck") return s.facts ? "проверено" : "готово";
+  if (key === "verdict") return s.verdict ? `выбран вариант ${s.verdict.winner}` : "готово";
+  return "готово";
+}
+
+function workerRows(s, now) {
+  const rows = [];
+  for (const name of Object.keys(s.work)) {
+    const c = s.calls[name];
+    if (!c || c.stage !== s.stage) {
+      rows.push(`<li class="w idle"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">ожидает запуска</span><span class="w-time"></span></li>`);
+      continue;
+    }
+    const active = PHASE_ACTIVE.has(c.phase);
+    const secs = active ? (now - c.since) / 1000 : (c.final || 0);
+    const cls = ["w", active ? "active" : "", c.phase].join(" ");
+    rows.push(`<li class="${cls}"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">${esc(phaseText(c))}</span><span class="w-time" title="время этого обращения">${fmtSec(secs)}</span></li>`);
+  }
+  return rows;
+}
+
+function renderActivity(s) {
+  const finished = !!(s.done || s.error);
+  const now = Date.now();
+  $("progressSec").hidden = !!s.done;
+  $("cancelBtn").hidden = finished;
+  const plan = stagePlan(s);
+  const idx = plan.findIndex(([k]) => k === s.stage);
+  const doneN = plan.filter(([k]) => s.doneStages.has(k)).length;
+
+  // строка «что сейчас»
   const bar = $("stageBar").parentElement;
-  if (finished) {
-    const secs = s.done && s.done.duration_s != null ? s.done.duration_s : (now - s.startedAt) / 1000;
-    $("stageNow").innerHTML = s.error ? `<b>Заседание прервано</b>` : `<b>✓ Заседание завершено</b> за ${fmtSec(secs)}`;
+  bar.classList.remove("done");
+  if (s.error) {
+    $("stageNow").innerHTML = `<b>Заседание прервано</b>`;
     bar.classList.remove("indeterminate");
-    $("stageBar").style.width = "100%";
   } else if (s.saving) {
-    $("stageNow").innerHTML = "<b>Готовлю отчёты</b> · PDF, Word и Markdown";
+    $("stageNow").innerHTML = `<b>Готовлю отчёты</b> <span class="muted">· PDF, Word и Markdown</span>`;
     bar.classList.add("indeterminate");
+    $("stageBar").style.width = "100%";
   } else if (!s.stage) {
-    $("stageNow").innerHTML = "<b>Заседание запускается…</b> подключаемся к моделям";
+    $("stageNow").innerHTML = `<b>Заседание запускается…</b> <span class="muted">подключаемся к моделям</span>`;
     bar.classList.add("indeterminate");
   } else {
-    // считаем по живым событиям: модель готова, как только её ответ принят
-    const names = Object.keys(s.work);
-    const total = names.length;
-    const ready = names.filter((n) => s.work[n] !== "work"
-      || (s.calls[n] && s.calls[n].stage === s.stage && ["done", "failed"].includes(s.calls[n].phase))).length;
+    const [ready, total] = readyCount(s);
     const stageSec = s.stageStart ? (now - s.stageStart) / 1000 : 0;
-    const who = s.stage === "framing" ? `председатель (${esc(s.chair || "")}) формулирует критерии`
-      : s.stage === "verdict" ? `председатель (${esc(s.chair || "")}) пишет итоговое решение`
-      : total ? `готово ${ready} из ${total}` : "";
-    $("stageNow").innerHTML = `<b>${esc(s.stageTitle[s.stage] || STAGE_NAME[s.stage] || s.stage)}</b>${who ? ` · ${who}` : ""} · ${fmtSec(stageSec)} на этапе`;
-    bar.classList.toggle("indeterminate", ready === 0);
-    $("stageBar").style.width = total ? `${Math.round((ready / total) * 100)}%` : "0%";
+    const who = ["framing", "verdict"].includes(s.stage) ? `председатель ${esc(s.chair || "")}` : total ? `готово ${ready} из ${total}` : "";
+    $("stageNow").innerHTML = `<b>Этап ${idx + 1} из ${plan.length}: ${esc(STAGE_NAME[s.stage] || s.stage)}</b> <span class="muted">· ${who ? `${who} · ` : ""}${fmtSec(stageSec)}</span>`;
+    bar.classList.toggle("indeterminate", false);
+    const part = total ? ready / total : 0;
+    $("stageBar").style.width = `${Math.max(4, Math.round(((doneN + part) / plan.length) * 100))}%`;
   }
 
-  // строки моделей текущего этапа
-  const rows = [];
-  if (!finished && s.stage && !s.saving) {
-    for (const name of Object.keys(s.work)) {
-      const c = s.calls[name];
-      if (!c || c.stage !== s.stage) {
-        rows.push(`<li class="w idle"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">ожидает запуска</span><span class="w-time"></span></li>`);
-        continue;
-      }
-      const active = PHASE_ACTIVE.has(c.phase);
-      const secs = active ? (now - c.since) / 1000 : (c.final || 0);
-      const cls = ["w", active ? "active" : "", c.phase].join(" ");
-      rows.push(`<li class="${cls}"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">${esc(phaseText(c))}</span><span class="w-time" title="время этого обращения">${fmtSec(secs)}</span></li>`);
-    }
-  }
-  $("workers").innerHTML = rows.join("");
-  $("workers").hidden = !rows.length;
+  // этапы по порядку; у текущего — строки моделей
+  const rows = !finished && s.stage && !s.saving ? workerRows(s, now) : [];
+  $("timeline").innerHTML = plan.map(([key, name], i) => {
+    const done = s.doneStages.has(key) && s.stage !== key;
+    const active = s.stage === key && !finished;
+    const cls = done ? "done" : active ? "active" : "";
+    const num = done ? '<svg class="ic"><use href="#i-check"/></svg>' : String(i + 1);
+    const round = active && (String(s.stageTitle[key] || "").match(/раунд (\d+)\/(\d+)/) || []);
+    const sub = done ? stageResult(s, key) : active ? `${round[2] > 1 ? `раунд ${round[1]} из ${round[2]} — ` : ""}${STAGE_HINT[key] || ""}` : "";
+    return `<li class="${cls}"${active ? ' aria-current="step"' : ""}><span class="num">${num}</span><div><div class="st-name">${esc(name)}</div>`
+      + `${sub ? `<div class="st-sub">${esc(sub)}</div>` : ""}${active && rows.length ? `<ul class="workers">${rows.join("")}</ul>` : ""}</div></li>`;
+  }).join("");
 
   // подсказка, если модель долго молчит
   const slow = finished ? [] : Object.entries(s.calls).filter(([n, c]) => c.stage === s.stage && ["sent", "thinking"].includes(c.phase)
     && (now - c.since) / 1000 > STALL_SEC && s.work[n] === "work").map(([n]) => n);
   const connOk = now - s.lastMsg < 25000;
+  $("activity").hidden = !slow.length;
   $("stallHint").hidden = !slow.length || !connOk;
   if (slow.length) {
-    $("stallHint").textContent = `⏳ ${slow.join(", ")} ${slow.length > 1 ? "думают" : "думает"} дольше ${STALL_SEC} с. `
-      + "Это нормально для «думающих» моделей (gpt-5, Gemini 2.5 и др.): они рассуждают перед ответом до 1–3 минут. "
-      + "Процесс не завис — связь с сервером есть.";
+    $("stallHint").textContent = `${slow.join(", ")} ${slow.length > 1 ? "думают" : "думает"} дольше ${STALL_SEC} с. `
+      + "Это нормально: «думающие» модели рассуждают перед ответом до 1–3 минут. Связь с сервером есть, процесс не завис.";
   }
 
   // связь с сервером
   const conn = $("conn");
-  conn.hidden = finished;
-  if (!finished) {
+  if (finished) { conn.textContent = ""; conn.classList.remove("bad"); }
+  else {
     const age = Math.round((now - s.lastMsg) / 1000);
     conn.classList.toggle("bad", !connOk);
-    conn.textContent = connOk ? `Связь с сервером есть · последнее событие ${age} с назад`
-      : `Нет вестей от сервера ${age} с — переподключаюсь…`;
+    conn.textContent = connOk ? "связь есть" : `нет связи ${age} с — переподключаюсь…`;
   }
 
   // журнал (новые сверху)
-  $("logCount").textContent = `(${s.log.length})`;
-  if ($("logBox").open || $("log").dataset.n !== String(s.log.length)) {
+  $("logCount").textContent = `${s.log.length} ${plural(s.log.length, "событие", "события", "событий")}${s.done ? ` · ${fmtSec(s.done.duration_s ?? 0)} · ${money(s.cost)}` : ""} ·`;
+  if ($("logSec").open && $("log").dataset.n !== String(s.log.length)) {
     $("log").dataset.n = String(s.log.length);
     $("log").innerHTML = s.log.slice().reverse().map((e) =>
       `<li class="${e.kind}"><time>${e.t.toLocaleTimeString("ru-RU")}</time>${esc(e.text)}</li>`).join("");
   }
 }
+$("logSec").addEventListener("toggle", () => { if ($("logSec").open && current) { $("log").dataset.n = ""; renderActivity(current); } });
+
+const AGREE_BADGE = {
+  high: ["ok", "Мнения совета совпадают"],
+  medium: ["warn", "Мнения частично расходятся"],
+  low: ["bad", "Мнения совета разошлись"],
+};
+const AGREE_NAME = { high: "высокое", medium: "среднее", low: "низкое" };
+const AGREE_HINT = {
+  high: "модели в основном одинаково упорядочили варианты (это согласие, а не гарантия правоты)",
+  medium: "модели частично расходятся в оценке вариантов",
+  low: "мнения совета разошлись — относитесь к решению осторожно и посмотрите особые мнения",
+};
 
 function renderVerdict(s) {
   const v = s.verdict;
   $("verdictSec").hidden = !v;
+  $("whySec").hidden = !v;
   if (!v) return;
   const p = s.proposals[v.winner];
-  $("vTitle").textContent = `Вариант ${v.winner}${p ? ` — ${p.title}` : ""} (${authorOf(s, v.winner)})`;
-  const low = s.agreement && s.agreement.level === "low";
+  $("vTitle").textContent = p && p.title ? p.title : `Вариант ${v.winner}`;
+  const row = s.tally && s.tally.find((r) => r.label === v.winner);
+  const firsts = row && row.ballots ? `${row.first_places} из ${row.ballots} ${plural(row.ballots, "голоса", "голосов", "голосов")} за первое место` : "";
+  $("vSub").textContent = [`Вариант ${v.winner}`, s.authors[v.winner] != null ? (authorOf(s, v.winner) === "автор скрыт" ? "автор скрыт" : `предложил ${authorOf(s, v.winner)}`) : "ваш вариант", firsts].filter(Boolean).join(" · ");
+
   const lead = s.tally && s.tally[0] && s.tally[0].label;
-  const dev = lead && v.winner && v.winner !== lead && !(s.coLeaders || []).includes(v.winner)
-    ? `⚖️ Председатель выбрал не лидера голосования: победитель ${v.winner}, лидер подсчёта — ${lead}.${(v.deviation || v.why) ? ` Причина: ${v.deviation || v.why}` : ""}` : "";
-  const tie = (s.coLeaders || []).length > 1
-    ? `🤝 Ничья за первое место: ${s.coLeaders.join(", ")} — по голосам их не различить${s.coLeaders.includes(v.winner) ? `; председатель выбрал ${v.winner}` : ""}` : "";
-  const warns = [low ? `⚠️ Низкое согласие совета (τ = ${s.agreement.tau.toFixed(2)}): ${AGREE_HINT.low}` : "", dev, tie].filter(Boolean);
+  const tie = (s.coLeaders || []).length > 1;
+  const deviated = lead && v.winner && v.winner !== lead && !(s.coLeaders || []).includes(v.winner);
+  const badges = [];
+  if (s.agreement) { const [k, t] = AGREE_BADGE[s.agreement.level]; badges.push(`<span class="badge ${k}" title="${esc(AGREE_HINT[s.agreement.level])}">${t}</span>`); }
+  if (tie) badges.push(`<span class="badge warn">Ничья за первое место</span>`);
+  if (deviated) badges.push(`<span class="badge bad">Председатель выбрал не лидера</span>`);
+  if (s.facts && Object.values(s.facts).some((r) => (r.claims || []).some((c) => c.status === "refuted"))) badges.push(`<span class="badge bad">Есть опровергнутые факты</span>`);
+  if (s.mock) badges.push(`<span class="badge plain">демо-режим</span>`);
+  $("vBadges").innerHTML = badges.join("");
+
+  const warns = [];
+  if (s.agreement && s.agreement.level === "low") warns.push(`Мнения совета разошлись (τ = ${s.agreement.tau.toFixed(2)}): ${AGREE_HINT.low}.`);
+  if (deviated) warns.push(`Лидер голосования — вариант ${lead}, но председатель выбрал ${v.winner}.${(v.deviation || v.why) ? ` Причина: ${v.deviation || v.why}` : ""}`);
+  if (tie) warns.push(`Варианты ${s.coLeaders.join(", ")} набрали одинаково — по голосам их не различить${s.coLeaders.includes(v.winner) ? `; председатель выбрал ${v.winner}` : ""}.`);
   $("vAgreeWarn").hidden = !warns.length;
   $("vAgreeWarn").innerHTML = warns.map(esc).join("<br>");
   $("vAnswer").innerHTML = md(v.final_answer);
+
   $("vFacts").hidden = !s.facts || !Object.keys(s.facts).length;
   $("vFacts").innerHTML = s.facts ? factsHtml(s) : "";
   $("vWhy").innerHTML = md(v.why);
@@ -1001,23 +1273,18 @@ function renderVerdict(s) {
   $("vDissent").innerHTML = (v.dissent || []).map((x) => `<li>${inline(x)}</li>`).join("");
   $("vRisksBox").hidden = !(v.risks || []).length;
   $("vRisks").innerHTML = (v.risks || []).map((x) => `<li>${inline(x)}</li>`).join("");
-  $("downloads").hidden = !s.done;
-  $("downloads").innerHTML = s.done ? downloadLinks(s.id) : "";
+  const nr = (v.risks || []).length, nd = (v.dissent || []).length;
+  $("whySum").textContent = ["обоснование", nr ? `${nr} ${plural(nr, "риск", "риска", "рисков")}` : "", nd ? `${nd} ${plural(nd, "особое мнение", "особых мнения", "особых мнений")}` : "",
+    s.facts && Object.keys(s.facts).length ? "проверка фактов" : ""].filter(Boolean).join(" · ");
+  if (s.done && $("downloads").dataset.id !== s.id) { $("downloads").dataset.id = s.id; $("downloads").innerHTML = downloadLinks(s.id); }
 }
 
-const AGREE_NAME = { high: "высокое", medium: "среднее", low: "низкое" };
-const AGREE_HINT = {
-  high: "модели в основном одинаково упорядочили варианты — решение устойчиво",
-  medium: "модели частично расходятся в оценке вариантов",
-  low: "мнения совета разошлись — относитесь к решению осторожно и посмотрите особые мнения",
-};
 const TIE_NAME = { borda: "балл Борда", pairwise: "попарный счёт", critique: "оценка критики", label: "жребий (метки случайны)" };
-
 const POSITION_NAME = { kept: "позиция сохранена", improved: "доработан в рамках своего подхода", switched: "подход сменён" };
 const FLAG_NAME = { against: "порядок почти обратный общему мнению",
   leader_last: "ставит на последнее место вариант, который остальные считают лучшим" };
-const FACT_ICON = { confirmed: "✅", refuted: "❌", unclear: "❔" };
-const FACT_NAME = { confirmed: "подтверждено", refuted: "опровергнуто", unclear: "не удалось проверить" };
+const FACT_ICON = { confirmed: "✅", refuted: "❌", unclear: "❔", user_doc: "📄" };
+const FACT_NAME = { confirmed: "подтверждено", refuted: "опровергнуто", unclear: "не удалось проверить", user_doc: "из документов пользователя" };
 
 function coverageHtml(s) {
   let out = "";
@@ -1062,19 +1329,40 @@ function factsHtml(s) {
         ? `<div class="small">${(c.sources || []).map(safeUrl).filter(Boolean).slice(0, 3).map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">источник ${i + 1}</a>`).join(" · ")}</div>` : ""}</li>`).join("")}</ul></div>`).join("");
 }
 
+// главное о голосовании одной фразой — без терминов
+function tallyLead(s) {
+  const t = s.tally;
+  if (!t || !t.length) return "";
+  const top = t[0];
+  const n = t.length;
+  const nb = top.ballots || 0;
+  let txt = `Модели ранжировали ${n} ${plural(n, "вариант", "варианта", "вариантов")}, не зная авторов. `;
+  if ((s.coLeaders || []).length > 1) txt += `Первое место поделили варианты ${s.coLeaders.join(", ")}.`;
+  else if (nb) txt += `Вариант ${top.label} поставили первым ${top.first_places} из ${nb}${top.schulze != null && top.schulze === n - 1 ? "; он выигрывает у каждого соперника один на один" : ""}.`;
+  if (s.agreement) txt += ` ${AGREE_BADGE[s.agreement.level][1]}.`;
+  return txt;
+}
+
 function renderTally(s) {
   const ballots = Object.entries(s.ballots);
   $("tallySec").hidden = !s.tally && !ballots.length;
   const win = s.verdict && s.verdict.winner;
   if (s.tally) {
+    $("tallyLead").textContent = tallyLead(s);
+    const max = Math.max(...s.tally.map((r) => r.borda), 0.0001);
+    $("tallyBars").innerHTML = s.tally.map((r, i) => `<div class="tbar ${r.label === win ? "win" : ""}">
+      <span class="lbl">${esc(r.label)}</span>
+      <span class="t-title">${esc((s.proposals[r.label] || {}).title || "")} <small>· ${esc(authorOf(s, r.label))}</small></span>
+      <span class="t-place">${i + 1} место${r.label === win ? " · решение" : ""}</span>
+      <span class="track" role="img" aria-label="Балл ${r.borda.toFixed(2)} из 1"><i style="width:${Math.max(3, (r.borda / max) * 100).toFixed(0)}%"></i></span></div>`).join("");
     const sch = s.tally[0] && s.tally[0].schulze != null;
     $("tally").innerHTML = `<thead><tr><th>#</th><th>Вариант</th><th>Автор</th>${sch ? '<th title="Метод Шульце: скольких соперников вариант побеждает в прямых сравнениях — определяет порядок">Шульце</th>' : ""}<th>Борда</th><th title="Попарные сравнения: побед минус поражений">Попарно</th><th>Критика</th><th>1-х мест</th></tr></thead><tbody>${
       s.tally.map((r, i) => `<tr class="${r.label === win ? "winner" : ""}">
         <td class="num">${i + 1}</td>
-        <td><span class="lbl">${esc(r.label)}</span> ${esc((s.proposals[r.label] || {}).title || "")}</td>
+        <td><span class="lbl">${esc(r.label)}</span></td>
         <td>${esc(authorOf(s, r.label))}</td>
         ${sch ? `<td class="num">${r.schulze} из ${s.tally.length - 1}</td>` : ""}
-        <td class="num"><div style="display:flex;gap:.5rem;align-items:center"><div class="bar"><i style="width:${(r.borda * 100).toFixed(0)}%"></i></div>${r.borda.toFixed(2)}</div></td>
+        <td class="num">${r.borda.toFixed(2)}</td>
         <td class="num">${r.pairwise == null ? "—" : (r.pairwise > 0 ? "+" : "") + r.pairwise}</td>
         <td class="num">${r.avg_score == null ? "—" : r.avg_score.toFixed(1)}</td>
         <td class="num">${r.first_places}/${r.ballots}</td></tr>`).join("")}</tbody>`;
@@ -1082,15 +1370,17 @@ function renderTally(s) {
       ? `${esc(r.label)} выше ${esc(s.tally[i + 1].label)}: при равенстве ${sch ? "по Шульце" : "по баллу Борда"} решило ${TIE_NAME[r.tie_break] || r.tie_break}` : "").filter(Boolean);
     const a = s.agreement;
     $("tallyNote").innerHTML = (a ? `<b>Согласие совета: ${AGREE_NAME[a.level]}</b> (τ = ${a.tau.toFixed(2)}) — ${AGREE_HINT[a.level]}.<br>` : "")
-      + (sch ? "Порядок: метод Шульце — кто выигрывает в прямых сравнениях; при равенстве — балл Борда, затем попарный счёт, затем жребий. Оценка критики — для сведения: она дана версиям до доработки."
+      + (sch ? "Порядок: метод Шульце — кто выигрывает в прямых сравнениях; при равенстве — балл Борда (0–1, среднее место в бюллетенях), затем попарный счёт, затем жребий. Оценка критики — для сведения: она дана версиям до доработки."
         : "Порядок: балл Борда; при равенстве — попарное сравнение, затем оценка критики.")
       + ties.map((t) => `<br>• ${t}`).join("") + coverageHtml(s) + positionsHtml(s) + flagsHtml(s);
   } else {
+    $("tallyLead").textContent = ballots.length ? `Голосуют модели: ${ballots.length} ${plural(ballots.length, "бюллетень", "бюллетеня", "бюллетеней")} получено.` : "";
+    $("tallyBars").innerHTML = "";
     $("tally").innerHTML = "";
     $("tallyNote").innerHTML = "";
   }
-  $("ballots").innerHTML = ballots.map(([voter, b]) => `<div class="ballot"><b>${esc(voter)}</b>
-    <span class="rank">${b.ranking.map(esc).join(" › ")}</span>${b.rationale ? `<span class="why">${inline(b.rationale)}</span>` : ""}</div>`).join("");
+  $("ballots").innerHTML = ballots.length ? `<h3>Бюллетени</h3>` + ballots.map(([voter, b]) => `<div class="ballot"><b>${esc(voter)}</b>
+    <span class="rank">${b.ranking.map(esc).join(" › ")}</span>${b.rationale ? `<span class="why">${inline(b.rationale)}</span>` : ""}</div>`).join("") : "";
 }
 
 function renderProposals(s) {
@@ -1100,16 +1390,13 @@ function renderProposals(s) {
   $("proposals").innerHTML = labels.map((l) => {
     const p = s.proposals[l];
     const list = (name, xs) => (xs && xs.length ? `<div><b>${name}:</b> ${xs.map(inline).join("; ")}</div>` : "");
-    const conf = p.confidence != null && s.authors[l] != null
-      ? `<div class="conf">Уверенность <div class="bar"><i style="width:${Math.round(p.confidence * 100)}%"></i></div>${Math.round(p.confidence * 100)}%</div>` : "";
     return `<article class="proposal ${l === win ? "win" : ""}">
-      <header><span class="lbl">${esc(l)}</span><div><h3 class="clickable" data-full="${esc(l)}">${esc(p.title)}${s.revised[l] ? '<span class="tag">доработан</span>' : ""}${l === win ? ' <span title="Победитель">🏆</span>' : ""}</h3>
+      <header><span class="lbl">${esc(l)}</span><div><h3 class="clickable" data-full="${esc(l)}">${esc(p.title)}${s.revised[l] ? '<span class="tag">доработан</span>' : ""}${l === win ? ' <span class="tag" style="background:var(--gold-soft);color:var(--gold)">решение</span>' : ""}</h3>
       <div class="author">${esc(authorOf(s, l))}</div></div></header>
-      <div class="body md">${md(p.summary)}${p.reasoning ? `<p><b>Обоснование:</b> ${inline(p.reasoning)}</p>` : ""}</div>
-      <button class="open-full" type="button" data-full="${esc(l)}">Открыть полностью ⤢</button>
+      <div class="body md">${md(p.summary)}</div>
+      <button class="open-full" type="button" data-full="${esc(l)}"><svg class="ic" aria-hidden="true" style="width:16px;height:16px"><use href="#i-expand"/></svg>Читать полностью</button>
       <div class="lists">${list("Плюсы", p.pros)}${list("Риски", p.risks)}</div>
       ${p.changes ? `<div class="changes"><b>Что изменено${s.revised[l] && POSITION_NAME[p.position] && p.comparison !== undefined ? ` (${POSITION_NAME[p.position]})` : ""}:</b> ${inline(p.changes)}</div>` : ""}
-      ${conf}
     </article>`;
   }).join("");
   for (const body of $("proposals").querySelectorAll(".body")) {
@@ -1136,19 +1423,14 @@ function renderMatrix(s) {
       if (!r) return `<td class="self">${s.authors[l] === rv ? "свой" : "—"}</td>`;
       const v = avg(Object.values(r.scores));
       colSums[l].push(v);
-      const tip = [
-        Object.entries(r.scores).map(([k, x]) => `${k}: ${x}`).join(", "),
-        ...(r.strengths || []).map((x) => `+ ${x}`),
-        ...(r.weaknesses || []).map((x) => `− ${x}`),
-      ].join("\n");
-      return `<td class="cell" style="${scoreColor(v)}" title="${esc(tip)}">${v.toFixed(1)}</td>`;
+      return `<td class="cell" style="${scoreColor(v)}"><button type="button" data-reviewer="${esc(rv)}" data-label="${esc(l)}" aria-label="${esc(rv)} о варианте ${esc(l)}: ${v.toFixed(1)}. Открыть отзыв">${v.toFixed(1)}</button></td>`;
     }).join("");
-    return `<tr><th scope="row" class="clickable" data-reviewer="${esc(rv)}" title="Открыть все отзывы">${esc(rv)}</th>${cells}</tr>`;
+    return `<tr><th scope="row" class="clickable" data-reviewer="${esc(rv)}" tabindex="0" title="Открыть все отзывы">${esc(rv)}</th>${cells}</tr>`;
   }).join("");
   const foot = labels.map((l) => {
     if (!colSums[l].length) return "<td></td>";
     const v = avg(colSums[l]);
-    return `<td class="cell" style="${scoreColor(v)}">${v.toFixed(1)}</td>`;
+    return `<td class="num" style="text-align:center;font-weight:700">${v.toFixed(1)}</td>`;
   }).join("");
   $("matrix").innerHTML = `<thead><tr><th>Рецензент</th>${labels.map((l) => `<th style="text-align:center">${esc(l)}</th>`).join("")}</tr></thead>
     <tbody>${rows}</tbody><tfoot><tr><th scope="row">Среднее</th>${foot}</tr></tfoot>`;
@@ -1185,7 +1467,7 @@ function openSession(id) {
   if (location.hash !== `#/s/${id}`) history.replaceState(null, "", `#/s/${encodeURIComponent(id)}`);
   markActiveHistory();
   render(s);
-  if (window.matchMedia("(max-width: 960px)").matches) window.scrollTo({ top: 0 });
+  window.scrollTo({ top: 0 });
   timer = setInterval(tick, 1000);
   stream = new EventSource(`/api/sessions/${encodeURIComponent(id)}/events`);
   stream.onmessage = (msg) => {
@@ -1220,8 +1502,10 @@ $("sQueryToggle").addEventListener("click", () => {
 });
 
 $("cancelBtn").addEventListener("click", async () => {
-  if (!current || !confirm("Остановить заседание? Уже потраченные запросы не вернутся.")) return;
-  try { await api(`/api/sessions/${encodeURIComponent(current.id)}/cancel`, { method: "POST" }); } catch (e) { alert(e.message); }
+  if (!current) return;
+  const ok = await ask({ title: "Остановить заседание?", html: "<p>Уже потраченные на запросы деньги не вернутся, а решения не будет.</p>", ok: "Остановить", cancel: "Продолжить", danger: true });
+  if (!ok) return;
+  try { await api(`/api/sessions/${encodeURIComponent(current.id)}/cancel`, { method: "POST" }); } catch (e) { toast(e.message); }
 });
 $("blind").addEventListener("change", () => current && render(current));
 
@@ -1436,8 +1720,9 @@ function closeModal() {
 }
 
 $("mClose").addEventListener("click", closeModal);
+$("modal").addEventListener("keydown", (e) => trapFocus(e, $("modal")));
 $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(); });
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("dialog").hidden) closeModal(); });
 
 function proposalHtml(p, s, label) {
   const parts = [`<div class="section">${md(p.summary)}</div>`];
@@ -1480,19 +1765,24 @@ function openProposal(s, label) {
   openModal({ eyebrow: `Вариант ${label}`, title: p.title, sub, tabs, foot });
 }
 
-function openReviewer(s, reviewer) {
+function openReviewer(s, reviewer, label = null) {
   const cs = s.critiques[reviewer];
   if (!cs) return;
   const html = (cs.reviews || []).map((r) => {
     const p = s.proposals[r.label] || {};
-    return reviewHtml(`${r.label}: ${p.title || ""}`, r);
+    return reviewHtml(`${r.label}: ${p.title || ""}`, r).replace('class="review"', `class="review${r.label === label ? " hl" : ""}" id="rv-${esc(r.label)}"`);
   }).join("");
-  openModal({ eyebrow: "Отзывы рецензента", title: reviewer, sub: `Оценил вариантов: ${(cs.reviews || []).length}`, tabs: [{ name: "Отзывы", html }] });
+  openModal({ eyebrow: "Отзывы рецензента", title: reviewer, sub: `Оценил ${(cs.reviews || []).length} ${plural((cs.reviews || []).length, "вариант", "варианта", "вариантов")}`, tabs: [{ name: "Отзывы", html }] });
+  if (label) requestAnimationFrame(() => { const el = document.getElementById(`rv-${label}`); if (el) el.scrollIntoView({ block: "start" }); });
 }
 
 $("matrix").addEventListener("click", (e) => {
   const th = e.target.closest("[data-reviewer]");
-  if (th && current) openReviewer(current, th.dataset.reviewer);
+  if (th && current) openReviewer(current, th.dataset.reviewer, th.dataset.label || null);
+});
+$("matrix").addEventListener("keydown", (e) => {
+  const th = e.target.closest("th[data-reviewer]");
+  if (th && current && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openReviewer(current, th.dataset.reviewer); }
 });
 
 /* ------------------------------------------------------------ широкие таблицы: тень у края, где есть продолжение */
@@ -1536,6 +1826,7 @@ function route() {
     showFormError(`Не удалось загрузить конфигурацию: ${e.message}`);
   }
   await loadHistory();
+  if (!location.hash) showView("empty");
   route();
   window.addEventListener("hashchange", route);
 })();

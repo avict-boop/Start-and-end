@@ -2,279 +2,308 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#f5f5f2" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#141414" media="(prefers-color-scheme: dark)">
   <title>Совет нейросетей</title>
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%235b5bd6'/><circle cx='16' cy='9' r='3' fill='white'/><circle cx='9' cy='20' r='3' fill='white'/><circle cx='23' cy='20' r='3' fill='white'/></svg>">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='9' fill='%234f46e5'/><circle cx='16' cy='10' r='3.2' fill='white'/><circle cx='9.5' cy='21' r='3.2' fill='white'/><circle cx='22.5' cy='21' r='3.2' fill='white'/></svg>">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand"><span class="logo" aria-hidden="true"></span>Совет нейросетей</div>
-  <div class="topbar-right">
-    <span id="keyStatus" class="pill"></span>
-    <button id="statsBtn" class="ghost" type="button" title="Статистика">📊<span class="hide-sm">&nbsp;Статистика</span></button>
-    <button id="settingsBtn" class="ghost" type="button" title="Настройки">⚙️<span class="hide-sm">&nbsp;Настройки</span><span id="updDot" class="upd-dot" hidden></span></button>
-    <button id="archiveBtn" class="ghost" type="button" title="Архив">🗂<span class="hide-sm">&nbsp;Архив</span></button>
-    <button id="newBtn" class="ghost" type="button">+ Новое<span class="hide-sm">заседание</span></button>
-  </div>
-</header>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-archive" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8M10 12h4"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20V11M10 20V5M16 20v-6M21 20H3"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></symbol>
+  <symbol id="i-clip" viewBox="0 0 24 24"><path d="m21 11-9 9a5.5 5.5 0 0 1-8-8l9-9a3.7 3.7 0 0 1 5 5l-9 9a1.8 1.8 0 0 1-2.6-2.6l8.5-8.5"/></symbol>
+  <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></symbol>
+  <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-dl" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></symbol>
+  <symbol id="i-msg" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></symbol>
+  <symbol id="i-repeat" viewBox="0 0 24 24"><path d="M17 2l3 3-3 3"/><path d="M4 11V9a4 4 0 0 1 4-4h12M7 22l-3-3 3-3"/><path d="M20 13v2a4 4 0 0 1-4 4H4"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 5 5 9-10"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+  <symbol id="i-expand" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></symbol>
+  <symbol id="i-log" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+  <symbol id="i-council" viewBox="0 0 24 24"><circle cx="12" cy="7" r="2.6"/><circle cx="6" cy="16" r="2.6"/><circle cx="18" cy="16" r="2.6"/><path d="M9.8 9.2 7.6 13.6M14.2 9.2l2.2 4.4M8.6 16h6.8"/></symbol>
+</svg>
 
-<div class="layout">
-  <aside class="sidebar">
-    <form id="form" class="card" autocomplete="off">
-      <div id="formBanner" class="form-banner" hidden>
-        <span id="formBannerText"></span>
-        <button type="button" id="formBannerX" class="rm" aria-label="Отменить" title="Отменить">×</button>
-      </div>
-      <label class="field">
-        <span class="label-row">Вопрос для совета
-          <button type="button" id="micBtn" class="mic" title="Надиктовать вопрос голосом" aria-label="Надиктовать голосом" hidden>🎤</button>
-        </span>
-        <textarea id="question" rows="4" required minlength="3"
-          placeholder="Например: какой стек выбрать для MVP интернет-магазина с бюджетом 1 млн ₽?"></textarea>
-      </label>
+<a class="skip" href="#main">Перейти к содержимому</a>
 
-      <div class="field">
-        <span>Вложения <em>(картинки, PDF, Word, Excel, текст)</em></span>
-        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="Добавить файлы">
-          <input id="fileInput" type="file" multiple hidden>
-          <div>📎 Перетащите файлы сюда, вставьте скриншот <kbd>Ctrl</kbd>+<kbd>V</kbd> или нажмите, чтобы выбрать</div>
-          <div class="hint" id="uploadHint"></div>
-        </div>
-        <ul id="attList" class="att-list"></ul>
-      </div>
-
-      <div class="field">
-        <span>Режим</span>
-        <div class="segmented" id="modeSeg" role="radiogroup">
-          <button type="button" data-mode="debate" role="radio">Дебаты</button>
-          <button type="button" data-mode="quick" role="radio">Быстро</button>
-          <button type="button" data-mode="evaluate" role="radio">Оценка вариантов</button>
-        </div>
-        <small id="modeHint" class="hint"></small>
-      </div>
-
-      <label class="field" id="roundsField">
-        <span>Раундов критики и доработки</span>
-        <input id="rounds" type="number" min="1" max="5" value="1">
-      </label>
-
-      <label class="field" id="optionsField" hidden>
-        <span>Ваши варианты</span>
-        <textarea id="options" rows="5"
-          placeholder="Каждый вариант с новой строки.&#10;Многострочные варианты разделяйте строкой ---"></textarea>
-      </label>
-
-      <label class="field">
-        <span>Критерии <em>(необязательно, через запятую)</em></span>
-        <input id="criteria" type="text" placeholder="Если пусто — председатель предложит сам">
-      </label>
-
-      <details class="field">
-        <summary>Дополнительный контекст</summary>
-        <textarea id="context" rows="4" placeholder="Факты, ограничения, данные — всё, что совету нужно знать"></textarea>
-      </details>
-
-      <div class="field">
-        <span>Участники</span>
-        <div id="members" class="members"></div>
-      </div>
-
-      <div class="row2">
-        <label class="field">
-          <span>Председатель</span>
-          <select id="chair"></select>
-        </label>
-        <label class="field">
-          <span>Адвокат дьявола</span>
-          <select id="devil"></select>
-        </label>
-      </div>
-      <label class="check small" title="По умолчанию председатель не предлагает свой вариант: он ставит задачу, оценивает, голосует и пишет итог — так он не судит собственный вариант.">
-        <input id="chairProposes" type="checkbox"> Председатель тоже предлагает свой вариант
-      </label>
-      <label class="check small" id="factCheckRow" title="После голосования модель с поиском в интернете проверяет ключевые факты в лидирующих вариантах. Председатель учитывает результат. Дороже на 2 запроса с поиском.">
-        <input id="factCheck" type="checkbox"> <span>Проверка фактов лидеров через поиск <small class="hint" id="factCheckHint"></small></span>
-      </label>
-      <label class="check small" id="compactRow" title="Участники пишут суть сжато, без оформления из запроса; полный ответ в нужном формате пишет только председатель. Модели читают друг у друга короткие тексты — заседание заметно дешевле. Риск: часть деталей может не дойти до итога.">
-        <input id="compact" type="checkbox"> <span>Компактные варианты — дешевле <small class="hint" id="compactHint"></small></span>
-      </label>
-
-      <div class="row2">
-        <label class="field">
-          <span>Лимит, $</span>
-          <input id="budget" type="number" min="0.01" max="100" step="any">
-        </label>
-        <label class="check field">
-          <input id="mock" type="checkbox">
-          <span>Демо-режим<br><small class="hint">без ключа и затрат</small></span>
-        </label>
-      </div>
-
-      <div id="formError" class="error" hidden></div>
-      <div id="estimate" class="estimate" hidden></div>
-
-      <div class="actions">
-        <button id="estimateBtn" type="button" class="secondary">Оценить стоимость</button>
-        <button id="startBtn" type="submit" class="primary">Начать заседание</button>
-      </div>
-    </form>
-
-    <section class="card history">
-      <h2>Последние заседания</h2>
-      <ul id="history"><li class="muted">Пока пусто</li></ul>
+<div class="app">
+  <aside class="rail" aria-label="Меню">
+    <div class="brand"><span class="logo" aria-hidden="true"><svg class="ic"><use href="#i-council"/></svg></span><span class="brand-name">Совет нейросетей</span></div>
+    <nav class="nav" aria-label="Разделы">
+      <button id="newBtn" type="button" class="nav-item" data-view="empty"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg><span>Новый<span class="hide-sm"> вопрос</span></span></button>
+      <button id="archiveBtn" type="button" class="nav-item" data-view="archive"><svg class="ic" aria-hidden="true"><use href="#i-archive"/></svg><span>Архив</span></button>
+      <button id="statsBtn" type="button" class="nav-item" data-view="stats"><svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg><span>Статистика</span></button>
+      <button id="settingsBtn" type="button" class="nav-item" data-view="settings"><svg class="ic" aria-hidden="true"><use href="#i-gear"/></svg><span>Настройки</span><span id="updDot" class="upd-dot" hidden title="Есть обновление программы"></span></button>
+    </nav>
+    <section class="recent" aria-labelledby="recentTitle">
+      <h2 id="recentTitle" class="recent-title">Недавние</h2>
+      <ul id="history"><li class="muted small">Пока пусто</li></ul>
       <button id="allArchiveBtn" type="button" class="link" hidden>Весь архив →</button>
     </section>
+    <div class="rail-foot"><button id="keyStatus" type="button" class="pill" disabled></button></div>
   </aside>
 
-  <main id="main">
-    <section id="empty" class="empty card">
-      <h1>Несколько нейросетей решают вашу задачу как совет экспертов</h1>
-      <ol class="steps-intro">
-        <li><b>Предложения.</b> Каждая модель вслепую предлагает свой вариант.</li>
-        <li><b>Критика.</b> Варианты анонимны (A, B, C…), модели оценивают чужие по критериям.</li>
-        <li><b>Доработка.</b> Каждая модель улучшает свой вариант с учётом критики.</li>
-        <li><b>Голосование.</b> Ранжирование чужих вариантов, подсчёт по Борда.</li>
-        <li><b>Вердикт.</b> Председатель сводит лучшее в итоговое решение.</li>
-      </ol>
-      <p class="muted">Заполните форму слева. Без ключа OpenRouter попробуйте демо-режим.</p>
+  <main id="main" tabindex="-1">
+    <!-- ============================================================ новый вопрос -->
+    <section id="empty" class="view compose" aria-labelledby="composeTitle">
+      <header class="page-head">
+        <h1 id="composeTitle">Новый вопрос совету</h1>
+        <p class="lead">Несколько моделей предложат решения, анонимно покритикуют друг друга и проголосуют. Председатель напишет итог.</p>
+      </header>
+      <form id="form" autocomplete="off" novalidate>
+        <div class="compose-grid">
+          <div class="compose-main">
+            <div id="formBanner" class="banner" hidden>
+              <span id="formBannerText"></span>
+              <button type="button" id="formBannerX" class="icon-btn" aria-label="Отменить"><svg class="ic"><use href="#i-x"/></svg></button>
+            </div>
+
+            <div id="dropzone" class="qbox">
+              <label for="question" class="sr-only">Вопрос для совета</label>
+              <textarea id="question" rows="5" required
+                placeholder="Опишите задачу — чем подробнее, тем лучше ответ. Например: какой стек выбрать для MVP интернет-магазина с бюджетом 1 млн ₽?"></textarea>
+              <ul id="attList" class="att-list" aria-label="Вложения"></ul>
+              <div class="qbox-tools">
+                <button type="button" id="attachBtn" class="chip-btn"><svg class="ic" aria-hidden="true"><use href="#i-clip"/></svg>Файлы</button>
+                <button type="button" id="micBtn" class="chip-btn mic" hidden><svg class="ic" aria-hidden="true"><use href="#i-mic"/></svg><span id="micText">Голосом</span></button>
+                <span class="qbox-hint hint" id="uploadHint">Картинки, PDF, Word, Excel. Скриншот можно вставить: Ctrl+V</span>
+                <input id="fileInput" type="file" multiple hidden>
+              </div>
+              <div class="drop-overlay" aria-hidden="true">Отпустите, чтобы приложить файлы</div>
+            </div>
+
+            <fieldset class="modes" id="modeSeg">
+              <legend class="label">Как обсуждать</legend>
+              <label class="mode-card"><input type="radio" name="mode" value="debate">
+                <span class="mode-txt"><b>Подробное обсуждение</b><small>Решения, критика, доработка, голосование. Для важных вопросов.</small></span>
+                <span class="mode-meta" data-meta="debate"></span></label>
+              <label class="mode-card"><input type="radio" name="mode" value="quick">
+                <span class="mode-txt"><b>Быстрый ответ</b><small>Решения и голосование, без критики. Быстрее и дешевле.</small></span>
+                <span class="mode-meta" data-meta="quick"></span></label>
+              <label class="mode-card"><input type="radio" name="mode" value="evaluate">
+                <span class="mode-txt"><b>Выбрать из моих вариантов</b><small>Вы даёте варианты — совет их обсуждает и выбирает лучший.</small></span>
+                <span class="mode-meta" data-meta="evaluate"></span></label>
+            </fieldset>
+            <small id="modeHint" class="sr-only" aria-live="polite"></small>
+
+            <div class="field" id="optionsField" hidden>
+              <label for="options" class="label">Ваши варианты</label>
+              <textarea id="options" rows="5" placeholder="Каждый вариант с новой строки.&#10;Многострочные варианты разделяйте строкой ---"></textarea>
+              <small class="hint">Нужно минимум 2 варианта.</small>
+            </div>
+          </div>
+
+          <div class="compose-side">
+            <details id="params" class="params card">
+              <summary>
+                <span><b>Параметры</b><small id="paramsSummary" class="params-sum"></small></span>
+                <svg class="ic chev" aria-hidden="true"><use href="#i-down"/></svg>
+              </summary>
+              <div class="params-body">
+                <div class="field" id="roundsField">
+                  <label for="rounds" class="label">Раундов «критика → доработка»</label>
+                  <div class="stepper"><button type="button" data-step="-1" aria-label="Меньше">−</button><input id="rounds" type="number" min="1" max="5" value="1" inputmode="numeric"><button type="button" data-step="1" aria-label="Больше">+</button></div>
+                  <small class="hint">Каждый раунд делает ответы точнее, но дороже и дольше.</small>
+                </div>
+                <div class="field">
+                  <span class="label" id="membersLabel">Участники</span>
+                  <div id="members" class="members" role="group" aria-labelledby="membersLabel"></div>
+                </div>
+                <div class="row2">
+                  <div class="field"><label for="chair" class="label">Председатель</label><select id="chair"></select></div>
+                  <div class="field"><label for="devil" class="label">Адвокат дьявола</label><select id="devil"></select></div>
+                </div>
+                <div class="field">
+                  <label for="criteria" class="label">Критерии оценки</label>
+                  <input id="criteria" type="text" placeholder="Например: цена, скорость, риски">
+                  <small class="hint">Через запятую. Если пусто — председатель предложит сам.</small>
+                </div>
+                <div class="field">
+                  <label for="context" class="label">Дополнительный контекст</label>
+                  <textarea id="context" rows="3" placeholder="Факты, ограничения, данные — всё, что совету нужно знать"></textarea>
+                </div>
+                <div class="toggles">
+                  <label class="switch"><input id="compact" type="checkbox"><span class="sw" aria-hidden="true"></span>
+                    <span><b>Компактные варианты</b><small>Участники пишут суть сжато, полный ответ — только председатель. Примерно в 2–3 раза дешевле. <span id="compactHint"></span></small></span></label>
+                  <label class="switch" id="factCheckRow"><input id="factCheck" type="checkbox"><span class="sw" aria-hidden="true"></span>
+                    <span><b>Проверка фактов</b><small>Модель с поиском в интернете проверит лидирующие варианты. <span id="factCheckHint"></span></small></span></label>
+                  <label class="switch"><input id="chairProposes" type="checkbox"><span class="sw" aria-hidden="true"></span>
+                    <span><b>Председатель тоже предлагает решение</b><small>Обычно он только ставит задачу, голосует и пишет итог — так он не судит своё.</small></span></label>
+                  <label class="switch"><input id="mock" type="checkbox"><span class="sw" aria-hidden="true"></span>
+                    <span><b>Демо-режим</b><small>Без ключа и без затрат — ответы ненастоящие, чтобы посмотреть, как всё работает.</small></span></label>
+                </div>
+                <div class="field budget-field">
+                  <label for="budget" class="label">Лимит стоимости, $</label>
+                  <input id="budget" type="number" min="0.01" max="100" step="any" inputmode="decimal">
+                  <small class="hint">Заседание остановится, если расходы дойдут до лимита.</small>
+                </div>
+              </div>
+            </details>
+
+            <div class="startbar">
+              <div id="formError" class="alert bad" role="alert" hidden></div>
+              <button id="startBtn" type="submit" class="btn primary big">Начать заседание</button>
+              <button id="estimateBtn" type="button" class="est-line" aria-expanded="false" aria-controls="estimate"><span id="estLine">Напишите вопрос — покажу примерную стоимость</span></button>
+              <div id="estimate" class="estimate" hidden></div>
+            </div>
+          </div>
+        </div>
+      </form>
     </section>
 
-    <section id="archive" class="card" hidden>
-      <div class="archive-head">
-        <div>
-          <h1>Архив заседаний</h1>
-          <div id="archiveCount" class="muted small"></div>
-        </div>
-        <div class="archive-filters">
-          <input id="archiveSearch" type="search" placeholder="Поиск по вопросу, решению, участникам…" aria-label="Поиск">
-          <select id="archiveMode" aria-label="Режим">
-            <option value="">Все режимы</option>
-            <option value="debate">Дебаты</option>
-            <option value="quick">Быстрый</option>
-            <option value="evaluate">Оценка вариантов</option>
-          </select>
-        </div>
+    <!-- ============================================================ архив -->
+    <section id="archive" class="view" hidden aria-labelledby="archTitle">
+      <header class="page-head row-head">
+        <div><h1 id="archTitle">Архив</h1><div id="archiveCount" class="muted small"></div></div>
+      </header>
+      <div class="archive-filters">
+        <div class="search"><svg class="ic" aria-hidden="true"><use href="#i-search"/></svg>
+          <input id="archiveSearch" type="search" placeholder="Поиск по вопросу, решению, участникам" aria-label="Поиск по архиву"></div>
+        <select id="archiveMode" aria-label="Режим">
+          <option value="">Все режимы</option>
+          <option value="debate">Подробное обсуждение</option>
+          <option value="quick">Быстрый ответ</option>
+          <option value="evaluate">Выбор из вариантов</option>
+        </select>
       </div>
       <div id="archiveList" class="archive-list"></div>
     </section>
 
-    <section id="settings" class="card" hidden>
-      <div class="set-head">
-        <h1>Настройки</h1>
-        <div class="set-actions">
-          <span id="setState" class="muted small"></span>
-          <button id="setSave" type="button" disabled>Сохранить</button>
-        </div>
-      </div>
-      <div id="setNotice"></div>
-      <nav class="set-tabs" id="setTabs">
-        <button type="button" data-tab="members" class="active">Участники и модели</button>
-        <button type="button" data-tab="session">Заседание</button>
-        <button type="button" data-tab="facts">Проверка фактов и голос</button>
-        <button type="button" data-tab="brand">Оформление отчётов</button>
-        <button type="button" data-tab="system">Программа</button>
+    <!-- ============================================================ настройки -->
+    <section id="settings" class="view" hidden aria-labelledby="setTitle">
+      <header class="page-head"><h1 id="setTitle">Настройки</h1></header>
+      <div id="setNotice" aria-live="polite"></div>
+      <nav class="tabs set-tabs" id="setTabs" role="tablist" aria-label="Разделы настроек">
+        <button type="button" role="tab" data-tab="members" class="active">Модели</button>
+        <button type="button" role="tab" data-tab="session">Заседание</button>
+        <button type="button" role="tab" data-tab="facts">Факты и голос</button>
+        <button type="button" role="tab" data-tab="brand">Отчёты</button>
+        <button type="button" role="tab" data-tab="system">Программа</button>
       </nav>
       <div id="setBody"><div class="muted">Загрузка…</div></div>
+      <div class="savebar" id="saveBar">
+        <span id="setState" class="muted small"></span>
+        <button id="setSave" type="button" class="btn primary" disabled>Сохранить</button>
+      </div>
       <datalist id="modelList"></datalist>
     </section>
 
-    <section id="stats" class="card" hidden>
-      <h1>Статистика</h1>
+    <!-- ============================================================ статистика -->
+    <section id="stats" class="view" hidden aria-labelledby="statsTitle">
+      <header class="page-head"><h1 id="statsTitle">Статистика</h1></header>
       <div id="statsBody"><div class="muted">Загрузка…</div></div>
     </section>
 
-    <div id="session" hidden>
-      <section class="card head">
-        <div class="head-top">
-          <div>
-            <div class="eyebrow" id="sMeta"></div>
-            <div id="sParent" class="s-parent" hidden></div>
-            <h1 id="sQuestion"></h1>
-            <div id="sQuery" class="query" hidden>
-              <div class="query-label">Запрос</div>
-              <div id="sQueryBody" class="query-body md"></div>
-              <button id="sQueryToggle" type="button" class="link" hidden>Показать запрос полностью</button>
-            </div>
-            <div id="sAtts" class="s-atts" hidden></div>
-            <div id="sRefined" class="muted"></div>
-            <div id="sCriteria" class="chips"></div>
-          </div>
-          <div class="head-stats">
-            <div><span class="stat-label">Стоимость</span><span id="sCost" class="stat">$0.0000</span></div>
-            <div><span class="stat-label">Время</span><span id="sTime" class="stat">0 с</span></div>
+    <!-- ============================================================ заседание -->
+    <div id="session" class="view session" hidden>
+      <section class="s-head">
+        <div id="sParent" class="s-parent" hidden></div>
+        <div class="eyebrow" id="sMeta"></div>
+        <h1 id="sQuestion"></h1>
+        <div id="sQuery" class="query" hidden>
+          <div id="sQueryBody" class="query-body md"></div>
+          <button id="sQueryToggle" type="button" class="link" hidden>Показать запрос полностью</button>
+        </div>
+        <div id="sAtts" class="s-atts" hidden></div>
+        <div class="s-facts">
+          <span><span class="muted">Стоимость</span> <b id="sCost">$0.0000</b></span>
+          <span><span class="muted">Время</span> <b id="sTime">0 с</b></span>
+        </div>
+        <div id="sError" class="alert bad" role="alert" hidden></div>
+      </section>
+
+      <section id="verdictSec" class="card verdict" hidden aria-labelledby="vTitle">
+        <div id="vBadges" class="badges"></div>
+        <h2 id="vTitle"></h2>
+        <div id="vSub" class="v-sub muted"></div>
+        <div id="vAgreeWarn" class="alert warn" hidden></div>
+        <div id="vAnswer" class="md answer"></div>
+        <div class="v-actions" id="nextActions" hidden>
+          <button type="button" id="followBtn" class="btn primary" title="Новое заседание с учётом этого решения и вложений"><svg class="ic" aria-hidden="true"><use href="#i-msg"/></svg>Уточнить</button>
+          <button type="button" id="repeatBtn" class="btn" title="Тот же вопрос — можно поменять модели или режим"><svg class="ic" aria-hidden="true"><use href="#i-repeat"/></svg>Повторить</button>
+          <div class="menu-wrap">
+            <button type="button" id="dlBtn" class="btn" aria-haspopup="true" aria-expanded="false" aria-controls="downloads"><svg class="ic" aria-hidden="true"><use href="#i-dl"/></svg>Скачать</button>
+            <div id="downloads" class="menu" hidden></div>
           </div>
         </div>
-        <ol id="timeline" class="timeline"></ol>
+      </section>
+
+      <details id="whySec" class="card fold" hidden>
+        <summary><span><b>Почему так, риски и особые мнения</b><small id="whySum"></small></span><svg class="ic chev" aria-hidden="true"><use href="#i-down"/></svg></summary>
+        <div class="fold-body">
+          <div id="vFacts" class="facts" hidden></div>
+          <div class="verdict-grid">
+            <div><h3>Почему</h3><div id="vWhy" class="md"></div></div>
+            <div id="vDissentBox"><h3>Особые мнения</h3><ul id="vDissent"></ul></div>
+            <div id="vRisksBox"><h3>Риски</h3><ul id="vRisks"></ul></div>
+          </div>
+        </div>
+      </details>
+
+      <section id="progressSec" class="card progress-card" aria-labelledby="progTitle">
+        <div class="prog-head">
+          <h2 id="progTitle" class="sr-only">Ход заседания</h2>
+          <div id="stageNow" class="stage-now-text" aria-live="polite"></div>
+          <button id="cancelBtn" type="button" class="btn danger small" hidden><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg>Остановить</button>
+        </div>
+        <div class="progress" aria-hidden="true"><i id="stageBar"></i></div>
+        <ol id="timeline" class="steps"></ol>
         <div id="activity" class="activity" hidden>
-          <div class="stage-now">
-            <div id="stageNow" class="stage-now-text" aria-live="polite"></div>
-            <div class="progress" aria-hidden="true"><i id="stageBar"></i></div>
-          </div>
-          <ul id="workers" class="workers"></ul>
-          <div id="stallHint" class="stall" hidden></div>
-          <div class="activity-foot">
-            <span id="conn" class="conn"></span>
-            <details id="logBox" class="log-box">
-              <summary>Журнал событий <span id="logCount"></span></summary>
-              <a id="diagLink" class="diag-link" href="#">🧾 Скачать журнал для разбора (события, сырые ответы моделей, ошибки программы)</a>
-              <ol id="log" class="log"></ol>
-            </details>
-          </div>
-        </div>
-        <div class="head-bottom">
-          <div id="memberStatus" class="chips"></div>
-          <div class="head-actions">
-            <label class="check small"><input id="blind" type="checkbox"> Скрыть авторов до вердикта</label>
-            <button id="cancelBtn" type="button" class="danger" hidden>Остановить</button>
-          </div>
-        </div>
-        <div id="sError" class="error" hidden></div>
-      </section>
-
-      <section id="verdictSec" class="card verdict" hidden>
-        <div class="verdict-head">
-          <div>
-            <div class="eyebrow">Решение совета</div>
-            <h2 id="vTitle"></h2>
-          </div>
-          <div id="downloads" class="downloads" hidden></div>
-        </div>
-        <div id="vAgreeWarn" class="agree-warn" hidden></div>
-        <div id="vAnswer" class="md"></div>
-        <div id="vFacts" class="facts" hidden></div>
-        <div class="verdict-grid">
-          <div><h3>Почему</h3><div id="vWhy" class="md"></div></div>
-          <div id="vDissentBox"><h3>Особые мнения</h3><ul id="vDissent"></ul></div>
-          <div id="vRisksBox"><h3>Риски</h3><ul id="vRisks"></ul></div>
-        </div>
-        <div id="nextActions" class="next-actions" hidden>
-          <button type="button" id="followBtn" class="primary" title="Новое заседание с учётом этого решения и вложений">💬 Задать уточнение</button>
-          <button type="button" id="repeatBtn" class="secondary" title="Тот же вопрос — можно поменять модели или режим">🔁 Повторить</button>
+          <ul id="workers" class="workers" hidden></ul>
+          <div id="stallHint" class="alert warn small" hidden></div>
         </div>
       </section>
 
-      <section id="tallySec" class="card" hidden>
-        <h2>Итоги голосования</h2>
-        <div class="table-wrap"><table id="tally" class="table"></table></div>
-        <p id="tallyNote" class="muted small"></p>
-        <div id="ballots" class="ballots"></div>
+      <section id="tallySec" class="card" hidden aria-labelledby="tallyTitle">
+        <h2 id="tallyTitle">Голосование</h2>
+        <p id="tallyLead" class="muted"></p>
+        <div id="tallyBars" class="tbars"></div>
+        <details class="howto">
+          <summary>Как считали — таблица, бюллетени и методика</summary>
+          <div class="table-wrap"><table id="tally" class="table"></table></div>
+          <p id="tallyNote" class="muted small"></p>
+          <div id="ballots" class="ballots"></div>
+        </details>
       </section>
 
-      <section id="proposalsSec" class="card" hidden>
-        <h2>Варианты</h2>
+      <section id="proposalsSec" class="card" hidden aria-labelledby="propTitle">
+        <h2 id="propTitle">Все варианты</h2>
         <div id="proposals" class="proposals"></div>
       </section>
 
-      <section id="critiqueSec" class="card" hidden>
-        <h2>Критика <span class="muted small">— средняя оценка 1–10, наведите на ячейку для подробностей</span></h2>
+      <section id="critiqueSec" class="card" hidden aria-labelledby="critTitle">
+        <h2 id="critTitle">Критика <span class="muted small">— средняя оценка от 1 до 10. Нажмите на оценку или имя, чтобы прочитать отзыв.</span></h2>
         <div class="table-wrap"><table id="matrix" class="table matrix"></table></div>
       </section>
 
-      <section id="failSec" class="card" hidden>
-        <h2>Сбои</h2>
+      <section id="failSec" class="card" hidden aria-labelledby="failTitle">
+        <h2 id="failTitle">Сбои</h2>
         <ul id="failures" class="failures"></ul>
       </section>
+
+      <details id="logSec" class="card fold">
+        <summary><span><b>Журнал событий</b><small><span id="logCount"></span> <span id="conn" class="conn"></span></small></span><svg class="ic chev" aria-hidden="true"><use href="#i-down"/></svg></summary>
+        <div class="fold-body">
+          <div class="log-tools">
+            <span id="memberStatus" class="chips"></span>
+            <label class="switch small"><input id="blind" type="checkbox"><span class="sw" aria-hidden="true"></span><span>Скрыть авторов до решения</span></label>
+          </div>
+          <a id="diagLink" class="link-btn" href="#"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>Скачать журнал для разбора ошибок</a>
+          <ol id="log" class="log"></ol>
+        </div>
+      </details>
+      <details id="logBox" hidden></details>
     </div>
   </main>
 </div>
@@ -287,13 +316,26 @@
         <h2 id="mTitle"></h2>
         <div id="mSub" class="muted small"></div>
       </div>
-      <button id="mClose" type="button" class="ghost icon" aria-label="Закрыть">✕</button>
+      <button id="mClose" type="button" class="icon-btn" aria-label="Закрыть"><svg class="ic"><use href="#i-x"/></svg></button>
     </header>
     <nav id="mTabs" class="tabs" role="tablist"></nav>
     <div id="mBody" class="modal-body md"></div>
     <footer id="mFoot" class="modal-foot"></footer>
   </div>
 </div>
+
+<div id="dialog" class="modal dialog" hidden role="alertdialog" aria-modal="true" aria-labelledby="dTitle" aria-describedby="dBody">
+  <div class="modal-box dialog-box">
+    <h2 id="dTitle"></h2>
+    <div id="dBody" class="dialog-body"></div>
+    <div class="dialog-actions">
+      <button id="dCancel" type="button" class="btn">Отмена</button>
+      <button id="dOk" type="button" class="btn primary">OK</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="/static/app.js"></script>
 <script src="/static/settings.js"></script>
