@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from .archive import Archive, available_formats
+from .archive import Archive, all_reports
 from .reports.md import render_md
 from .reports.view import View
 from .session import SessionResult
@@ -29,7 +29,7 @@ def save(res: SessionResult, runs_dir: str | Path, stem: str | None = None) -> d
     data = res.to_dict()
     json_path = d / f"{stem}.json"
     json_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    built = Archive(d).build(stem, available_formats(), data=data)
+    built = Archive(d).build(stem, all_reports(), data=data)
     paths = {"json": json_path}
     paths.update({fmt: Path(p) for fmt, p in built.items() if not p.startswith("ошибка")})
     return paths

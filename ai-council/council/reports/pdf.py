@@ -25,8 +25,8 @@ def _no_external(url: str, *args, **kwargs):
     raise ValueError(f"внешние ресурсы в отчёте запрещены: {url[:80]}")
 
 
-def render_pdf(view: View) -> bytes:
+def render_pdf(view: View, summary: bool = False) -> bytes:
     if not PDF_AVAILABLE:
         raise RuntimeError(f"PDF недоступен: не установлен WeasyPrint или системные библиотеки ({PDF_ERROR})")
-    html = render_html(view)
+    html = render_html(view, summary=summary)
     return weasyprint.HTML(string=html, url_fetcher=_no_external).write_pdf()

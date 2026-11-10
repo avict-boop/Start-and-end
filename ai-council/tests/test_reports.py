@@ -63,3 +63,29 @@ def test_pdf_wide_table_fits_page():
     over = [b for p in doc.pages for b in boxes(p._page_box)
             if getattr(b, "element_tag", "") in ("table", "td", "th") and b.position_x + b.margin_width() > page_width + 0.5]
     assert not over, f"{len(over)} элементов таблицы выходят за страницу"
+
+
+def test_summary_reports_contain_only_the_decision():
+    v = View(session(WIDE + "\n\nИтоговый ответ совета."))
+    html = render_html(v, summary=True)
+    assert "Итоговый ответ совета." in html and "Решение совета" in html
+    for absent in ('id="voting"', "Бюллетени", 'id="proposal-A"', "Участники и расходы", 'class="toc"'):
+        assert absent not in html
+    md = render_md(v, summary=True)
+    assert "Итоговый ответ совета." in md and "## Голосование" not in md and "## Варианты" not in md
+    doc = Document(io.BytesIO(render_docx(v, summary=True)))
+    text = "\n".join(p.text for p in doc.paragraphs)
+    assert "Итоговый ответ совета." in text and "Голосование" not in text and "Варианты" not in text
+    full = "\n".join(p.text for p in Document(io.BytesIO(render_docx(v))).paragraphs)
+    assert "Голосование" in full and len(text) < len(full)
+
+
+def test_archive_backfills_summary(tmp_path):
+    import json
+    from council.archive import Archive, all_reports
+    (tmp_path / "20250101-000000-old.json").write_text(json.dumps(session("Ответ")), encoding="utf-8")
+    a = Archive(tmp_path)
+    assert a.ensure_all() == (1, 0)
+    for kind in all_reports():
+        assert (tmp_path / f"20250101-000000-old.{kind}").is_file()
+    assert a.delete("20250101-000000-old") and not list(tmp_path.glob("20250101-000000-old.*"))

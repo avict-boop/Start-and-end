@@ -24,7 +24,7 @@ from ..client import OpenRouterClient
 from ..config import CouncilConfig, Mode, OverrideError, load_config, with_overrides
 from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models
 from ..mock import MockClient
-from ..archive import MIME, Archive, available_formats
+from ..archive import MIME, Archive, available_formats, download_name, report_kind
 from ..report import make_stem, save
 from ..session import Council, CouncilError
 from .auth import BasicAuth
@@ -335,30 +335,37 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         return {"ok": True}
 
     @app.get("/api/sessions/{sid}/report", response_model=None)
-    async def report(sid: str, format: str = "pdf", download: bool = False) -> FileResponse | HTMLResponse:
+    async def report(sid: str, format: str = "pdf", download: bool = False,
+                     summary: bool = False) -> FileResponse | HTMLResponse:
+        """Отчёт заседания. summary=1 — только итоговое решение, без вариантов, критики и голосования."""
         arch = archive()
         if not arch.exists(sid):
             raise HTTPException(404, "заседание не найдено")
         if format == "html":
-            return HTMLResponse(await asyncio.to_thread(arch.html, sid, report_toolbar(sid)))
+            return HTMLResponse(await asyncio.to_thread(arch.html, sid, report_toolbar(sid, summary), summary))
         if format not in MIME:
             raise HTTPException(400, "формат: pdf, docx, md или html")
         if format not in available_formats():
             raise HTTPException(501, "PDF недоступен на этом сервере (нет WeasyPrint) — скачайте DOCX или MD")
+        kind = report_kind(format, summary)
         try:
-            path = await asyncio.to_thread(arch.report, sid, format)
+            path = await asyncio.to_thread(arch.report, sid, kind)
         except RuntimeError as e:
             raise HTTPException(500, f"не удалось создать отчёт: {e}") from e
         inline = format == "pdf" and not download
-        return FileResponse(path, media_type=MIME[format], filename=path.name,
+        return FileResponse(path, media_type=MIME[format], filename=download_name(sid, kind),
                             content_disposition_type="inline" if inline else "attachment")
 
-    def report_toolbar(sid: str) -> str:
+    def report_toolbar(sid: str, summary: bool = False) -> str:
         from urllib.parse import quote
         q = quote(sid)
-        links = [f'<a href="/#/s/{q}">← В приложение</a>', '<span class="sp"></span>']
+        s = "&summary=1" if summary else ""
+        links = [f'<a href="/#/s/{q}">← В приложение</a>']
+        links.append(f'<a href="/api/sessions/{q}/report?format=html">Полный отчёт</a>' if summary
+                     else f'<a href="/api/sessions/{q}/report?format=html&summary=1">Только итог</a>')
+        links.append('<span class="sp"></span>')
         names = {"pdf": "PDF", "docx": "Word", "md": "Markdown"}
-        links += [f'<a href="/api/sessions/{q}/report?format={f}&download=1">{names[f]}</a>' for f in available_formats()]
+        links += [f'<a href="/api/sessions/{q}/report?format={f}&download=1{s}">{names[f]}</a>' for f in available_formats()]
         links.append('<button onclick="window.print()">Печать</button>')
         return '<div class="toolbar noprint">' + "".join(links) + "</div>"
 

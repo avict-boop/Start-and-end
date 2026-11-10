@@ -263,7 +263,14 @@ def _score_fill(v: float) -> str:
     return f"{int(r * 255):02X}{int(g * 255):02X}{int(b * 255):02X}"
 
 
-def render_docx(view: View) -> bytes:
+def _save(doc) -> bytes:
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def render_docx(view: View, summary: bool = False) -> bytes:
+    """Полный отчёт или (summary=True) только итоговое решение."""
     v = view
     vd = v.verdict
     w = v.winner
@@ -279,7 +286,7 @@ def render_docx(view: View) -> bytes:
     doc.core_properties.subject = "Отчёт «Совета нейросетей»"
 
     brand = doc.add_paragraph()
-    r = brand.add_run("СОВЕТ НЕЙРОСЕТЕЙ · ОТЧЁТ О ЗАСЕДАНИИ")
+    r = brand.add_run("СОВЕТ НЕЙРОСЕТЕЙ · " + ("ИТОГОВОЕ РЕШЕНИЕ" if summary else "ОТЧЁТ О ЗАСЕДАНИИ"))
     r.font.size = Pt(8)
     r.font.color.rgb = MUTED
     r.bold = True
@@ -297,12 +304,20 @@ def render_docx(view: View) -> bytes:
         p = doc.add_paragraph()
         p.add_run("Уточнённая постановка: ").bold = True
         p.add_run(v.refined)
-    _meta_table(doc, [("Дата", v.date), ("Режим", v.mode), ("Участники", ", ".join(v.members)),
-                      ("Критерии", ", ".join(v.criteria) or "—"), ("Стоимость", f"${v.cost:.4f}"),
-                      ("Длительность", v.duration)])
+    meta = [("Дата", v.date), ("Режим", v.mode), ("Участники", ", ".join(v.members)),
+            ("Критерии", ", ".join(v.criteria) or "—"), ("Стоимость", f"${v.cost:.4f}"),
+            ("Длительность", v.duration)]
+    _meta_table(doc, meta[:3] if summary else meta)
 
     # Решение
-    _heading(doc, f"Решение совета: вариант {w} — {v.title(w)} ({v.author(w)})" if w else "Решение совета", 1)
+    if summary:
+        _heading(doc, "Решение совета", 1)
+        if w:
+            rr = doc.add_paragraph().add_run(f"Лучший вариант: {v.title(w)} (предложил {v.author(w)})")
+            rr.font.color.rgb = MUTED
+            rr.font.size = Pt(9)
+    else:
+        _heading(doc, f"Решение совета: вариант {w} — {v.title(w)} ({v.author(w)})" if w else "Решение совета", 1)
     add_markdown(doc, vd.get("final_answer", ""))
     if vd.get("why"):
         _heading(doc, "Почему", 3)
@@ -313,6 +328,12 @@ def render_docx(view: View) -> bytes:
     if vd.get("risks"):
         _heading(doc, "Риски", 3)
         _bullets(doc, vd["risks"])
+    if summary:
+        note = doc.add_paragraph().add_run("Это краткая версия: только итоговое решение. Полный отчёт с вариантами "
+                                           "всех моделей, критикой и голосованием скачивается отдельно.")
+        note.font.size = Pt(8.5)
+        note.font.color.rgb = MUTED
+        return _save(doc)
 
     # Голосование
     _heading(doc, "Голосование", 1)
@@ -433,7 +454,4 @@ def render_docx(view: View) -> bytes:
     if fails:
         _heading(doc, "Сбои", 3)
         _bullets(doc, [f"**{n}** ({st}): {err}" for n, st, err in fails])
-
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
+    return _save(doc)

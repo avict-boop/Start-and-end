@@ -22,7 +22,7 @@ from .reports.view import MODE_NAME, View
 
 log = logging.getLogger("council.archive")
 
-REPORT_VERSION = "4"  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
+REPORT_VERSION = "5"  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
 MARKER = ".reports-version"
 ID_RE = re.compile(r"^[\w\-]{1,160}$", re.U)
 MIME = {
@@ -31,15 +31,35 @@ MIME = {
     "md": "text/markdown; charset=utf-8",
     "html": "text/html; charset=utf-8",
 }
+# Виды отчёта: «pdf» — полный отчёт, «summary.pdf» — только итоговое решение (то же для docx и md)
 RENDER: dict[str, Callable[[View], bytes]] = {
     "pdf": render_pdf,
     "docx": render_docx,
     "md": lambda v: render_md(v).encode("utf-8"),
+    "summary.pdf": lambda v: render_pdf(v, summary=True),
+    "summary.docx": lambda v: render_docx(v, summary=True),
+    "summary.md": lambda v: render_md(v, summary=True).encode("utf-8"),
 }
 
 
 def available_formats() -> list[str]:
+    """Форматы файлов, которые можно получить на этой машине."""
     return [f for f in ("pdf", "docx", "md") if f != "pdf" or PDF_AVAILABLE]
+
+
+def report_kind(fmt: str, summary: bool = False) -> str:
+    return f"summary.{fmt}" if summary else fmt
+
+
+def all_reports() -> list[str]:
+    """Все файлы отчётов одного заседания: полные и «только итог»."""
+    base = available_formats()
+    return base + [report_kind(f, True) for f in base]
+
+
+def download_name(stem: str, kind: str) -> str:
+    fmt = kind.rsplit(".", 1)[-1]
+    return f"{stem}-итог.{fmt}" if kind.startswith("summary.") else f"{stem}.{fmt}"
 
 
 def key_of(stem: str) -> str:
@@ -141,7 +161,7 @@ class Archive:
         """Создаёт отчёты. Возвращает {формат: путь или 'ошибка: …'}."""
         view = View(data if data is not None else self.load(stem), stem)
         result = {}
-        for fmt in formats or available_formats():
+        for fmt in formats or all_reports():
             target = self.path(stem, fmt)
             try:
                 content = RENDER[fmt](view)
@@ -169,15 +189,15 @@ class Archive:
                         raise RuntimeError(res[fmt])
         return target
 
-    def html(self, stem: str, toolbar: str = "") -> str:
-        return render_html(self.view(stem), toolbar=toolbar)
+    def html(self, stem: str, toolbar: str = "", summary: bool = False) -> str:
+        return render_html(self.view(stem), toolbar=toolbar, summary=summary)
 
     def ensure_all(self, force: bool = False, progress: Callable[[str, dict], None] | None = None) -> tuple[int, int]:
         """Досоздаёт недостающие и устаревшие отчёты для всех заседаний. Возвращает (создано, ошибок)."""
         force = force or not self._marker_ok()
         built = failed = 0
         for stem in self.stems():
-            need = [f for f in available_formats() if force or not self.path(stem, f).is_file()
+            need = [f for f in all_reports() if force or not self.path(stem, f).is_file()
                     or self.path(stem, f).stat().st_mtime < self.path(stem, "json").stat().st_mtime]
             if not need:
                 continue
@@ -211,7 +231,7 @@ class Archive:
 
     def delete(self, stem: str) -> bool:
         removed = False
-        for ext in ("json", "md", "pdf", "docx"):
+        for ext in ("json", *RENDER):
             try:
                 self.path(stem, ext).unlink()
                 removed = True

@@ -89,6 +89,14 @@ def test_full_mock_session_history_report_delete(client):
     assert docx.status_code == 200 and docx.content[:2] == b"PK"  # docx — это zip
     pdf = client.get(f"/api/sessions/{sid}/report?format=pdf")
     assert pdf.status_code == 200 and pdf.content[:5] == b"%PDF-" and "inline" in pdf.headers["content-disposition"]
+    # «только итог»: отдельный файл, без вариантов и голосования
+    sm = client.get(f"/api/sessions/{sid}/report?format=md&summary=1")
+    assert sm.status_code == 200 and "Решение совета" in sm.text and "Голосование" not in sm.text
+    assert "итог.md" in sm.headers["content-disposition"] or "%D0%B8%D1%82%D0%BE%D0%B3.md" in sm.headers["content-disposition"]
+    assert client.get(f"/api/sessions/{sid}/report?format=pdf&summary=1").content[:5] == b"%PDF-"
+    assert client.get(f"/api/sessions/{sid}/report?format=docx&summary=1").content[:2] == b"PK"
+    sh = client.get(f"/api/sessions/{sid}/report?format=html&summary=1").text
+    assert "итоговое решение" in sh and 'id="voting"' not in sh and "Полный отчёт" in sh
     html = client.get(f"/api/sessions/{sid}/report?format=html")
     assert html.status_code == 200 and 'id="proposal-A"' in html.text and "format=docx" in html.text
     assert client.get(f"/api/sessions/{sid}/report?format=exe").status_code == 400

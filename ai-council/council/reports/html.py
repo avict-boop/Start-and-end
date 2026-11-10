@@ -139,7 +139,12 @@ def _inline(text: str) -> str:
     return h
 
 
-def render_html(view: View, *, toolbar: str = "") -> str:
+SUMMARY_NOTE = ("Это краткая версия: только итоговое решение. Полный отчёт с вариантами всех моделей, "
+                "критикой и голосованием скачивается отдельно.")
+
+
+def render_html(view: View, *, toolbar: str = "", summary: bool = False) -> str:
+    """Полный отчёт или (summary=True) только итоговое решение."""
     v = view
     vd = v.verdict
     w = v.winner
@@ -147,7 +152,7 @@ def render_html(view: View, *, toolbar: str = "") -> str:
     add = parts.append
 
     add('<div class="page">')
-    add('<div class="brand">Совет нейросетей · отчёт о заседании</div>')
+    add(f'<div class="brand">Совет нейросетей · {"итоговое решение" if summary else "отчёт о заседании"}</div>')
     add(f"<h1>{_e(v.title_text)}</h1>")
     if v.question_is_long:
         add(f'<div class="query"><div class="query-label">Запрос</div><div class="md">{md_to_html(v.question, breaks=True)}</div></div>')
@@ -158,6 +163,8 @@ def render_html(view: View, *, toolbar: str = "") -> str:
             ("Участники", ", ".join(v.members)),
             ("Критерии", "".join(f'<span class="chip">{_e(c)}</span>' for c in v.criteria) or "—"),
             ("Стоимость", f"${v.cost:.4f}"), ("Длительность", v.duration)]
+    if summary:
+        rows = rows[:3]
     for k, val in rows:
         val_html = val if k == "Критерии" else _e(val)
         add(f"<div><span>{k}</span><span>{val_html}</span></div>")
@@ -168,11 +175,15 @@ def render_html(view: View, *, toolbar: str = "") -> str:
     if v.critiques:
         toc.append(("critique", "Критика"))
     toc.append(("members", "Участники и расходы"))
-    add('<div class="toc">' + "".join(f'<div><a href="#{a}">{_e(t)}</a></div>' for a, t in toc) + "</div>")
+    if not summary:
+        add('<div class="toc">' + "".join(f'<div><a href="#{a}">{_e(t)}</a></div>' for a, t in toc) + "</div>")
 
     # Решение
     add('<div class="verdict" id="verdict">')
-    if w:
+    if w and summary:
+        add(f'<h2>Решение совета</h2><div class="muted small" style="margin:-4px 0 8px">Лучший вариант: '
+            f'<b>{_e(v.title(w))}</b> (предложил {_e(v.author(w))})</div>')
+    elif w:
         add(f'<h2>Решение совета: <span class="label">{_e(w)}</span> {_e(v.title(w))} '
             f'<span class="muted small">({_e(v.author(w))})</span></h2>')
     add(f'<div class="md">{md_to_html(vd.get("final_answer", ""))}</div>')
@@ -183,6 +194,9 @@ def render_html(view: View, *, toolbar: str = "") -> str:
     if vd.get("risks"):
         add("<h3>Риски</h3>" + _list(vd["risks"]))
     add("</div>")
+    if summary:
+        add(f'<p class="muted small">{SUMMARY_NOTE}</p></div>')
+        return _document(v, "\n".join(parts), toolbar)
 
     # Голосование
     add('<h2 id="voting">Голосование</h2>')
@@ -278,7 +292,10 @@ def render_html(view: View, *, toolbar: str = "") -> str:
             f"<li><b>{_e(n)}</b> ({_e(st)}): {_e(err)}</li>" for n, st, err in fails) + "</ul>")
     add("</div>")
 
-    body = "\n".join(parts)
+    return _document(v, "\n".join(parts), toolbar)
+
+
+def _document(v: View, body: str, toolbar: str) -> str:
     return (f'<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
             f"<title>{_e(v.title_text)} — Совет нейросетей</title><style>{CSS}</style></head>"

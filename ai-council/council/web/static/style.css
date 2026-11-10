@@ -277,7 +277,12 @@ tr.winner td { background: color-mix(in srgb, var(--win) 12%, transparent); }
 
 /* ---------- кнопка-ссылка, загрузки ---------- */
 button.link { border: 0; background: none; color: var(--accent); padding: .4rem .2rem; font-weight: 600; cursor: pointer; }
-.downloads { display: flex; flex-wrap: wrap; gap: .4rem; }
+.downloads { display: flex; flex-direction: column; gap: .35rem; align-items: flex-end; }
+.dl-row { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; justify-content: flex-end; }
+.dl-label { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; margin-right: .2rem; }
+.arc-actions { flex-direction: column; align-items: flex-end; }
+.arc-actions .dl-row a { font-size: .78rem; padding: .25rem .5rem; }
+@media (max-width: 700px) { .downloads, .dl-row, .arc-actions { align-items: flex-start; justify-content: flex-start; } }
 .downloads a { font-size: .85rem; padding: .4rem .7rem; }
 
 /* ---------- архив ---------- */
@@ -399,4 +404,7 @@ body.modal-open { overflow: hidden; }
   .w b { grid-row: 1; grid-column: 2; }
   .w .w-time { grid-row: 1; grid-column: 3; }
   .w .w-phase { grid-row: 2; grid-column: 2 / 4; }
+}
+@media (max-width: 700px) {
+  .dl-label { flex-basis: 100%; margin: .2rem 0 0; }
 }

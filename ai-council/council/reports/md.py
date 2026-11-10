@@ -8,7 +8,8 @@ def _cell(text: object) -> str:
     return str(text if text is not None else "").replace("|", "\\|").replace("\n", " ")
 
 
-def render_md(view: View) -> str:
+def render_md(view: View, summary: bool = False) -> str:
+    """Полный отчёт или (summary=True) только итоговое решение."""
     v = view
     vd = v.verdict
     w = v.winner
@@ -18,21 +19,31 @@ def render_md(view: View) -> str:
         out += ["**Запрос:**", ""] + [f"> {line}  " if line.strip() else ">" for line in v.question.splitlines()] + [""]
     if v.refined:
         out += [f"**Уточнённая постановка:** {v.refined}", ""]
-    out += [
-        "| | |", "|---|---|",
-        f"| Дата | {v.date} |", f"| Режим | {v.mode} |",
-        f"| Участники | {', '.join(v.members)} |",
-        f"| Критерии | {_cell(', '.join(v.criteria)) or '—'} |",
-        f"| Стоимость | ${v.cost:.4f} |", f"| Длительность | {v.duration} |", "",
-        f"## Решение совета: вариант {w} — {v.title(w)} ({v.author(w)})" if w else "## Решение совета", "",
-        vd.get("final_answer", ""), "",
-    ]
+    if summary:
+        out += [f"*{v.date} · {v.mode} · участники: {', '.join(v.members)}*", "", "## Решение совета", ""]
+        if w:
+            out += [f"*Лучший вариант: {v.title(w)} (предложил {v.author(w)})*", ""]
+        out += [vd.get("final_answer", ""), ""]
+    else:
+        out += [
+            "| | |", "|---|---|",
+            f"| Дата | {v.date} |", f"| Режим | {v.mode} |",
+            f"| Участники | {', '.join(v.members)} |",
+            f"| Критерии | {_cell(', '.join(v.criteria)) or '—'} |",
+            f"| Стоимость | ${v.cost:.4f} |", f"| Длительность | {v.duration} |", "",
+            f"## Решение совета: вариант {w} — {v.title(w)} ({v.author(w)})" if w else "## Решение совета", "",
+            vd.get("final_answer", ""), "",
+        ]
     if vd.get("why"):
         out += ["### Почему", "", vd["why"], ""]
     if vd.get("dissent"):
         out += ["### Особые мнения", "", *[f"- {x}" for x in vd["dissent"]], ""]
     if vd.get("risks"):
         out += ["### Риски", "", *[f"- {x}" for x in vd["risks"]], ""]
+    if summary:
+        out += ["---", "*Это краткая версия: только итоговое решение. Полный отчёт с вариантами всех моделей, "
+                "критикой и голосованием скачивается отдельно.*"]
+        return "\n".join(out).rstrip() + "\n"
 
     out += ["## Голосование", "", "| # | Вариант | Автор | Борда (0–1) | Оценка критики | 1-х мест |",
             "|---|---|---|---|---|---|"]

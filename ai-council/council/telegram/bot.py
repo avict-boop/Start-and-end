@@ -21,7 +21,7 @@ from ..client import LLMClient, OpenRouterClient
 from ..config import CouncilConfig, OverrideError, load_config, with_overrides
 from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models
 from ..mock import MockClient
-from ..archive import MIME, Archive, available_formats, key_of
+from ..archive import MIME, Archive, all_reports, available_formats, download_name, key_of
 from ..report import make_stem, save
 from ..session import Council, CouncilError, SessionResult
 from .api import TelegramAPI, TelegramError
@@ -53,7 +53,7 @@ HELP = """<b>Совет нейросетей</b>
 • /archive — архив всех заседаний: отчёты в PDF, Word и Markdown. Поиск: <code>/archive кофейня</code>
 • /stop — остановить заседание.
 
-После заседания придут решение, итоги голосования и полный отчёт в PDF (по кнопкам — Word и Markdown)."""
+После заседания придут решение, итоги голосования и полный отчёт в PDF. Кнопки под ним: другие форматы и «📌 Итог» — короткий документ только с итоговым решением."""
 FORMAT_NAME = {"pdf": "PDF", "docx": "Word", "md": "Markdown"}
 ARCHIVE_PAGE = 8
 
@@ -707,14 +707,22 @@ class CouncilBot:
     # ------------------------------------------------------------ отчёты и архив
 
     def _report_buttons(self, stem: str, skip: str = "") -> list[list[dict]]:
+        """Ряд «полный отчёт» и ряд «только итог» — во всех форматах, кроме уже отправленного."""
         key = key_of(stem)
-        row = [self._btn(FORMAT_NAME[f], f"rep:{f}:{key}") for f in available_formats() if f != skip]
-        return [row] if row else []
+        full = [self._btn(FORMAT_NAME[f], f"rep:{f}:{key}") for f in available_formats() if f != skip]
+        short = [self._btn(f"📌 Итог {FORMAT_NAME[f]}", f"rep:summary.{f}:{key}")
+                 for f in available_formats() if f"summary.{f}" != skip]
+        return [row for row in (full, short) if row]
 
     async def send_report(self, chat_id: int, stem: str, fmt: str | None = None, caption: str | None = None) -> None:
-        """Отправляет отчёт файлом (по умолчанию PDF, если он доступен) с кнопками других форматов."""
+        """Отправляет отчёт файлом (по умолчанию полный PDF, если он доступен) с кнопками других форматов.
+
+        fmt — «pdf» / «docx» / «md» (полный отчёт) или «summary.pdf» и т. п. (только итоговое решение).
+        """
         fmts = available_formats()
         fmt = fmt or fmts[0]
+        if caption is None and fmt.startswith("summary."):
+            caption = "📌 Только итоговое решение — без вариантов, критики и голосования"
         try:
             path = await asyncio.to_thread(self.archive.report, stem, fmt)
             content = await asyncio.to_thread(path.read_bytes)
@@ -723,8 +731,8 @@ class CouncilBot:
             return
         kb = self._report_buttons(stem, skip=fmt)
         try:
-            await self.api.send_document(chat_id, path.name, content, caption=caption,
-                                         mime=MIME[fmt].split(";")[0],
+            await self.api.send_document(chat_id, download_name(stem, fmt), content, caption=caption,
+                                         mime=MIME[fmt.rsplit(".", 1)[-1]].split(";")[0],
                                          reply_markup={"inline_keyboard": kb} if kb else None)
         except TelegramError as e:
             log.warning("не удалось отправить отчёт: %s", e)
@@ -781,8 +789,9 @@ class CouncilBot:
                 caption = (f"<b>{esc(short_title(s['question']))}</b>\n<i>{esc(s['date'])} · {esc(s['mode_name'])} · "
                            f"${s['cost']:.4f}</i>{win}")[:1000]
             await self.send_report(chat_id, stem, caption=caption)
-        elif fmt in available_formats():
-            await self.api.answer_callback(cq["id"], f"Отправляю {FORMAT_NAME[fmt]}…")
+        elif fmt in all_reports():
+            name = FORMAT_NAME[fmt.rsplit(".", 1)[-1]]
+            await self.api.answer_callback(cq["id"], f"Отправляю {'итог, ' if fmt.startswith('summary.') else ''}{name}…")
             await self.send_report(chat_id, stem, fmt)
         else:
             await self.api.answer_callback(cq["id"], "Этот формат недоступен")

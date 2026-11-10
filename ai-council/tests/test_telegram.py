@@ -283,8 +283,14 @@ def test_reports_and_archive(env):
     asyncio.run(scenario())
     d = docs(fake)[-1]
     assert d["filename"].endswith(".pdf") and d["is_pdf"]
-    kb = [b["callback_data"] for row in d["reply_markup"]["inline_keyboard"] for b in row]
+    rows = d["reply_markup"]["inline_keyboard"]
+    kb = [b["callback_data"] for b in rows[0]]
     assert [k.split(":")[1] for k in kb] == ["docx", "md"]
+    assert [b["callback_data"].split(":")[1] for b in rows[1]] == ["summary.pdf", "summary.docx", "summary.md"]
+    # кнопка «📌 Итог PDF» → короткий PDF только с решением
+    asyncio.run(bot.handle_update(press(rows[1][0]["callback_data"], 999)))
+    d2 = docs(fake)[-1]
+    assert d2["filename"].endswith("-итог.pdf") and d2["is_pdf"] and "Только итоговое решение" in d2["_multipart"]
     # кнопка Word → .docx
     asyncio.run(bot.handle_update(press(kb[0], 999)))
     d = docs(fake)[-1]

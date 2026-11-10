@@ -278,14 +278,20 @@ $("newBtn").addEventListener("click", () => {
   $("question").focus();
 });
 
-function reportUrl(id, fmt, download) {
-  return `/api/sessions/${encodeURIComponent(id)}/report?format=${fmt}${download ? "&download=1" : ""}`;
+function reportUrl(id, fmt, download, summary) {
+  return `/api/sessions/${encodeURIComponent(id)}/report?format=${fmt}${download ? "&download=1" : ""}${summary ? "&summary=1" : ""}`;
 }
-function downloadLinks(id, cls = "button secondary") {
+function formatLinks(id, cls, summary) {
   return formats.map((f) => f === "pdf"
-    ? `<a class="${cls}" href="${reportUrl(id, "pdf")}" target="_blank" rel="noopener">PDF</a>`
-    : `<a class="${cls}" href="${reportUrl(id, f, true)}">${FORMAT_NAME[f]}</a>`).join("")
-    + `<a class="${cls}" href="${reportUrl(id, "html")}" target="_blank" rel="noopener" title="Полный отчёт в новой вкладке">Открыть отчёт ↗</a>`;
+    ? `<a class="${cls}" href="${reportUrl(id, "pdf", false, summary)}" target="_blank" rel="noopener">PDF</a>`
+    : `<a class="${cls}" href="${reportUrl(id, f, true, summary)}">${FORMAT_NAME[f]}</a>`).join("");
+}
+// две строки: полный отчёт (всё: варианты, критика, голосование) и только итоговое решение
+function downloadLinks(id, cls = "button secondary") {
+  return `<div class="dl-row"><span class="dl-label" title="Решение, все варианты, критика, голосование, расходы">Полный отчёт</span>${formatLinks(id, cls, false)}`
+    + `<a class="${cls}" href="${reportUrl(id, "html")}" target="_blank" rel="noopener" title="Полный отчёт в новой вкладке">Открыть ↗</a></div>`
+    + `<div class="dl-row"><span class="dl-label" title="Только итоговое решение: ответ, почему, особые мнения, риски">Только итог</span>${formatLinks(id, cls, true)}`
+    + `<a class="${cls}" href="${reportUrl(id, "html", false, true)}" target="_blank" rel="noopener" title="Итог в новой вкладке">Открыть ↗</a></div>`;
 }
 
 /* ------------------------------------------------------------ история */
