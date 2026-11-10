@@ -226,7 +226,11 @@ sup, sub { font-size: 70%; line-height: 0; }
   .toc ol { columns: 1; }
   .cols, .cols tbody, .cols tr, .cols td { display: block; width: 100% !important; }
   .vchart .who { width: auto; }
-  .page > table:not(.keyfacts):not(.vchart):not(.cols), .reviews, .matrix { display: block; overflow-x: auto; }
+  .vchart td:nth-child(3) { width: 26%; min-width: 64px; }
+  .vchart .val { width: auto; font-size: 12px; }
+  /* таблицы отчёта шире экрана — прокручиваются внутри себя, страница не уезжает вбок */
+  section table:not(.vchart):not(.cols):not(.kv):not(.mdt), .page > table:not(.keyfacts):not(.vchart):not(.cols) {
+    display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 }
 .toolbar { position: sticky; top: 0; background: rgba(255,255,255,.96); border-bottom: 1px solid var(--line);
   padding: 8px 20px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; z-index: 2; font-size: 14px; }

@@ -338,9 +338,21 @@ def many_members() -> dict[str, Any]:
             "coverage": {"min": 5, "max": 7, "options": 8, "ballots": 8}}
 
 
+def followup() -> dict[str, Any]:
+    """Уточнение к прошлому заседанию: совет учитывает своё прежнее решение."""
+    d = quick_short()
+    d["question"] = "А если кофейня будет работать и как коворкинг по вечерам?"
+    d["followup_of"] = "20261109-091200-как-назвать-кофейню-у-университета"
+    d["thread"] = [{"id": d["followup_of"], "title": "Как назвать кофейню у университета?",
+                    "question": "Как назвать кофейню у университета?", "decision": "Назвать кофейню «Конспект»."}]
+    d["verdict"]["final_answer"] = ("Оставить **«Конспект»**: название подходит и для вечернего коворкинга. Добавить "
+                                    "подзаголовок на вывеске — «кофе и место для учёбы».")
+    return d
+
+
 SAMPLES = {"01-podrobnoe-obsuzhdenie": full_debate, "02-bystryi-otvet": quick_short,
            "03-nichya-i-sboi": tie_deviation, "04-ocenka-variantov-en-tr": evaluate_mixed,
-           "05-vosem-uchastnikov": many_members}
+           "05-vosem-uchastnikov": many_members, "06-utochnenie": followup}
 
 
 def build(out: Path) -> list[Path]:

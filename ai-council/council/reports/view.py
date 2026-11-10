@@ -335,8 +335,10 @@ class View:
             return ("Вариантов меньше трёх — голосование почти ничего не решает: каждая пара сравнивалась "
                     f"{c['min']}–{c['max']} раз, по сути выбор делает председатель")
         rng = f"{c['min']}" if c["min"] == c["max"] else f"от {c['min']} до {c['max']}"
+        n = c["max"]
+        times = "раза" if c["min"] == c["max"] and n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else "раз"
         warn = " — мало данных, относитесь к порядку осторожно" if c["min"] < 2 else ""
-        return f"Каждая пара вариантов сравнивалась в бюллетенях {rng} раз{warn}"
+        return f"Каждая пара вариантов сравнивалась в бюллетенях {rng} {times}{warn}"
 
     @staticmethod
     def safe_url(u: str) -> str:
