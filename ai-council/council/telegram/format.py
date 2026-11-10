@@ -22,6 +22,7 @@ def md_to_tg(text: str) -> str:
 
     text = re.sub(r"```[^\n]*\n(.*?)```", lambda m: hold(f"<pre>{esc(m.group(1).rstrip())}</pre>"), text, flags=re.S)
     text = re.sub(r"`([^`\n]+)`", lambda m: hold(f"<code>{esc(m.group(1))}</code>"), text)
+    text = tables_to_lists(text)
     text = esc(text)
     text = re.sub(r"^\s{0,3}#{1,6}\s+(.+)$", r"<b>\1</b>", text, flags=re.M)
     text = re.sub(r"^(\s*)[-*+]\s+", r"\1• ", text, flags=re.M)
@@ -30,6 +31,32 @@ def md_to_tg(text: str) -> str:
     text = re.sub(r"\[([^\]\n]+)\]\((https?://[^\s)]+)\)", r'<a href="\2">\1</a>', text)
     text = re.sub(r"\x00(\d+)\x00", lambda m: holders[int(m.group(1))], text)
     return text.strip()
+
+
+_ROW = re.compile(r"^\s*\|.*\|\s*$")
+_SEP = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+
+
+def tables_to_lists(text: str) -> str:
+    """В Telegram нет таблиц: строки Markdown-таблицы превращаются в пункты «• первая ячейка — заголовок: значение; …»."""
+    lines = text.split("\n")
+    out: list[str] = []
+    i = 0
+    cells = lambda line: [c.strip() for c in line.strip().strip("|").split("|")]  # noqa: E731
+    while i < len(lines):
+        if _ROW.match(lines[i]) and i + 1 < len(lines) and _SEP.match(lines[i + 1]):
+            head = cells(lines[i])
+            i += 2
+            while i < len(lines) and _ROW.match(lines[i]):
+                row = cells(lines[i])
+                first, rest = (row[0] if row else ""), row[1:]
+                pairs = [f"{h}: {v}" if h else v for h, v in zip(head[1:], rest) if v]
+                out.append(f"- **{first}**" + (" — " + "; ".join(pairs) if pairs else ""))
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
 
 
 def strip_tags(s: str) -> str:

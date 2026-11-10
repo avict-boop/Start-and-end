@@ -108,8 +108,11 @@ def test_question_card_and_full_demo_session(env):
         await bot.handle_update(msg("Как назвать кофейню у университета?"))
         card = fake.last("sendMessage")
         assert "Вопрос для совета" in card["text"] and "демо" in card["text"]
-        assert {"mode:debate", "mode:quick", "rounds:2", "view:members", "demo", "go", "drop"} <= set(buttons(card))
+        # карточка короткая: начать, настроить, отмена; настройки — отдельным экраном той же карточки
+        assert {"go", "view:opts", "drop"} <= set(buttons(card)) and "mode:quick" not in buttons(card)
         card_id = bot.pending[CHAT].card_id
+        await bot.handle_update(press("view:opts", card_id))
+        assert {"mode:debate", "mode:quick", "rounds:2", "view:members", "demo", "go", "view:main"} <= set(buttons(fake.last("editMessageText")))
         await bot.handle_update(press("rounds:2", card_id))
         assert bot.settings[CHAT].rounds == 2 and "раундов: 2" in fake.last("editMessageText")["text"]
         await bot.handle_update(press("go", card_id))
@@ -157,6 +160,8 @@ def test_evaluate_command(env):
         p = bot.pending[CHAT]
         assert p.question == "Какую БД выбрать?" and p.options == ["PostgreSQL", "ClickHouse", "1С-Аналитика"]
         assert "mode:debate" not in buttons(fake.last("sendMessage"))
+        await bot.handle_update(press("view:opts", p.card_id))
+        assert "mode:debate" not in buttons(fake.last("editMessageText")) and "view:members" in buttons(fake.last("editMessageText"))
         await bot.handle_update(press("go", p.card_id))
         await finish(bot)
 
@@ -287,7 +292,7 @@ def test_reports_and_archive(env):
     asyncio.run(scenario())
     summary = next(b for m, b in reversed(fake.calls) if m == "sendMessage" and "🏆" in b.get("text", ""))
     btn = [b["callback_data"].split(":")[0] + ":" + b["callback_data"].split(":")[1] for row in summary["reply_markup"]["inline_keyboard"] for b in row]
-    assert [b.split(":")[0] + (":" + b.split(":")[1] if b.split(":")[0] in ("res", "rep") else "") for b in btn] == ["res:more", "res:tally", "rep:pdf", "rep:summary.pdf", "rep:decision.pdf", "fup", "rpt"]
+    assert [b.split(":")[0] + (":" + b.split(":")[1] if b.split(":")[0] in ("res", "rep") else "") for b in btn] == ["res:more", "res:tally", "rep:pdf", "res:fmt", "fup", "rpt"]
     key = summary["reply_markup"]["inline_keyboard"][0][0]["callback_data"].split(":")[2]
     asyncio.run(bot.handle_update(press(f"res:more:{key}", 999)))
     assert "Решение совета: вариант" in fake.texts()[-1] and "Почему:" in fake.texts()[-1]
@@ -490,10 +495,11 @@ def test_fact_check_toggle_in_bot(env):
     async def scenario():
         await bot.handle_update(msg("Сколько стоит открыть кофейню?"))
         card_id = bot.pending[CHAT].card_id
-        assert "facts" in buttons(fake.last("sendMessage"))
+        await bot.handle_update(press("view:opts", card_id))
+        assert "facts" in buttons(fake.last("editMessageText"))
         await bot.handle_update(press("facts", card_id))
         assert bot.settings[CHAT].fact_check is True
-        assert "Проверка фактов: вкл" in json.dumps(fake.last("editMessageText"), ensure_ascii=False)
+        assert "✅ Проверка фактов" in json.dumps(fake.last("editMessageText"), ensure_ascii=False)
         await bot.handle_update(press("go", card_id))
         await finish(bot)
 
@@ -548,13 +554,69 @@ def test_compact_toggle_in_bot(env):
     async def scenario():
         await bot.handle_update(msg("Сделай подробный отчёт о рынке кофеен"))
         card_id = bot.pending[CHAT].card_id
-        assert "compact" in buttons(fake.last("sendMessage"))
+        await bot.handle_update(press("view:opts", card_id))
+        assert "compact" in buttons(fake.last("editMessageText"))
         await bot.handle_update(press("compact", card_id))
         assert bot.settings[CHAT].compact is True
-        assert "Компактно: вкл" in json.dumps(fake.last("editMessageText"), ensure_ascii=False)
+        assert "✅ Компактно" in json.dumps(fake.last("editMessageText"), ensure_ascii=False)
         await bot.handle_update(press("go", card_id))
         await finish(bot)
 
     asyncio.run(scenario())
     data = json.loads(next((tmp / "runs").glob("2*-*[!s].json")).read_text())
     assert data["request"]["compact_proposals"] is True
+
+
+def test_settings_command_is_interactive(env):
+    bot, fake, _ = env
+
+    async def scenario():
+        await bot.handle_update(msg("/settings"))
+        m = fake.last("sendMessage")
+        assert "Настройки чата" in m["text"] and {"set:mode:quick", "set:facts", "set:demo", "set:view:members"} <= set(buttons(m))
+        await bot.handle_update(press("set:mode:quick", 77))
+        assert bot.settings[CHAT].mode == "quick" and "Быстрый ответ" in fake.last("editMessageText")["text"]
+        await bot.handle_update(press("set:view:members", 77))
+        assert "set:mem:z" in buttons(fake.last("editMessageText"))
+        await bot.handle_update(press("set:mem:z", 77))
+        assert "z" in bot.settings[CHAT].members and "set:mem:z" in buttons(fake.last("editMessageText"))
+        await bot.handle_update(press("set:close", 77))
+        assert "Сохранено" in fake.last("editMessageText")["text"]
+
+    asyncio.run(scenario())
+
+
+def test_old_card_buttons_still_work(env):
+    """Карточки, отправленные до обновления, меняли настройки прямо с главного экрана — эти кнопки не ломаются."""
+    bot, fake, _ = env
+
+    async def scenario():
+        await bot.handle_update(msg("Вопрос со старой карточкой"))
+        cid = bot.pending[CHAT].card_id
+        await bot.handle_update(press("mode:quick", cid))
+        await bot.handle_update(press("demo", cid))
+        assert bot.settings[CHAT].mode == "quick"
+
+    asyncio.run(scenario())
+
+
+def test_other_formats_button(env):
+    bot, fake, _ = env
+
+    async def scenario():
+        await bot.handle_update(msg("Какой ноутбук купить студенту?"))
+        await bot.handle_update(press("go", bot.pending[CHAT].card_id))
+        await finish(bot)
+
+    asyncio.run(scenario())
+    summary = next(b for m, b in reversed(fake.calls) if m == "sendMessage" and "🏆" in b.get("text", ""))
+    fmt = next(b for b in buttons(summary) if b.startswith("res:fmt:"))
+    asyncio.run(bot.handle_update(press(fmt, 999)))
+    m = fake.last("sendMessage")
+    assert "Отчёты" in m["text"] and any(b.startswith("rep:decision.") for b in buttons(m))
+
+
+def test_markdown_tables_become_lists():
+    from council.telegram.format import md_to_tg
+    out = md_to_tg("| Метрика | Цель |\n|---|:---:|\n| Конверсия | ≥ 3% |\n| <CAC> | 1 500 ₽ |")
+    assert "|" not in out and "• <b>Конверсия</b> — Цель: ≥ 3%" in out and "&lt;CAC&gt;" in out

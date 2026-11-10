@@ -37,34 +37,44 @@ from ..diagnostics import bundle, save_events, save_failed, setup_logging, stamp
 STAGES = [("framing", "Постановка"), ("proposal", "Предложения"), ("critique", "Критика"),
           ("revision", "Доработка"), ("vote", "Голосование"), ("factcheck", "Факты"), ("verdict", "Вердикт")]
 MODE_NAME = {"debate": "Дебаты", "quick": "Быстро", "evaluate": "Оценка вариантов"}
+MODE_FULL = {"debate": "Подробное обсуждение", "quick": "Быстрый ответ", "evaluate": "Выбор из ваших вариантов"}
+STAGE_HINT = {
+    "framing": "председатель уточняет вопрос и критерии",
+    "proposal": "каждая модель вслепую предлагает решение",
+    "critique": "модели анонимно оценивают чужие решения",
+    "revision": "авторы улучшают решения с учётом критики",
+    "vote": "модели ранжируют чужие решения",
+    "factcheck": "модель с поиском проверяет факты",
+    "verdict": "председатель пишет итоговое решение",
+}
 COMMANDS = [
-    ("ask", "задать вопрос совету"),
-    ("evaluate", "выбрать из ваших вариантов"),
-    ("settings", "режим, раунды, участники, демо"),
-    ("budget", "лимит стоимости, напр. /budget 0.5"),
-    ("archive", "архив заседаний и отчёты"),
-    ("clear", "убрать приложенные файлы"),
-    ("cancel", "отменить уточнение или вопрос"),
-    ("stats", "статистика: расходы и успехи моделей"),
+    ("ask", "задать вопрос совету (в группе)"),
+    ("settings", "режим, модели, проверка фактов, демо"),
+    ("archive", "прошлые заседания и отчёты"),
+    ("stats", "расходы и успехи моделей"),
     ("stop", "остановить идущее заседание"),
+    ("budget", "лимит стоимости, напр. /budget 0.5"),
+    ("evaluate", "выбрать лучший из ваших вариантов"),
+    ("clear", "убрать приложенные файлы"),
+    ("cancel", "отменить вопрос или уточнение"),
     ("logs", "журнал для разбора ошибок"),
     ("help", "как пользоваться"),
 ]
 HELP = """<b>Совет нейросетей</b>
-Несколько моделей (Claude, ChatGPT, Gemini, Kimi, DeepSeek…) решают вашу задачу как совет экспертов: предлагают варианты вслепую, анонимно критикуют друг друга, дорабатывают, голосуют, а председатель выносит решение.
+Несколько моделей (Claude, ChatGPT, Gemini и др.) вслепую предлагают решения, анонимно критикуют друг друга, голосуют — а председатель пишет итог.
 
-<b>Как пользоваться</b>
-• Просто напишите вопрос (в группе: <code>/ask вопрос</code>) — бот покажет настройки и оценку стоимости, нажмите «Начать».
-• <code>/evaluate</code> — выбор из готовых вариантов: первая строка — вопрос, дальше по варианту на строку (или блоки через <code>---</code>).
-• /settings — режим, раунды, участники, демо-режим. Настройки запоминаются для чата.
-• /budget 0.5 — лимит стоимости одного заседания в $.
-• 🎤 Голос: отправьте голосовое сообщение — бот расшифрует его и задаст как вопрос.
-• 📎 Файлы: пришлите фото, скриншот или документ (PDF, Word, Excel, текст) — с подписью-вопросом или перед вопросом. Убрать вложения: /clear
-• /archive — архив всех заседаний: отчёты в PDF, Word и Markdown. Поиск: <code>/archive кофейня</code>
-• /stop — остановить заседание.
-• /logs — журнал для разбора ошибок (последнее заседание и журнал программы) одним архивом.
+<b>Как спросить</b>
+Просто напишите вопрос — или пришлите голосовое 🎤. Файлы 📎 (фото, PDF, Word, Excel) — с подписью-вопросом или перед вопросом.
+Бот покажет стоимость → нажмите <b>▶️ Начать</b>. Через несколько минут придёт решение.
 
-После заседания придут решение, итоги голосования и полный отчёт в PDF. Кнопки под ним: другие форматы и «📌 Итог» — короткий документ только с итоговым решением."""
+<b>Полезное</b>
+/settings — режим, модели, проверка фактов, демо
+/archive — прошлые заседания и отчёты (<code>/archive кофейня</code> — поиск)
+/evaluate — выбрать лучший из ваших вариантов
+/budget 0.5 — лимит стоимости заседания
+/stop — остановить · /logs — журнал ошибок
+
+В группе вопрос задаётся так: <code>/ask вопрос</code>."""
 FORMAT_NAME = {"pdf": "PDF", "docx": "Word", "md": "Markdown"}
 ARCHIVE_PAGE = 8
 
@@ -88,7 +98,7 @@ class Pending:
     question: str
     options: list[str] | None = None
     card_id: int | None = None
-    view: str = "main"  # main | members
+    view: str = "main"  # main | opts | members
     attachments: list[Attachment] = field(default_factory=list)
     last_at: float = 0.0   # когда пришла последняя часть текста вопроса
     last_len: int = 0      # её длина (длинный текст Telegram сам режет на сообщения по ~4096 символов)
@@ -163,7 +173,7 @@ class Progress:
     def _member_line(self, name: str) -> str:
         c = self.calls.get(name)
         if not c or c.get("stage") != self.stage:
-            return f"▫️ {esc(name)} — ожидает запуска"
+            return f"▫️ {esc(name)} — ожидает"
         phase = c.get("phase")
         active = phase not in ("done", "failed")
         secs = int(time.monotonic() - c["since"]) if active else int(c.get("final") or 0)
@@ -186,39 +196,47 @@ class Progress:
 
     def render(self, *, final: str | None = None) -> str:
         head = final or "🏛 <b>Совет заседает…</b>"
-        meta = MODE_NAME.get(self.mode, self.mode) + (f", раундов: {self.rounds}" if self.mode == "debate" else "")
+        meta = MODE_FULL.get(self.mode, self.mode) + (f" · раундов: {self.rounds}" if self.mode == "debate" and self.rounds > 1 else "")
         if self.demo:
             meta += " · демо"
-        lines = [head, f"<i>{esc(meta)}</i>", f"❓ {esc(short_title(self.question))}", ""]
-        steps = []
-        for key, name in STAGES:
-            if key in self.skipped():
-                continue
-            icon = "✅" if key in self.done_stages else "⏳" if key == self.stage else "▫️"
-            steps.append(f"{icon} {name}")
-        lines.append("  ".join(steps))
-        if self.saving and not final:
-            lines.append("<b>Сейчас:</b> готовлю отчёты PDF, Word и Markdown…")
-        elif self.stage and not final:
+        lines = [head, f"❓ {esc(short_title(self.question))}", f"<i>{esc(meta)}</i>", ""]
+        plan = [(k, n) for k, n in STAGES if k not in self.skipped()]
+        done = sum(1 for k, _ in plan if k in self.done_stages)
+        idx = next((i for i, (k, _) in enumerate(plan) if k == self.stage), None)
+        bar = "▰" * done + "▱" * (len(plan) - done)
+        if final:
+            lines.append(f"{bar} {done} из {len(plan)} этапов")
+        elif self.saving:
+            lines += [f"{'▰' * len(plan)} Готовлю отчёты…"]
+        elif self.stage and idx is not None:
             ready = sum(1 for s in self.work.values() if s != "work")
             stage_secs = int(time.monotonic() - self.stage_started)
-            lines.append(f"<b>Сейчас:</b> {esc(self.stage_title)} — готово {ready} из {len(self.work)} · "
-                         f"{_fmt_secs(stage_secs)} на этапе")
+            lines.append(f"{bar} Этап {idx + 1} из {len(plan)}: <b>{esc(dict(plan)[self.stage])}</b>")
+            round_ = re.search(r"раунд (\d+)/(\d+)", self.stage_title or "")
+            hint = STAGE_HINT.get(self.stage, "")
+            if round_ and int(round_.group(2)) > 1:
+                hint = f"раунд {round_.group(1)} из {round_.group(2)} — {hint}"
+            lines.append(f"<i>{esc(hint)} · готово {ready} из {len(self.work)} · {_fmt_secs(stage_secs)}</i>")
             lines += [self._member_line(n) for n in self.work]
             slow = [n for n, c in self.calls.items() if c.get("stage") == self.stage and self.work.get(n) == "work"
                     and c.get("phase") in ("sent", "thinking") and time.monotonic() - c["since"] > 40]
             if slow:
                 lines.append(f"<i>⏳ {esc(', '.join(slow))}: «думающие» модели рассуждают до 1–3 минут — "
                              f"это нормально, процесс не завис.</i>")
-        if self.proposals:
-            lines += ["", "<b>Варианты:</b>"]
-            lines += [f"<b>{l}</b> — {esc(t[:80])}" for l, t in sorted(self.proposals.items())]
+        else:
+            lines.append(f"{bar} Запускаю…")
+        if self.proposals and not final:
+            lines += ["", "<b>Варианты:</b> " + ", ".join(sorted(self.proposals))]
         if self.failures:
-            lines += ["", "<b>Сбои:</b>"] + [f"❌ {esc(f)}" for f in self.failures[-5:]]
+            lines += ["", "<b>Сбои:</b>"] + [f"❌ {esc(f)}" for f in self.failures[-3:]]
         secs = int(time.monotonic() - self.started)
-        lines += ["", f"💰 ${self.cost:.4f} · ⏱ {secs // 60} мин {secs % 60} с" if secs >= 60
-                  else f"💰 ${self.cost:.4f} · ⏱ {secs} с"]
+        lines += ["", f"💰 ${self.cost:.2f} · ⏱ {_fmt_secs(secs)}"]
         return "\n".join(lines)
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    m10, m100 = n % 10, n % 100
+    return one if m10 == 1 and m100 != 11 else few if 2 <= m10 <= 4 and not 12 <= m100 <= 14 else many
 
 
 def _fmt_secs(secs: int) -> str:
@@ -711,48 +729,63 @@ class CouncilBot:
         except OverrideError as e:
             cfg, problem = None, str(e)
         lines.append("")
-        lines.append(f"<b>Режим:</b> {MODE_NAME[mode]}" + (f", раундов: {s.rounds}" if mode == "debate" else ""))
+        lines.append(f"<b>{MODE_FULL[mode]}</b>" + (f" · раундов: {s.rounds}" if mode == "debate" else ""))
         if cfg:
-            lines.append("<b>Участники:</b> " + ", ".join(
-                f"{esc(m.name)}{' 🎩' if m.name == cfg.chair else ''}{' 😈' if m.name == cfg.devil_advocate else ''}"
-                for m in cfg.active_members))
-            lines.append("<i>🎩 председатель · 😈 адвокат дьявола</i>")
+            n = len(cfg.active_members)
+            extras = [x for x, on in (("компактно", cfg.compact_proposals), ("проверка фактов", cfg.fact_check.enabled),
+                                      ("демо", s.demo)) if on]
+            lines.append(f"{n} {_plural(n, 'модель', 'модели', 'моделей')} · председатель {esc(cfg.chair)}"
+                         + (" · " + " · ".join(extras) if extras else ""))
+            if p.view == "opts":
+                lines.append("<i>Участники: " + ", ".join(
+                    f"{esc(m.name)}{' 🎩' if m.name == cfg.chair else ''}{' 😈' if m.name == cfg.devil_advocate else ''}"
+                    for m in cfg.active_members) + " (🎩 председатель, 😈 адвокат дьявола)</i>")
             est_line, est_problem = await self._estimate_line(cfg, s, mode, p)
             lines.append(est_line)
             problem = problem or est_problem
         if problem:
             lines += ["", f"⚠️ {esc(problem)}"]
-        kb: list[list[dict]] = []
-        if not p.options:
-            kb.append([self._btn(("✓ " if s.mode == m else "") + MODE_NAME[m], f"mode:{m}") for m in ("debate", "quick")])
-            if s.mode == "debate":
-                kb.append([self._btn(("✓ " if s.rounds == r else "") + f"{r} раунд" + ("а" if r > 1 else ""), f"rounds:{r}")
-                           for r in (1, 2, 3)])
-        n = len(cfg.active_members) if cfg else 0
-        kb.append([self._btn(f"👥 Участники ({n})", "view:members"),
-                   self._btn(f"🧪 Демо: {'вкл' if s.demo else 'выкл'}", "demo")])
-        fc_on = cfg.fact_check.enabled if cfg else bool(s.fact_check)
-        cp_on = cfg.compact_proposals if cfg else bool(s.compact)
-        kb.append([self._btn(f"🔎 Проверка фактов: {'вкл' if fc_on else 'выкл'}", "facts"),
-                   self._btn(f"📝 Компактно: {'вкл' if cp_on else 'выкл'}", "compact")])
+        if p.view == "opts":
+            kb = self._opts_kb(s, cfg, "", with_mode=not p.options)
+            kb.append([self._btn("▶️ Начать", "go"), self._btn("« Назад", "view:main")])
+            return "\n".join(lines), {"inline_keyboard": kb}
+        kb: list[list[dict]] = [[self._btn("▶️ Начать", "go")],
+                                [self._btn("⚙️ Настроить", "view:opts"), self._btn("✖️ Отмена", "drop")]]
         if p.attachments:
-            kb.append([self._btn(f"🗑 Убрать вложения ({len(p.attachments)})", "noatt")])
-        kb.append([self._btn("▶️ Начать", "go"), self._btn("✖️ Отмена", "drop")])
+            kb.insert(1, [self._btn(f"🗑 Убрать вложения ({len(p.attachments)})", "noatt")])
         return "\n".join(lines), {"inline_keyboard": kb}
 
-    def _members_card(self, s: ChatSettings) -> tuple[str, dict]:
+    def _opts_kb(self, s: ChatSettings, cfg: CouncilConfig | None, prefix: str, *, with_mode: bool = True) -> list[list[dict]]:
+        """Кнопки настроек: режим, раунды, участники, переключатели. prefix «set:» — для сообщения /settings."""
+        on = lambda flag: "✅" if flag else "▫️"  # noqa: E731
+        kb: list[list[dict]] = []
+        if with_mode:
+            kb.append([self._btn(("● " if s.mode == m else "") + {"debate": "Подробно", "quick": "Быстро"}[m], f"{prefix}mode:{m}")
+                       for m in ("debate", "quick")])
+            if s.mode == "debate":
+                kb.append([self._btn(("● " if s.rounds == r else "") + f"{r} раунд" + ("а" if r > 1 else ""), f"{prefix}rounds:{r}")
+                           for r in (1, 2, 3)])
+        n = len(cfg.active_members) if cfg else 0
+        fc_on = cfg.fact_check.enabled if cfg else bool(s.fact_check)
+        cp_on = cfg.compact_proposals if cfg else bool(s.compact)
+        kb.append([self._btn(f"👥 Участники ({n})", f"{prefix}view:members")])
+        kb.append([self._btn(f"{on(fc_on)} Проверка фактов", f"{prefix}facts"), self._btn(f"{on(cp_on)} Компактно", f"{prefix}compact")])
+        kb.append([self._btn(f"{on(s.demo)} Демо-режим (бесплатно)", f"{prefix}demo")])
+        return kb
+
+    def _members_card(self, s: ChatSettings, prefix: str = "") -> tuple[str, dict]:
         base = self.base_config()
         active = set(s.members) if s.members is not None else {m.name for m in base.active_members}
         rows, row = [], []
         for m in base.members:
-            row.append(self._btn(("✅ " if m.name in active else "▫️ ") + m.name, f"mem:{m.name}"))
+            row.append(self._btn(("✅ " if m.name in active else "▫️ ") + m.name, f"{prefix}mem:{m.name}"))
             if len(row) == 2:
                 rows.append(row)
                 row = []
         if row:
             rows.append(row)
-        rows.append([self._btn("↩️ Как в config.yaml", "mem:*"), self._btn("« Назад", "view:main")])
-        text = "👥 <b>Участники совета</b>\nОтметьте модели. Нужно минимум столько, сколько требует кворум.\n\n" + "\n".join(
+        rows.append([self._btn("↩️ По умолчанию", f"{prefix}mem:*"), self._btn("« Готово", f"{prefix}view:opts")])
+        text = "👥 <b>Участники совета</b>\nНажмите на модель, чтобы включить или выключить. Нужно минимум столько, сколько требует кворум.\n\n" + "\n".join(
             f"{'✅' if m.name in active else '▫️'} <b>{esc(m.name)}</b> — <code>{esc(m.model)}</code>" for m in base.members)
         return text, {"inline_keyboard": rows}
 
@@ -784,9 +817,9 @@ class CouncilBot:
         if imgs and blind and not problem:
             problem = f"ℹ️ {', '.join(blind)} не видят картинки — им передадут их описание."
         if s.demo:
-            line = f"<b>Стоимость:</b> демо-режим, бесплатно ({est.calls} вызовов)"
+            line = f"💰 Демо-режим: бесплатно ({est.calls} обращений к моделям)"
         elif pricing:
-            line = f"<b>Стоимость:</b> ≈ ${est.low:.2f} – ${est.high:.2f} ({est.calls} вызовов, лимит ${cfg.max_cost_usd:g})"
+            line = f"💰 ≈ <b>${est.low:.2f} – ${est.high:.2f}</b> · лимит ${cfg.max_cost_usd:g}"
             if sim:
                 line += f"\n<i>Похожие заседания ({sim['count']}) стоили ${sim['min']:.2f}–${sim['max']:.2f}</i>"
             if est.high > cfg.max_cost_usd:
@@ -799,31 +832,64 @@ class CouncilBot:
                 finally:
                     await bc.aclose()
                 if bal is not None:
-                    line += f"\n<b>Баланс OpenRouter:</b> ${bal:.2f}"
+                    line += f" · баланс ${bal:.2f}"
                     if bal < est.high:
                         problem = problem or "На балансе OpenRouter меньше верхней оценки — пополните баланс, иначе заседание может прерваться."
                     elif bal < est.high * 4:
                         line += " <i>(небольшой — часть запросов будет ждать резерва, заседание пройдёт медленнее)</i>"
         else:
-            line = f"<b>Стоимость:</b> не удалось оценить ({est.calls} вызовов, лимит ${cfg.max_cost_usd:g})"
+            line = f"💰 Стоимость не удалось оценить ({est.calls} обращений, лимит ${cfg.max_cost_usd:g})"
         return line, problem
 
     @staticmethod
     def _btn(text: str, data: str) -> dict[str, str]:
         return {"text": text, "callback_data": data[:64]}
 
-    async def show_settings(self, chat_id: int) -> None:
+    def _settings_view(self, chat_id: int, view: str = "opts") -> tuple[str, dict]:
         s = self.chat_settings(chat_id)
+        if view == "members":
+            return self._members_card(s, "set:")
         try:
             cfg = self.build_config(s)
             members = ", ".join(m.name for m in cfg.active_members)
-            budget = cfg.max_cost_usd
+            budget, chair, problem = cfg.max_cost_usd, cfg.chair, ""
         except OverrideError as e:
-            members, budget = f"⚠️ {e}", s.budget or 0
-        await self.send(chat_id, "⚙️ <b>Настройки чата</b>\n"
-                        f"Режим: {MODE_NAME[s.mode]}" + (f", раундов: {s.rounds}" if s.mode == "debate" else "") + "\n"
-                        f"Участники: {esc(members)}\nЛимит: ${budget:g}\nДемо-режим: {'вкл' if s.demo else 'выкл'}\n\n"
-                        "Меняются кнопками под вопросом — напишите любой вопрос. Лимит: /budget 0.5")
+            cfg, members, budget, chair, problem = None, "—", s.budget or 0, "—", str(e)
+        text = ("⚙️ <b>Настройки чата</b>\nДействуют для всех новых вопросов в этом чате.\n\n"
+                f"<b>{MODE_FULL[s.mode]}</b>" + (f" · раундов: {s.rounds}" if s.mode == "debate" else "") + "\n"
+                f"Участники: {esc(members)}\nПредседатель: {esc(chair)}\nЛимит заседания: ${budget:g} (изменить: /budget 0.5)"
+                + (f"\n\n⚠️ {esc(problem)}" if problem else ""))
+        kb = self._opts_kb(s, cfg, "set:")
+        kb.append([self._btn("✓ Готово", "set:close")])
+        return text, {"inline_keyboard": kb}
+
+    async def show_settings(self, chat_id: int) -> None:
+        text, markup = self._settings_view(chat_id)
+        await self.send(chat_id, text, reply_markup=markup)
+
+    def _apply_setting(self, s: ChatSettings, kind: str, value: str) -> None:
+        """Общая логика переключателей для карточки вопроса и для /settings."""
+        if kind == "mode" and value in ("debate", "quick"):
+            s.mode = value
+        elif kind == "rounds" and value.isdigit():
+            s.rounds = max(1, min(5, int(value)))
+        elif kind == "demo":
+            s.demo = not s.demo
+        elif kind == "facts":
+            current = s.fact_check if s.fact_check is not None else self.base_config().fact_check.enabled
+            s.fact_check = not current
+        elif kind == "compact":
+            current = s.compact if s.compact is not None else self.base_config().compact_proposals
+            s.compact = not current
+        elif kind == "mem":
+            base = self.base_config()
+            if value == "*":
+                s.members = None
+            elif value in {m.name for m in base.members}:
+                cur = list(s.members) if s.members is not None else [m.name for m in base.active_members]
+                cur = [x for x in cur if x != value] if value in cur else cur + [value]
+                s.members = [m.name for m in base.members if m.name in cur]  # порядок как в конфиге
+        self._save_settings()
 
     # ------------------------------------------------------------ кнопки
 
@@ -836,6 +902,9 @@ class CouncilBot:
             await self.api.answer_callback(cq["id"], "Нет доступа")
             return
         kind0, _, rest0 = data.partition(":")
+        if kind0 == "set":
+            await self.on_settings_callback(cq, chat_id, message.get("message_id"), rest0)
+            return
         if kind0 in ("arc", "ses", "rep", "res", "fup", "rpt"):
             await self.on_archive_callback(cq, chat_id, message.get("message_id"), kind0, rest0)
             return
@@ -864,32 +933,32 @@ class CouncilBot:
             return
         if kind == "noatt":
             p.attachments.clear()
-        elif kind == "mode" and value in ("debate", "quick"):
-            s.mode = value
-        elif kind == "rounds" and value.isdigit():
-            s.rounds = max(1, min(5, int(value)))
-        elif kind == "demo":
-            s.demo = not s.demo
-        elif kind == "facts":
-            current = s.fact_check if s.fact_check is not None else self.base_config().fact_check.enabled
-            s.fact_check = not current
-        elif kind == "compact":
-            current = s.compact if s.compact is not None else self.base_config().compact_proposals
-            s.compact = not current
-        elif kind == "view" and value in ("main", "members"):
+        elif kind == "view" and value in ("main", "opts", "members"):
             p.view = value
-        elif kind == "mem":
-            base = self.base_config()
-            if value == "*":
-                s.members = None
-            elif value in {m.name for m in base.members}:
-                cur = list(s.members) if s.members is not None else [m.name for m in base.active_members]
-                cur = [x for x in cur if x != value] if value in cur else cur + [value]
-                s.members = [m.name for m in base.members if m.name in cur]  # порядок как в конфиге
-        self._save_settings()
+        else:
+            # старые кнопки (до обновления) меняли настройки прямо в карточке — работают так же
+            self._apply_setting(s, kind, value)
         await self.api.answer_callback(cq["id"])
         text, markup = await self.card(chat_id, p)
         await self.api.edit_message(chat_id, p.card_id, text, reply_markup=markup)
+
+    async def on_settings_callback(self, cq: dict[str, Any], chat_id: int, message_id: int | None, rest: str) -> None:
+        kind, _, value = rest.partition(":")
+        if kind == "close":
+            await self.api.answer_callback(cq["id"], "Сохранено")
+            text, _ = self._settings_view(chat_id)
+            await self._safe_edit(chat_id, message_id, text + "\n\n<i>✓ Сохранено.</i>")
+            return
+        view = "opts"
+        if kind == "view":
+            view = value if value in ("opts", "members") else "opts"
+        else:
+            self._apply_setting(self.chat_settings(chat_id), kind, value)
+            if kind == "mem":
+                view = "members"
+        await self.api.answer_callback(cq["id"])
+        text, markup = self._settings_view(chat_id, view)
+        await self._safe_edit(chat_id, message_id, text, markup)
 
     # ------------------------------------------------------------ заседание
 
@@ -968,14 +1037,16 @@ class CouncilBot:
                 log.warning("заседание %s прервано: %s", stem, e)
                 keep("error", str(e))
                 await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⚠️ <b>Заседание прервано</b>"))
-                await self.send(chat_id, f"⚠️ {esc(e)}\n\n<i>/logs — журнал для разбора</i>")
+                await self.send(chat_id, f"⚠️ <b>Заседание прервано.</b>\n{esc(e)}\n\n<i>Если непонятно, что случилось, — /logs пришлёт журнал для разбора.</i>")
             except Exception as e:  # noqa: BLE001
                 updater.cancel()
                 log.exception("заседание %s упало", stem)
                 import traceback
                 keep("crash", traceback.format_exc())
                 await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⚠️ <b>Внутренняя ошибка</b>"))
-                await self.send(chat_id, f"⚠️ Внутренняя ошибка: {esc(repr(e))[:500]}\n\n<i>/logs — журнал для разбора</i>")
+                await self.send(chat_id, "⚠️ <b>Что-то сломалось внутри программы</b>, заседание остановлено. "
+                                         "Деньги за уже сделанные запросы потрачены.\n\n"
+                                         f"<i>Отправьте /logs владельцу бота — по журналу видно причину.</i>\n<code>{esc(type(e).__name__)}</code>")
             finally:
                 self.running.pop(chat_id, None)
                 self.last_stem[chat_id] = stem
@@ -1028,11 +1099,9 @@ class CouncilBot:
     def _result_buttons(self, stem: str) -> dict:
         key = key_of(stem)
         fmt = available_formats()[0]
-        name = FORMAT_NAME[fmt]
         return {"inline_keyboard": [
-            [self._btn("📖 Подробнее", f"res:more:{key}"), self._btn("📊 Голосование", f"res:tally:{key}")],
-            [self._btn(f"📄 Отчёт {name}", f"rep:{fmt}:{key}"), self._btn(f"📌 Итог {name}", f"rep:summary.{fmt}:{key}")],
-            [self._btn(f"✅ Только решение {name}", f"rep:decision.{fmt}:{key}")],
+            [self._btn("📖 Полный ответ", f"res:more:{key}"), self._btn("📊 Голоса", f"res:tally:{key}")],
+            [self._btn(f"📄 Отчёт {FORMAT_NAME[fmt]}", f"rep:{fmt}:{key}"), self._btn("📎 Другие форматы", f"res:fmt:{key}")],
             [self._btn("💬 Уточнить", f"fup:{key}"), self._btn("🔁 Повторить", f"rpt:{key}")],
         ]}
 
@@ -1046,14 +1115,18 @@ class CouncilBot:
         vd = v.verdict
         w = v.winner
         short, cut = self._short_answer(vd.get("final_answer", ""))
-        head = f"🏆 <b>Решение: {esc(v.title(w))}</b> <i>(предложил {esc(v.author(w))})</i>" if w else "🏆 <b>Решение совета</b>"
-        lines = [head, f"<i>❓ {esc(v.title_text)}</i>", "", md_to_tg(short)]
+        head = f"🏆 <b>Решение: {esc(v.title(w))}</b>" if w else "🏆 <b>Решение совета</b>"
+        row = next((r for r in v.tally if r.get("label") == w), None) if w else None
+        sub = [f"вариант {w}" if w else "", f"предложил {esc(v.author(w))}" if w else "",
+               f"{row.get('first_places', 0)} из {row.get('ballots', 0)} за первое место" if row and row.get("ballots") else ""]
+        lines = [head, f"<i>{' · '.join(x for x in sub if x)}</i>", f"❓ <i>{esc(v.title_text)}</i>", "", md_to_tg(short)]
         if cut:
-            lines += ["", "<i>Полный ответ — «📖 Подробнее» или в отчёте.</i>"]
+            lines += ["", "<i>Целиком — «📖 Полный ответ» или в отчёте.</i>"]
         a = v.agreement
         if a:
-            icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}[a["level"]]
-            lines += ["", f"{icon} Согласие совета: {esc(v.agreement_line)}"]
+            icon, word = {"high": ("🟢", "Мнения совета совпадают"), "medium": ("🟡", "Мнения частично расходятся"),
+                          "low": ("🔴", "Мнения совета разошлись — посмотрите особые мнения")}[a["level"]]
+            lines += ["", f"{icon} {word}"]
         if v.fact_line:
             lines.append(f"🔎 Факты: {esc(v.fact_line)}")
         if v.deviation_line:
@@ -1062,7 +1135,7 @@ class CouncilBot:
             lines.append(f"🤝 {esc(v.tie_line)}")
         if v.ballot_flags:
             lines.append(f"⚠️ Бюллетеней против общего мнения: {len(v.ballot_flags)}. {esc(v.robust_note)}")
-        lines += ["", f"💰 ${v.cost:.4f} · ⏱ {v.duration} · вариантов: {len(v.proposals)}"]
+        lines += ["", f"💰 ${v.cost:.2f} · ⏱ {v.duration} · вариантов: {len(v.proposals)}"]
         await self.send(chat_id, "\n".join(lines), reply_markup=self._result_buttons(stem))
 
     async def send_details(self, chat_id: int, stem: str) -> None:
@@ -1116,10 +1189,10 @@ class CouncilBot:
     def _report_buttons(self, stem: str, skip: str = "") -> list[list[dict]]:
         """Ряды «полный отчёт», «итог» и «только решение» — во всех форматах, кроме уже отправленного."""
         key = key_of(stem)
-        full = [self._btn(FORMAT_NAME[f], f"rep:{f}:{key}") for f in available_formats() if f != skip]
-        short = [self._btn(f"📌 Итог {FORMAT_NAME[f]}", f"rep:summary.{f}:{key}")
+        full = [self._btn(f"📄 {FORMAT_NAME[f]}", f"rep:{f}:{key}") for f in available_formats() if f != skip]
+        short = [self._btn(f"📌 {FORMAT_NAME[f]}", f"rep:summary.{f}:{key}")
                  for f in available_formats() if f"summary.{f}" != skip]
-        decision = [self._btn(f"✅ Решение {FORMAT_NAME[f]}", f"rep:decision.{f}:{key}")
+        decision = [self._btn(f"✅ {FORMAT_NAME[f]}", f"rep:decision.{f}:{key}")
                     for f in available_formats() if f"decision.{f}" != skip]
         return [row for row in (full, short, decision) if row]
 
@@ -1161,12 +1234,12 @@ class CouncilBot:
         else:
             lines = [head, f"<i>Всего: {len(items)} · страница {page + 1} из {pages}</i>", ""]
             for i, it in enumerate(chunk, page * ARCHIVE_PAGE + 1):
-                win = f"🏆 {esc(it['winner'])}: {esc(it['winner_title'][:50])}" if it["winner"] else ""
-                lines.append(f"<b>{i}.</b> {esc(short_title(it['question'], 100))}\n    <i>{esc(it['date'])}</i> · {win}")
-            lines += ["", "Нажмите номер, чтобы получить отчёт."]
+                win = f" · 🏆 {esc(it['winner_title'][:50])}" if it["winner"] else ""
+                lines.append(f"<b>{i}.</b> {esc(short_title(it['question'], 100))}\n    <i>{esc(it['date'])}{win}</i>")
+            lines += ["", "Нажмите на заседание, чтобы открыть решение и отчёты."]
             text = "\n".join(lines)
-            nums = [self._btn(str(i), f"ses:{it['key']}") for i, it in enumerate(chunk, page * ARCHIVE_PAGE + 1)]
-            kb = [nums[:4], nums[4:]] if len(nums) > 4 else [nums]
+            kb = [[self._btn(f"{i}. {short_title(it['question'], 48)}", f"ses:{it['key']}")]
+                  for i, it in enumerate(chunk, page * ARCHIVE_PAGE + 1)]
             nav = []
             if page > 0:
                 nav.append(self._btn("‹ Новее", f"arc:{page - 1}"))
@@ -1194,6 +1267,13 @@ class CouncilBot:
         if kind == "ses":
             await self.api.answer_callback(cq["id"])
             await self.send_summary(chat_id, stem)
+        elif kind == "res" and fmt == "fmt":
+            await self.api.answer_callback(cq["id"])
+            await self.send(chat_id, "📎 <b>Отчёты</b> — выберите вид и формат:\n"
+                                     "📄 <b>Полный</b> — всё заседание: варианты, критика, голосование, расходы\n"
+                                     "📌 <b>Итог</b> — решение с обоснованием, рисками и особыми мнениями\n"
+                                     "✅ <b>Только решение</b> — вопрос и ответ, чтобы переслать",
+                            reply_markup={"inline_keyboard": self._report_buttons(stem)})
         elif kind == "res":
             await self.api.answer_callback(cq["id"])
             await (self.send_details if fmt == "more" else self.send_tally)(chat_id, stem)
