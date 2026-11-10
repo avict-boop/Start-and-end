@@ -201,7 +201,7 @@ async def _preflight(client, cfg, args, *, mode, rounds, options, criteria, atta
     args.vision = vision_map(cfg, models or None)
     imgs = sum(1 for a in attachments if a.kind == "image")
     from .estimate import learn_lengths, similar_actual
-    lengths = learn_lengths(_runs_dir(cfg))
+    lengths = learn_lengths(_runs_dir(cfg), compact=cfg.compact_proposals)
     est = estimate(cfg, pricing, mode=mode, rounds=rounds,
                    n_options=len(options) if options else None, has_criteria=bool(criteria),
                    doc_tokens=sum(a.tokens for a in attachments if a.kind == "document"),
@@ -248,6 +248,8 @@ async def _ask(args) -> int:
         cfg.chair_proposes = True
     if args.fact_check:
         cfg.fact_check.enabled = True
+    if args.compact:
+        cfg.compact_proposals = True
     if args.only:
         wanted = {n.strip() for n in args.only.split(",") if n.strip()}
         unknown = wanted - {m.name for m in cfg.members}
@@ -340,7 +342,8 @@ async def _ask(args) -> int:
                                "options": options or [], "context": context or "",
                                "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
                                "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
-                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled}
+                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
+                               "compact_proposals": cfg.compact_proposals}
             finally:
                 tick.cancel()
                 _live.status = None
@@ -546,6 +549,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="приложить файл: картинку, PDF, Word, Excel, текст (можно несколько раз)")
     a.add_argument("--only", help="участвуют только эти участники, через запятую")
     a.add_argument("--budget", type=float, help="лимит стоимости заседания в $")
+    a.add_argument("--compact", action="store_true",
+                   help="компактные варианты: участники пишут суть сжато, полный формат — только в итоге (дешевле)")
     a.add_argument("--fact-check", action="store_true",
                    help="проверить факты в лидирующих вариантах моделью с поиском (по умолчанию — Perplexity)")
     a.add_argument("--chair-proposes", action="store_true",

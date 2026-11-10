@@ -115,7 +115,7 @@ def test_estimate_counts_question_and_answer_length():
     assert long_q.low > base.low * 1.1 and long_q.question_tokens == 3900  # вопрос уходит в каждый запрос
     long_answers = estimate(cfg, _pricing(cfg), mode="debate", rounds=1,
                             lengths={"proposal": 8000, "revision": 9000, "verdict": 6000, "sessions": 5})
-    assert long_answers.low > base.low * 2  # чужие варианты читают все — цена растёт с их длиной
+    assert long_answers.low > base.low * 1.7  # чужие варианты читают все — цена растёт с их длиной
     assert long_answers.high / long_answers.low == pytest.approx(1.6)  # по истории — узкий диапазон
     assert base.high / base.low == pytest.approx(2.5)
     assert "по 5 последним заседаниям" in long_answers.basis and "вариант ≈ 8 000" in long_answers.basis

@@ -540,3 +540,21 @@ def test_logs_command_sends_diagnostics(env):
     assert d["filename"].startswith("diagnostics-") and d["filename"].endswith(".zip")
     assert "Журнал для разбора последнего заседания" in d["_multipart"]
     assert list((tmp / "runs").glob("*.events.jsonl"))
+
+
+def test_compact_toggle_in_bot(env):
+    bot, fake, tmp = env
+
+    async def scenario():
+        await bot.handle_update(msg("Сделай подробный отчёт о рынке кофеен"))
+        card_id = bot.pending[CHAT].card_id
+        assert "compact" in buttons(fake.last("sendMessage"))
+        await bot.handle_update(press("compact", card_id))
+        assert bot.settings[CHAT].compact is True
+        assert "Компактно: вкл" in json.dumps(fake.last("editMessageText"), ensure_ascii=False)
+        await bot.handle_update(press("go", card_id))
+        await finish(bot)
+
+    asyncio.run(scenario())
+    data = json.loads(next((tmp / "runs").glob("2*-*[!s].json")).read_text())
+    assert data["request"]["compact_proposals"] is True

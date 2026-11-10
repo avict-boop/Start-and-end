@@ -109,7 +109,13 @@ function renderSettings() {
         <label class="field"><span>Лимит длины ответа, токенов <em>(длинные ответы продолжаются автоматически)</em></span><input type="number" id="sMaxTokens" min="500" step="500" value="${d.max_tokens}" ${ro}></label>
         <label class="field"><span>Температура <em>(0 — строже, 1 — креативнее)</em></span><input type="number" id="sTemp" min="0" max="2" step="0.1" value="${d.temperature}" ${ro}></label>
         <label class="field"><span>Язык ответов <em>(по-английски: Russian, English…)</em></span><input type="text" id="sLang" value="${esc(d.language)}" ${ro}></label>
-      </div>`;
+      </div>
+      <h2 style="margin-top:1rem">Экономия</h2>
+      <label class="check small"><input type="checkbox" id="sCompact" ${d.compact_proposals ? "checked" : ""} ${ro}>
+        Компактные варианты по умолчанию: участники пишут суть сжато, полный ответ в нужном формате — только председатель
+        (примерно в 2–3 раза дешевле; в форме вопроса можно поменять для отдельного заседания)</label>
+      <label class="field" style="max-width:20rem;margin-top:.6rem"><span>Длина компактного варианта, слов</span>
+        <input type="number" id="sCompactWords" min="150" max="5000" step="50" value="${d.compact_words}" ${ro}></label>`;
   } else if (SET.tab === "facts") {
     const fc = d.fact_check;
     html = `
@@ -192,6 +198,8 @@ function bindSettings() {
   bindVal("sMaxTokens", (t) => { d.max_tokens = num(t.value); });
   bindVal("sTemp", (t) => { d.temperature = num(t.value); });
   bindVal("sLang", (t) => { d.language = t.value; });
+  on("sCompact", "change", (e) => { d.compact_proposals = e.target.checked; setDirty(); });
+  bindVal("sCompactWords", (t) => { d.compact_words = num(t.value); });
   on("fEnabled", "change", (e) => { d.fact_check.enabled = e.target.checked; setDirty(); });
   bindVal("fModel", (t) => { d.fact_check.model = t.value.trim(); });
   bindVal("fTop", (t) => { d.fact_check.top = num(t.value); });

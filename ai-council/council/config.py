@@ -61,6 +61,10 @@ class CouncilConfig(BaseModel):
     # Председатель следует голосованию: победитель — лидер подсчёта; выбрать другой вариант можно только
     # по названной причине (опровергнутые факты у лидера, неприемлемый риск, лидер не отвечает на вопрос).
     chair_follows_vote: bool = True
+    # Компактные варианты: участники пишут суть сжато (до compact_words слов), без оформления из запроса;
+    # полный ответ в нужном формате пишет только председатель. Заметно дешевле: модели читают короткие тексты.
+    compact_proposals: bool = False
+    compact_words: int = Field(default=700, ge=150, le=5000)
     devil_advocate: str | None = None
     runs_dir: str = "runs"
     branding: BrandingConfig = Field(default_factory=BrandingConfig)
@@ -131,6 +135,7 @@ def with_overrides(
     budget: float | None = None,
     chair_proposes: bool | None = None,
     fact_check: bool | None = None,
+    compact: bool | None = None,
 ) -> CouncilConfig:
     """Возвращает копию конфига с выбранными участниками/ролями/бюджетом, проверяя результат."""
     from pydantic import ValidationError
@@ -157,6 +162,8 @@ def with_overrides(
         data["chair_proposes"] = chair_proposes
     if fact_check is not None:
         data["fact_check"]["enabled"] = fact_check
+    if compact is not None:
+        data["compact_proposals"] = compact
     try:
         return CouncilConfig.model_validate(data)
     except ValidationError as e:

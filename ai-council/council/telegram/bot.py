@@ -80,6 +80,7 @@ class ChatSettings:
     budget: float | None = None
     demo: bool = False
     fact_check: bool | None = None  # None — как в config.yaml
+    compact: bool | None = None     # компактные варианты; None — как в config.yaml
 
 
 @dataclass
@@ -308,7 +309,7 @@ class CouncilBot:
         if members is not None:
             known = {m.name for m in base.members}
             members = [m for m in members if m in known]  # участника могли удалить из config.yaml
-        return with_overrides(base, members=members, budget=s.budget, fact_check=s.fact_check)
+        return with_overrides(base, members=members, budget=s.budget, fact_check=s.fact_check, compact=s.compact)
 
     async def send(self, chat_id: int, text: str, **kw: Any) -> dict[str, Any] | None:
         """Отправка длинного HTML с разбиением; при ошибке разметки — простым текстом."""
@@ -731,7 +732,9 @@ class CouncilBot:
         kb.append([self._btn(f"👥 Участники ({n})", "view:members"),
                    self._btn(f"🧪 Демо: {'вкл' if s.demo else 'выкл'}", "demo")])
         fc_on = cfg.fact_check.enabled if cfg else bool(s.fact_check)
-        kb.append([self._btn(f"🔎 Проверка фактов: {'вкл' if fc_on else 'выкл'}", "facts")])
+        cp_on = cfg.compact_proposals if cfg else bool(s.compact)
+        kb.append([self._btn(f"🔎 Проверка фактов: {'вкл' if fc_on else 'выкл'}", "facts"),
+                   self._btn(f"📝 Компактно: {'вкл' if cp_on else 'выкл'}", "compact")])
         if p.attachments:
             kb.append([self._btn(f"🗑 Убрать вложения ({len(p.attachments)})", "noatt")])
         kb.append([self._btn("▶️ Начать", "go"), self._btn("✖️ Отмена", "drop")])
@@ -770,7 +773,7 @@ class CouncilBot:
         models = None if s.demo else await self.catalog.get()
         vision = vision_map(cfg, models)
         imgs = sum(1 for a in p.attachments if a.kind == "image")
-        lengths = await asyncio.to_thread(learn_lengths, self.runs_dir)
+        lengths = await asyncio.to_thread(learn_lengths, self.runs_dir, compact=cfg.compact_proposals)
         est = estimate(cfg, pricing, mode=mode, rounds=s.rounds,
                        n_options=len(p.options) if p.options else None, has_criteria=False,
                        doc_tokens=sum(a.tokens for a in p.attachments if a.kind == "document"),
@@ -870,6 +873,9 @@ class CouncilBot:
         elif kind == "facts":
             current = s.fact_check if s.fact_check is not None else self.base_config().fact_check.enabled
             s.fact_check = not current
+        elif kind == "compact":
+            current = s.compact if s.compact is not None else self.base_config().compact_proposals
+            s.compact = not current
         elif kind == "view" and value in ("main", "members"):
             p.view = value
         elif kind == "mem":
@@ -942,7 +948,8 @@ class CouncilBot:
                 res.request = {"question": p.question, "mode": mode, "rounds": s.rounds, "criteria": [],
                                "options": p.options or [], "members": [m.name for m in cfg.active_members],
                                "chair": cfg.chair, "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
-                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled}
+                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
+                               "compact_proposals": cfg.compact_proposals}
                 progress.saving = True
                 r = self.running.get(chat_id)
                 if r:

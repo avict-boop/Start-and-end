@@ -112,6 +112,7 @@ class RunRequest(BaseModel):
     devil_advocate: str | None = None  # "" — без адвоката дьявола
     chair_proposes: bool | None = None  # None — как в config.yaml
     fact_check: bool | None = None      # проверка фактов лидеров; None — как в config.yaml
+    compact: bool | None = None         # компактные варианты; None — как в config.yaml
     budget: float | None = Field(default=None, gt=0, le=100)
     mock: bool = False
     attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)  # id загрузок
@@ -142,6 +143,12 @@ class RunState:
 
     def push(self, event: dict[str, Any]) -> None:
         self.events.append(stamp(event))
+        self._changed.set()
+        self._changed = asyncio.Event()
+
+    def finish(self, status: str) -> None:
+        """Отметить заседание завершённым и разбудить тех, кто ждёт событий."""
+        self.status = status
         self._changed.set()
         self._changed = asyncio.Event()
 
@@ -190,7 +197,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         try:
             return with_overrides(base_config(), members=req.members, chair=req.chair,
                                   devil_advocate=req.devil_advocate, budget=req.budget,
-                                  chair_proposes=req.chair_proposes, fact_check=req.fact_check)
+                                  chair_proposes=req.chair_proposes, fact_check=req.fact_check,
+                                  compact=req.compact)
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
 
@@ -373,6 +381,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             "devil_advocate": cfg.devil_advocate,
             "chair_proposes": cfg.chair_proposes,
             "fact_check": {"enabled": cfg.fact_check.enabled, "model": cfg.fact_check.model, "top": cfg.fact_check.top},
+            "compact": {"enabled": cfg.compact_proposals, "words": cfg.compact_words},
             "mode": cfg.mode,
             "rounds": cfg.debate_rounds,
             "budget": cfg.max_cost_usd,
@@ -398,7 +407,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         rounds = cfg.debate_rounds if req.rounds is None else req.rounds
         atts = await asyncio.to_thread(load_uploads, req.attachments) if req.attachments else []
         vision = vision_map(cfg, models)
-        lengths = await asyncio.to_thread(learn_lengths, runs_dir(cfg))
+        lengths = await asyncio.to_thread(learn_lengths, runs_dir(cfg), compact=cfg.compact_proposals)
         mode_eff = "evaluate" if opts else req.mode
         est = estimate(cfg, pricing, mode=mode_eff, rounds=rounds,
                        n_options=len(opts) if opts else None, has_criteria=bool(req.clean_criteria),
@@ -482,6 +491,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 
         async def execute() -> None:
             nonlocal council
+            final = "error"
             log.info("заседание %s: старт (%s, участников %d)", sid, req.mode, len(cfg.active_members))
             try:
                 council = Council(cfg, client, on_event=on_event, vision=vision)
@@ -494,37 +504,41 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                "criteria": req.clean_criteria or [], "options": opts or [], "context": req.context or "",
                                "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
                                "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
-                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled}
+                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
+                               "compact_proposals": cfg.compact_proposals}
                 st.push({"type": "saving"})
                 await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts)
                 import shutil
                 for uid in req.attachments:  # черновики больше не нужны: файлы уже в архиве заседания
                     shutil.rmtree(uploads_dir() / uid, ignore_errors=True)
-                st.status = "done"
+                final = "done"
                 st.push({"type": "done", "id": sid, "total_cost": res.total_cost, "duration_s": res.duration_s,
                          "stats": jsonable(res.stats)})
-                log.info("заседание %s: готово, $%.4f, %s с", sid, res.total_cost, res.duration_s)
+                cached = sum(s.cached_tokens for s in res.stats.values())
+                log.info("заседание %s: готово, $%.4f, %s с, из кэша %d входных токенов",
+                         sid, res.total_cost, res.duration_s, cached)
                 failures = {n: s.failures for n, s in res.stats.items() if s.failures}
                 if failures:
                     log.warning("заседание %s: сбои участников: %s", sid, failures)
             except asyncio.CancelledError:
-                st.status = "cancelled"
+                final = "cancelled"
                 st.push({"type": "error", "message": "Заседание остановлено пользователем"})
                 log.info("заседание %s: остановлено пользователем", sid)
                 await asyncio.to_thread(keep_failed, "cancelled", "остановлено пользователем")
             except CouncilError as e:
-                st.status = "error"
+                final = "error"
                 st.push({"type": "error", "message": str(e)})
                 log.warning("заседание %s прервано: %s", sid, e)
                 await asyncio.to_thread(keep_failed, "error", str(e))
             except Exception as e:  # noqa: BLE001
                 log.exception("заседание %s упало", sid)
-                st.status = "error"
+                final = "error"
                 st.push({"type": "error", "message": f"внутренняя ошибка: {e!r}"})
                 import traceback
                 await asyncio.to_thread(keep_failed, "crash", traceback.format_exc())
             finally:
                 await asyncio.to_thread(save_events, runs_dir(cfg), sid, st.events)
+                st.finish(final)  # статус «завершено» — только когда журнал уже на диске
                 await client.aclose()
 
         finished = [r for r in runs.values() if r.status != "running"]

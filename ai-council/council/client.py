@@ -15,6 +15,15 @@ RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 ProgressFn = Callable[[dict[str, Any]], None]
 
 
+def _cached(usage: dict[str, Any]) -> int:
+    """Входные токены, прочитанные из кэша (OpenRouter: usage.prompt_tokens_details.cached_tokens)."""
+    details = usage.get("prompt_tokens_details") or {}
+    try:
+        return int(details.get("cached_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _as_text(content: Any) -> str:
     """Текст ответа. Некоторые провайдеры присылают content списком частей ([{"type": "text", "text": …}, …])."""
     if content is None:
@@ -93,6 +102,7 @@ class Completion:
     model: str = ""
     finish_reason: str | None = None  # "length" — ответ обрезан по лимиту токенов
     max_tokens: int = 0  # с каким лимитом получен ответ (после возможных увеличений)
+    cached_tokens: int = 0  # сколько входных токенов прочитано из кэша провайдера (дешевле)
 
 
 class LLMClient(Protocol):
@@ -208,6 +218,7 @@ class OpenRouterClient:
                 e.spent = spent
                 raise
             spent.prompt_tokens += res["prompt_tokens"]
+            spent.cached_tokens += res.get("cached_tokens", 0)
             spent.completion_tokens += res["completion_tokens"]
             spent.cost += res["cost"]
             text, finish = res["text"], res["finish"]
@@ -241,6 +252,7 @@ class OpenRouterClient:
                 model=res["model"] or model,
                 finish_reason=finish,
                 max_tokens=payload["max_tokens"],
+                cached_tokens=spent.cached_tokens,
             )
         raise ProviderError(
             f"{model}: не удалось получить ответ после {self.max_retries + 1} попыток: {last_error}",
@@ -290,6 +302,7 @@ class OpenRouterClient:
             "text": _as_text((choice.get("message") or {}).get("content")),
             "finish": choice.get("finish_reason") or choice.get("native_finish_reason"),
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "cached_tokens": _cached(usage),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "cost": float(usage.get("cost") or 0.0),
             "model": data.get("model") or model,
@@ -343,6 +356,7 @@ class OpenRouterClient:
             "text": "".join(text),
             "finish": finish,
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+            "cached_tokens": _cached(usage),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "cost": float(usage.get("cost") or 0.0),
             "model": real_model,

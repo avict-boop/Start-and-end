@@ -252,6 +252,8 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
         rows.append(("Согласие совета", v.agreement_line))
     if v.chair_note:
         rows.append(("Роли", v.chair_note))
+    if v.compact_note:
+        rows.append(("Варианты", v.compact_note))
     for k, val in rows:
         val_html = val if k == "Критерии" else _e(val)
         add(f"<div><span>{k}</span><span>{val_html}</span></div>")
@@ -399,6 +401,8 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
             f'<td class="num">{s.get("prompt_tokens", 0)} / {s.get("completion_tokens", 0)}</td>'
             f'<td class="num">${float(s.get("cost", 0)):.4f}</td></tr>')
     add(f'<tr><th colspan="3">Итого</th><th class="num">${v.cost:.4f}</th></tr></tbody></table>')
+    if v.cache_line:
+        add(f'<p class="muted small">{_e(v.cache_line)}.</p>')
     fails = v.failures()
     if fails:
         add("<h3>Сбои</h3><ul>" + "".join(

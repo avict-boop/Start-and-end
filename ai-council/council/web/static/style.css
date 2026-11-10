@@ -485,6 +485,7 @@ label.check.small:has(#chairProposes) { display: flex; gap: .45rem; align-items:
 .fact-block ul { margin: .3rem 0 0; padding-left: 1.1rem; list-style: none; }
 .fact-block li { margin: .35rem 0; }
 .fact-refuted > b { color: var(--bad, #c0392b); }
+label.check.small:has(#compact) { display: flex; gap: .45rem; align-items: center; margin: -.4rem 0 .8rem; color: var(--muted); }
 label.check.small:has(#factCheck) { display: flex; gap: .45rem; align-items: center; margin: -.4rem 0 .8rem; color: var(--muted); }
 
 /* ------------------------------------------------------------ настройки */

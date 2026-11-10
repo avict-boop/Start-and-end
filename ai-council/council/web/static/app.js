@@ -147,6 +147,8 @@ function refreshRoleSelects() {
   fill($("devil"), true, config.devil_advocate);
   $("chairProposes").checked = !!config.chair_proposes;
   $("factCheck").checked = !!(config.fact_check && config.fact_check.enabled);
+  $("compact").checked = !!(config.compact && config.compact.enabled);
+  $("compactHint").textContent = config.compact ? `(до ${config.compact.words} слов; полный формат — только в итоге)` : "";
   $("factCheckHint").textContent = config.fact_check ? `(${config.fact_check.model}, топ-${config.fact_check.top})` : "";
 }
 
@@ -170,6 +172,7 @@ function payload() {
     devil_advocate: $("devil").value,
     chair_proposes: $("chairProposes").checked,
     fact_check: $("factCheck").checked,
+    compact: $("compact").checked,
     budget: Number($("budget").value) || null,
     mock: $("mock").checked,
     attachments: uploads.filter((u) => u.status === "ready").map((u) => u.meta.id),
@@ -225,6 +228,7 @@ $("repeatBtn").addEventListener("click", async () => {
   if (r.devil_advocate !== undefined) $("devil").value = r.devil_advocate || "";
   if (r.chair_proposes !== undefined) $("chairProposes").checked = !!r.chair_proposes;
   if (r.fact_check !== undefined) $("factCheck").checked = !!r.fact_check;
+  if (r.compact_proposals !== undefined) $("compact").checked = !!r.compact_proposals;
   if (r.budget) $("budget").value = r.budget;
   uploads = (data.uploads || []).map((m) => ({ key: ++uploadSeq, name: m.name, status: "ready", meta: m }));
   renderUploads();
@@ -373,7 +377,7 @@ async function initForm() {
 }
 
 $("modeSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setMode(b.dataset.mode); });
-for (const id of ["question", "options", "criteria", "rounds", "mock", "budget"]) $(id).addEventListener("input", () => { $("estimate").hidden = true; });
+for (const id of ["question", "options", "criteria", "rounds", "mock", "budget", "compact", "factCheck"]) $(id).addEventListener("input", () => { $("estimate").hidden = true; });
 
 $("estimateBtn").addEventListener("click", async () => {
   const e = await doEstimate();

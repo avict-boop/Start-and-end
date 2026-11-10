@@ -65,7 +65,8 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
             f"| Критерии | {_cell(', '.join(v.criteria)) or '—'} |",
             f"| Стоимость | ${v.cost:.4f} |", f"| Длительность | {v.duration} |",
             *([f"| Согласие совета | {_cell(v.agreement_line)} |"] if v.agreement_line else []),
-            *([f"| Роли | {_cell(v.chair_note)} |"] if v.chair_note else []), "",
+            *([f"| Роли | {_cell(v.chair_note)} |"] if v.chair_note else []),
+            *([f"| Варианты | {_cell(v.compact_note)} |"] if v.compact_note else []), "",
             f"## Решение совета: вариант {w} — {v.title(w)} ({v.author(w)})" if w else "## Решение совета", "",
             vd.get("final_answer", ""), "",
         ]
@@ -175,6 +176,8 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
         out.append(f"| {name} | {s.get('calls', 0)} | {s.get('prompt_tokens', 0)} / {s.get('completion_tokens', 0)} "
                    f"| ${float(s.get('cost', 0)):.4f} |")
     out.append(f"| **Итого** | | | **${v.cost:.4f}** |")
+    if v.cache_line:
+        out += ["", f"*{v.cache_line}.*"]
     fails = v.failures()
     if fails:
         out += ["", "### Сбои", "", *[f"- **{n}** ({st}): {err}" for n, st, err in fails]]

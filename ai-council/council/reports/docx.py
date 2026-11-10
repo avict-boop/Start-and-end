@@ -477,6 +477,8 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
         meta.append(("Согласие совета", v.agreement_line))
     if v.chair_note:
         meta.append(("Роли", v.chair_note))
+    if v.compact_note:
+        meta.append(("Варианты", v.compact_note))
     _meta_table(doc, meta)
     if not summary:
         toc_title = doc.add_paragraph().add_run("СОДЕРЖАНИЕ")  # не заголовок — иначе попадёт в само оглавление
@@ -660,6 +662,10 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
     _widths(t, [5.0, 2.2, 5.0, 3.8])
     cells[0].paragraphs[0].add_run("Итого").bold = True
     cells[3].paragraphs[0].add_run(f"${v.cost:.4f}").bold = True
+    if v.cache_line:
+        cr = doc.add_paragraph().add_run(v.cache_line + ".")
+        cr.font.size = Pt(8.5)
+        cr.font.color.rgb = MUTED
     fails = v.failures()
     if fails:
         _heading(doc, "Сбои", 3)

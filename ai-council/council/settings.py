@@ -18,7 +18,8 @@ from ruamel.yaml.comments import CommentedMap
 from .config import BrandingConfig, CouncilConfig, FactCheckConfig, MemberConfig
 
 TOP_KEYS = ("language", "mode", "debate_rounds", "min_quorum", "max_cost_usd", "temperature", "max_tokens",
-            "reasoning_effort", "chair", "chair_proposes", "chair_follows_vote", "devil_advocate", "transcribe_model")
+            "reasoning_effort", "chair", "chair_proposes", "chair_follows_vote", "devil_advocate", "transcribe_model",
+            "compact_proposals", "compact_words")
 SECTIONS = {"branding": BrandingConfig, "fact_check": FactCheckConfig}
 MEMBER_KEYS = ("name", "model", "enabled", "reasoning_effort", "temperature", "max_tokens")
 MAX_BACKUPS = 20

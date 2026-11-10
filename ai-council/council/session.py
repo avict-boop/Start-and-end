@@ -60,6 +60,7 @@ class MemberStats:
     completion_tokens: int = 0
     cost: float = 0.0
     failures: list[str] = field(default_factory=list)
+    cached_tokens: int = 0  # входные токены, прочитанные из кэша провайдера
 
 
 @dataclass
@@ -157,6 +158,9 @@ class Council:
         self.image_notes_by = ""
         self.history: list[dict[str, Any]] = []
         self.chair_judge = False  # председатель без своего варианта (только судья и автор итога)
+        self.head = ""            # общее начало запросов этапов 1–6 (вопрос) — для кэша провайдера
+        # «Компактные варианты»: число слов для участников (0 — обычный режим, полный формат у всех)
+        self.compact = config.compact_proposals and config.compact_words or 0
 
     # ------------------------------------------------------------------ helpers
 
@@ -189,6 +193,7 @@ class Council:
         s.calls += 1
         s.prompt_tokens += comp.prompt_tokens
         s.completion_tokens += comp.completion_tokens
+        s.cached_tokens += getattr(comp, "cached_tokens", 0) or 0
         s.cost += comp.cost
         self._emit("cost", member=member.name, total=self.total_cost)
 
@@ -206,11 +211,13 @@ class Council:
         if stage == "factcheck":
             system = prompts.FACTCHECK_SYSTEM.format(language=self.cfg.language)
         else:
+            # Одна и та же для участника на всех этапах: провайдеры кэшируют одинаковое начало запроса
+            # (системная инструкция + вложения + вопрос), и повторное чтение стоит дешевле.
             system = prompts.system(
                 member.name,
                 self.cfg.language,
-                devil=member.name == self.cfg.devil_advocate and stage in {"proposal", "critique", "revision"},
-                chair=member.name == self.cfg.chair and stage in {"framing", "verdict"},
+                devil=member.name == self.cfg.devil_advocate,
+                chair=member.name == self.cfg.chair,
                 judge_only=self.chair_judge,
             )
         base_messages = [{"role": "system", "content": system},
@@ -268,6 +275,7 @@ class Council:
                 "raw": comp.text,
                 "cost": comp.cost,
                 "tokens": [comp.prompt_tokens, comp.completion_tokens],
+                "cached": getattr(comp, "cached_tokens", 0) or 0,
             }
             if acc:
                 entry["continuation"] = continuations
@@ -366,22 +374,36 @@ class Council:
 
     def _with_attachments(self, member: MemberConfig, stage: str, prompt: str) -> str | list[dict[str, Any]]:
         """Добавляет к запросу вложения: текст документов и картинки (или их описание для «незрячих»)."""
+        sees = self.can_see(member)
+        parts: list[dict[str, Any]] = []
         if stage == "vote":
             # голосующие видят и документы, если они небольшие (большие — дорого, их уже разобрали на критике)
             docs = [a for a in self.attachments if a.kind == "document"]
-            if docs and sum(len(a.text) for a in docs) <= self.VOTE_DOC_CHARS:
-                return documents_block(self.attachments) + "\n\n" + prompt
-            return prompt
-        if not (self.attachments or self.history) or stage not in self.ATTACHMENT_STAGES:
-            return prompt
-        sees = self.can_see(member)
-        extra = [x for x in (prompts.history_block(self.history), documents_block(self.attachments),
-                             images_note(self.attachments, self.image_notes, sees)) if x]
-        text = "\n\n".join(extra + [prompt])
-        parts = image_parts(self.attachments) if sees else []
-        if not parts:
-            return text
-        return [{"type": "text", "text": text}, *parts]
+            extra = [documents_block(self.attachments)] if docs and sum(len(a.text) for a in docs) <= self.VOTE_DOC_CHARS else []
+        elif (self.attachments or self.history) and stage in self.ATTACHMENT_STAGES:
+            extra = [x for x in (prompts.history_block(self.history), documents_block(self.attachments),
+                                 images_note(self.attachments, self.image_notes, sees)) if x]
+            parts = image_parts(self.attachments) if sees else []
+        else:
+            extra = []
+        # Общее для всех этапов начало (вложения + вопрос) идёт первым — его кэширует провайдер.
+        head = self.head if self.head and prompt.startswith(self.head) else ""
+        shared = "\n\n".join(extra + ([head] if head else []))
+        rest = prompt[len(head):] if head else prompt
+        if not shared:
+            return prompt if not parts else [{"type": "text", "text": prompt}, *parts]
+        if self._explicit_cache(member) and len(shared) >= self.CACHE_MIN_CHARS:
+            # Claude и Gemini кэшируют только по явной метке: отмечаем конец общего начала
+            return [{"type": "text", "text": shared, "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": rest}, *parts]
+        text = shared + ("" if head else "\n\n") + rest
+        return text if not parts else [{"type": "text", "text": text}, *parts]
+
+    CACHE_MIN_CHARS = 4000  # меньше ~1024 токенов провайдеры не кэшируют
+
+    @staticmethod
+    def _explicit_cache(member: MemberConfig) -> bool:
+        return member.model.startswith(("anthropic/", "google/"))
 
     async def _describe_images(self, members: list[MemberConfig], question: str) -> None:
         """Если среди участников есть модели без зрения — одна из «зрячих» описывает картинки текстом."""
@@ -464,6 +486,10 @@ class Council:
                        blind=[m.name for m in members if not self.can_see(m)])
             await self._describe_images(members, question)
 
+        if not options and not self.cfg.chair_proposes:
+            if len([m for m in members if m.name != chair.name]) >= self.cfg.min_quorum:
+                self.chair_judge = True
+
         # 0. Постановка задачи
         refined = question
         if criteria:
@@ -479,6 +505,7 @@ class Council:
                 criteria = []
             criteria = criteria or ["Эффективность", "Реалистичность", "Риски"]
         self._emit("framing", refined_question=refined, criteria=criteria)
+        self.head = prompts.head(refined, question)
 
         # 1. Предложения (вслепую) + 2. анонимизация
         if options:
@@ -493,17 +520,12 @@ class Council:
         else:
             # Председатель по умолчанию не предлагает свой вариант (нет конфликта «автор и судья»),
             # если без него хватает участников для кворума.
-            proposers = members
-            if not self.cfg.chair_proposes:
-                others_ = [m for m in members if m.name != chair.name]
-                if len(others_) >= self.cfg.min_quorum:
-                    proposers = others_
-                    self.chair_judge = True
+            proposers = [m for m in members if m.name != chair.name] if self.chair_judge else members
             self._emit("stage", stage="proposal", title="Независимые предложения",
                        chair_proposes=not self.chair_judge)
             got = await self._parallel(
                 "proposal",
-                {m.name: self._ask(m, "proposal", prompts.proposal(refined, criteria, context, question), Proposal)
+                {m.name: self._ask(m, "proposal", prompts.proposal(refined, criteria, context, question, self.compact), Proposal)
                  for m in proposers},
             )
             if len(got) < self.cfg.min_quorum:
@@ -532,7 +554,7 @@ class Council:
                 jobs[m.name] = self._ask(
                     m,
                     "critique",
-                    prompts.critique(refined, criteria, target, question),
+                    prompts.critique(refined, criteria, target, question, bool(self.compact)),
                     CritiqueSet,
                     check=lambda cs, e=expected: normalize_critique(cs, e, criteria),
                     meta={"labels": expected, "criteria": criteria},
@@ -557,7 +579,8 @@ class Council:
                 jobs[m.name] = self._ask(
                     m,
                     "revision",
-                    prompts.revision(refined, criteria, own, proposals[own], feedback, others(m.name), question),
+                    prompts.revision(refined, criteria, own, proposals[own], feedback, others(m.name), question,
+                                     self.compact),
                     Revision,
                     check=_normalize_revision,
                     meta={"label": own},
@@ -582,7 +605,7 @@ class Council:
             jobs[m.name] = self._ask(
                 m,
                 "vote",
-                prompts.vote(refined, criteria, target),
+                prompts.vote(refined, criteria, target, question, bool(self.compact)),
                 Ballot,
                 check=check_ballot,
                 meta={"labels": expected},
@@ -633,7 +656,8 @@ class Council:
                 prompts.verdict(refined, criteria, proposals, tally_text(rows), notes, question,
                                 (f"{agree['level']} (mean Kendall tau between ballots = {agree['tau']:.2f}; "
                                  "1 = identical rankings, 0 = unrelated)") if agree else "",
-                                prompts.factcheck_block(facts), ballot_notes, leader=leader, follow_vote=follow),
+                                prompts.factcheck_block(facts), ballot_notes, leader=leader, follow_vote=follow,
+                                compact=bool(self.compact)),
                 Verdict,
                 check=check_verdict,
                 meta={"labels": valid, "leader": rows[0].label},

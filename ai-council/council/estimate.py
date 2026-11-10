@@ -15,8 +15,8 @@ from .config import CouncilConfig, Mode
 # если истории нет — значения по умолчанию ниже.
 INSTR = {"framing": 500, "proposal": 800, "critique": 1100, "revision": 1400, "vote": 700, "verdict": 1400,
          "factcheck": 700, "describe": 500}
-DEFAULT_OUT = {"framing": 300, "proposal": 2500, "critique": 350, "revision": 3000, "vote": 500,
-               "verdict": 4000, "factcheck": 900}   # critique — на ОДИН оцениваемый вариант
+DEFAULT_OUT = {"framing": 300, "proposal": 4000, "critique": 350, "revision": 4500, "vote": 500,
+               "verdict": 5000, "factcheck": 900}   # critique — на ОДИН оцениваемый вариант
 FEEDBACK_PER_REVIEW = 250   # отзыв одного рецензента на доработке
 NOTES_PER_PROPOSAL = 150    # сводка критики для председателя
 FACT_CHECKER = "факт-чек"  # как в session.FACT_CHECKER
@@ -149,7 +149,12 @@ def estimate(
     from .attachments import IMAGE_TOKENS
 
     learned = dict(lengths or {})
-    out = {k: int(learned.get(k) or v) for k, v in DEFAULT_OUT.items()}
+    defaults = dict(DEFAULT_OUT)
+    if cfg.compact_proposals:
+        # компактные варианты: ~2,2 токена на слово по-русски (вместе с обоснованием, плюсами и рисками)
+        defaults["proposal"] = int(cfg.compact_words * 2.2) + 400
+        defaults["revision"] = int(cfg.compact_words * 2.2) + 700
+    out = {k: int(learned.get(k) or v) for k, v in defaults.items()}
     est = Estimate(learned_from=int(learned.get("sessions") or 0), lengths=out)
     q = int(question_chars / 3 * 1.3)  # уточнённый вопрос + исходный дословно
     est.question_tokens = q
@@ -268,12 +273,13 @@ class ModelCatalog:
 _LEARN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
-def learn_lengths(runs_dir: str | Any, limit: int = 30) -> dict[str, Any]:
+def learn_lengths(runs_dir: str | Any, limit: int = 30, *, compact: bool = False) -> dict[str, Any]:
     """Сколько токенов модели реально пишут на каждом этапе — по стенограммам последних заседаний.
 
     Для каждого участника и этапа суммируются выходные токены ВСЕХ попыток (продолжения длинных ответов,
     повторы, скрытые рассуждения) и делятся на число принятых ответов. Критика — на один оцениваемый вариант.
     Берётся медиана по заседаниям. Возвращает {"proposal": …, "revision": …, …, "sessions": N, "recent": [...]}.
+    compact — учитывать только заседания с компактными вариантами (или только без них): длины там разные.
     """
     import json
     from pathlib import Path
@@ -283,7 +289,7 @@ def learn_lengths(runs_dir: str | Any, limit: int = 30) -> dict[str, Any]:
     files = sorted((p for p in d.glob("*.json") if not p.name.endswith(".events.json")), reverse=True)[:limit] \
         if d.is_dir() else []
     stamp = max((p.stat().st_mtime for p in files), default=0.0)
-    key = str(d.resolve()) if d.exists() else str(d)
+    key = (str(d.resolve()) if d.exists() else str(d)) + f"|compact={compact}"
     hit = _LEARN_CACHE.get(key)
     if hit and hit[0] == stamp:
         return hit[1]
@@ -296,7 +302,7 @@ def learn_lengths(runs_dir: str | Any, limit: int = 30) -> dict[str, Any]:
         except (OSError, ValueError):
             continue
         tr = data.get("transcript") or []
-        if not tr:
+        if not tr or bool((data.get("request") or {}).get("compact_proposals")) != compact:
             continue
         groups: dict[tuple[str, str], dict[str, float]] = {}
         for e in tr:

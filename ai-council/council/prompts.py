@@ -56,6 +56,23 @@ def _original(question: str, original: str | None) -> str:
             f"format of the answer — they apply to your answer):\n<<<\n{original}\n>>>\n")
 
 
+def head(question: str, original: str | None) -> str:
+    """Начало запроса, одинаковое на этапах предложений, критики, доработки, голосования и итога.
+    Одинаковое начало провайдеры кэшируют, и повторное чтение вопроса стоит дешевле."""
+    return f"Question for the council:\n{question}\n{_original(question, original)}"
+
+
+def compact_rule(words: int) -> str:
+    return (f"COMPACT MODE: give the substance compactly — the \"summary\" at most about {words} words. Do NOT apply the "
+            "structure, sections, tables or report format required by the user's request: the chair will write the "
+            "final answer in that format from the proposals. Include every key point, fact, number and recommendation "
+            "the final answer will need; drop introductions, repetition and decoration.")
+
+
+COMPACT_JUDGE = ("Proposals are compact on purpose (the chair writes the final formatted answer): judge their substance, "
+                 "not missing formatting, sections or length.")
+
+
 FORMAT_RULE = ("If the user's request specifies a structure, sections, a table or another format for the answer, "
                "follow it exactly and cover every requested item.")
 
@@ -96,15 +113,16 @@ JSON format:
 {{"refined_question": "...", "criteria": ["...", "..."]}}"""
 
 
-def proposal(question: str, criteria: list[str], context: str | None, original: str | None = None) -> str:
-    return f"""Question for the council:
-{question}
-{_original(question, original)}{_context(context)}
+def proposal(question: str, criteria: list[str], context: str | None, original: str | None = None,
+             compact: int = 0) -> str:
+    """compact — число слов в режиме «Компактные варианты» (0 — обычный режим)."""
+    rule = compact_rule(compact) if compact else FORMAT_RULE
+    return f"""{head(question, original)}{_context(context)}
 The answers will be judged by these criteria:
 {_criteria(criteria)}
 
 Propose YOUR best answer/option. Other members answer independently; you will not see them yet.
-{FORMAT_RULE} The "summary" field holds the answer itself.
+{rule} The "summary" field holds the answer itself.
 
 JSON format:
 {{"title": "short name of your option",
@@ -115,12 +133,12 @@ JSON format:
   "confidence": 0.0-1.0}}"""
 
 
-def critique(question: str, criteria: list[str], proposals: dict[str, Proposal], original: str | None = None) -> str:
+def critique(question: str, criteria: list[str], proposals: dict[str, Proposal], original: str | None = None,
+             compact: bool = False) -> str:
     labels = ", ".join(proposals)
     example_scores = ", ".join(f'"{c}": 1-10' for c in criteria)
-    return f"""Question for the council:
-{question}
-{_original(question, original)}
+    note = f"\n{COMPACT_JUDGE}\n" if compact else ""
+    return f"""{head(question, original)}
 Review each of these anonymous proposals:
 
 {proposals_block(proposals)}
@@ -129,7 +147,7 @@ Score every proposal on every criterion from 1 to 10:
 {_criteria(criteria)}
 
 {SCALE}
-
+{note}
 You must review exactly these labels: {labels}. Use the criteria names exactly as written.
 
 JSON format:
@@ -147,12 +165,12 @@ def revision(
     feedback: list[dict],
     others: dict[str, Proposal],
     original: str | None = None,
+    compact: int = 0,
 ) -> str:
     fb = json.dumps(feedback, ensure_ascii=False, indent=1) if feedback else "(no feedback received)"
     others_full = "\n\n".join(_proposal_block(l, p) for l, p in others.items())  # целиком, без обрезки
-    return f"""Question for the council:
-{question}
-{_original(question, original)}
+    rule = compact_rule(compact) if compact else FORMAT_RULE
+    return f"""{head(question, original)}
 Criteria:
 {_criteria(criteria)}
 
@@ -175,7 +193,7 @@ Do this in order:
    it is wrong or clearly inferior — name it. That others agree with each other is not a reason by itself, and do
    not change things just to please critics. If another proposal is clearly better overall, you may rebuild yours
    on it — then say so.
-{FORMAT_RULE}
+{rule}
 
 JSON format:
 {{"title": "...", "summary": "the full revised answer", "reasoning": "...", "pros": ["..."], "risks": ["..."],
@@ -189,11 +207,11 @@ JSON format:
 switched — core approach replaced (for example, rebuilt on another proposal)."""
 
 
-def vote(question: str, criteria: list[str], proposals: dict[str, Proposal]) -> str:
+def vote(question: str, criteria: list[str], proposals: dict[str, Proposal], original: str | None = None,
+         compact: bool = False) -> str:
     labels = ", ".join(proposals)
-    return f"""Question for the council:
-{question}
-
+    note = f"\n{COMPACT_JUDGE}" if compact else ""
+    return f"""{head(question, original)}
 Criteria:
 {_criteria(criteria)}
 
@@ -202,7 +220,7 @@ Final proposals:
 {proposals_block(proposals)}
 
 Rank ALL of these proposals from best to worst. Include every label exactly once: {labels}.
-Judge substance against the criteria and the request, not length or style.
+Judge substance against the criteria and the request, not length or style.{note}
 
 JSON format:
 {{"ranking": ["best label", "...", "worst label"], "rationale": "why the top choice wins"}}"""
@@ -220,6 +238,7 @@ def verdict(
     ballot_notes: str = "",
     leader: str = "",
     follow_vote: bool = False,
+    compact: bool = False,
 ) -> str:
     labels = ", ".join(proposals)
     if follow_vote and leader:
@@ -241,9 +260,11 @@ def verdict(
         agree += ("\nIndependent web fact-check of the leading proposals:\n" + facts + "\n"
                   "Do not repeat refuted claims in final_answer (correct them using the fact-check); present unclear "
                   "ones as uncertain. A proposal resting on refuted facts is a weaker candidate.\n")
-    return f"""Question for the council:
-{question}
-{_original(question, original)}
+    if compact:
+        agree += ("\nThe proposals were written compactly on purpose, without the requested format. Your final_answer "
+                  "is the full deliverable: expand the winning proposal (with the best ideas of others) into the complete "
+                  "answer in exactly the structure and format the user requested.\n")
+    return f"""{head(question, original)}
 Criteria:
 {_criteria(criteria)}
 

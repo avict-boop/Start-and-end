@@ -323,6 +323,25 @@ class View:
                 for a, b in zip(rows, rows[1:]) if a.get("tie_break")]
 
     @property
+    def cache_line(self) -> str:
+        """«Из кэша провайдеров прочитано 120 000 из 400 000 входных токенов (30%) — они стоят дешевле»."""
+        cached = sum(int((s or {}).get("cached_tokens") or 0) for s in self.stats.values())
+        total = sum(int((s or {}).get("prompt_tokens") or 0) for s in self.stats.values())
+        if not cached or not total:
+            return ""
+        def n(x: int) -> str:
+            return f"{x:,}".replace(",", " ")
+        return (f"Из кэша провайдеров прочитано {n(cached)} из {n(total)} входных токенов ({cached / total:.0%}) — "
+                "повторно прочитанные вопрос и вложения стоят дешевле")
+
+    @property
+    def compact_note(self) -> str:
+        """Заседание шло в режиме «Компактные варианты»."""
+        if (self.d.get("request") or {}).get("compact_proposals"):
+            return "компактные — участники писали суть сжато, полный формат — только в итоговом решении"
+        return ""
+
+    @property
     def chair_note(self) -> str:
         """«Председатель claude — без своего варианта» (только для новых заседаний, где это так)."""
         if self.d.get("chair_proposed", True) or self.d.get("mode") == "evaluate":
