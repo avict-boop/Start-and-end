@@ -112,7 +112,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 .field { display: flex; flex-direction: column; gap: .35rem; margin-bottom: 1rem; min-width: 0; }
 .label, .field > span { font-weight: 650; font-size: .9rem; }
 .field em { font-weight: 400; color: var(--muted); font-style: normal; }
-.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; align-items: start; }
 @media (max-width: 420px) { .row2 { grid-template-columns: 1fr; gap: 0; } }
 .check { display: flex; align-items: flex-start; gap: .6rem; cursor: pointer; font-size: .95rem; margin: .4rem 0; }
 .check.small { font-size: .9rem; }
@@ -273,7 +273,7 @@ main { min-width: 0; padding: 2rem clamp(1rem, 3vw, 2.5rem) 3rem; max-width: 118
 details[open] > summary .chev { transform: rotate(180deg); }
 .chev { transition: transform .15s; color: var(--muted); }
 .params-body { padding: .25rem 1.1rem 1.1rem; border-top: 1px solid var(--line); }
-.params-body .field:first-child { margin-top: .9rem; }
+.params-body > .field:first-child { margin-top: .9rem; }  /* только верхний уровень — не первое поле в паре */
 .toggles { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: .3rem 0 1rem; padding: .3rem 0; }
 .budget-field input { max-width: 12rem; }
 
@@ -671,3 +671,7 @@ body.modal-open { overflow: hidden; }
 .proposal, .proposal .changes, .verdict, .verdict-grid, .fold-body, .modal-body, .fact-block, .ballot, .tbar, .estimate, .arc-item { overflow-wrap: anywhere; min-width: 0; }
 .md a, .md code, .changes a, .lists a { overflow-wrap: anywhere; word-break: break-word; }
 .md td a, .md td code { word-break: break-all; }
+
+/* логотип — ссылка на стартовый экран */
+a.brand { color: var(--text); text-decoration: none; border-radius: 10px; }
+a.brand:hover .brand-name { color: var(--accent); }

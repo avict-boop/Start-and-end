@@ -657,20 +657,30 @@ function showView(name) {
   if (name !== "session") document.title = BASE_TITLE;
 }
 
+// переход по разделам — новым шагом в истории браузера, чтобы работала кнопка «Назад» (и жест «назад» на телефоне)
+const sameHash = (a, b) => { try { return decodeURIComponent(a || "") === decodeURIComponent(b || ""); } catch { return a === b; } };
+function go(hash) {
+  const cur = location.hash === "#" || location.hash === "#/" ? "" : location.hash;
+  if (sameHash(cur, hash)) return;
+  history.pushState(null, "", hash || location.pathname + location.search);
+}
+
 function goCompose() {
   closeStream();
   current = null;
-  if (location.hash) history.replaceState(null, "", location.pathname);
   showView("empty");
   markActiveHistory();
 }
 
-$("newBtn").addEventListener("click", () => {
+function goHome() {
   const wasHere = view === "empty";
+  go("");
   goCompose();
   window.scrollTo({ top: 0 });
   if (wasHere || !matchMedia("(max-width: 899px)").matches) $("question").focus();
-});
+}
+$("newBtn").addEventListener("click", goHome);
+$("brandLink").addEventListener("click", (e) => { e.preventDefault(); goHome(); });
 
 // part: "" — полный отчёт, "summary" — итог с обоснованием, "decision" — только решение совета
 function reportUrl(id, fmt, download, part) {
@@ -795,7 +805,7 @@ async function loadArchive() {
 function openArchive() {
   closeStream();
   current = null;
-  history.replaceState(null, "", "#/archive");
+  go("#/archive");
   showView("archive");
   markActiveHistory();
   loadArchive();
@@ -828,7 +838,7 @@ $("history").addEventListener("click", async (e) => {
     e.stopPropagation();
     const title = del.closest("li").querySelector(".q").textContent;
     if (await deleteSession(del.dataset.del, title)) {
-      if (current && current.id === del.dataset.del) goCompose();
+      if (current && current.id === del.dataset.del) { go(""); goCompose(); }
       loadHistory();
     }
     return;
@@ -1491,7 +1501,8 @@ function openSession(id) {
   current = newState(id);
   const s = current;
   showView("session");
-  if (location.hash !== `#/s/${id}`) history.replaceState(null, "", `#/s/${encodeURIComponent(id)}`);
+  // адрес заседания (в том числе с открытым вариантом /p/X) уже стоит — новый шаг истории не нужен
+  if (!sameHash(location.hash.replace(/\/p\/[A-Z]$/, ""), `#/s/${encodeURIComponent(id)}`)) go(`#/s/${encodeURIComponent(id)}`);
   markActiveHistory();
   render(s);
   window.scrollTo({ top: 0 });
@@ -1597,7 +1608,7 @@ $("micBtn").addEventListener("click", (e) => {
 async function openStats() {
   closeStream();
   current = null;
-  history.replaceState(null, "", "#/stats");
+  go("#/stats");
   showView("stats");
   markActiveHistory();
   let d;
@@ -1738,15 +1749,20 @@ function openModal({ eyebrow = "", title = "", sub = "", tabs = [], foot = "" })
   $("mClose").focus();
 }
 
-function closeModal() {
+let modalPushed = false;  // окно варианта открыто нашим шагом истории — тогда закрываем его «назад»
+function closeModal(fromHistory = false) {
   if ($("modal").hidden) return;
+  if (!fromHistory && current && /\/p\/[A-Z]$/.test(location.hash)) {
+    if (modalPushed) { modalPushed = false; history.back(); return; }  // route() закроет окно
+    history.replaceState(null, "", `#/s/${encodeURIComponent(current.id)}`);
+  }
+  modalPushed = false;
   $("modal").hidden = true;
   document.body.classList.remove("modal-open");
-  if (current && /\/p\/[A-Z]$/.test(location.hash)) history.replaceState(null, "", `#/s/${encodeURIComponent(current.id)}`);
   if (modalReturnFocus && modalReturnFocus.focus) modalReturnFocus.focus();
 }
 
-$("mClose").addEventListener("click", closeModal);
+$("mClose").addEventListener("click", () => closeModal());
 $("modal").addEventListener("keydown", (e) => trapFocus(e, $("modal")));
 $("modal").addEventListener("click", (e) => { if (e.target === $("modal")) closeModal(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("dialog").hidden) closeModal(); });
@@ -1788,7 +1804,11 @@ function openProposal(s, label) {
   const sub = [`Автор: <b>${esc(authorOf(s, label))}</b>`, place ? `место в голосовании: ${place}` : "", win ? "🏆 победитель" : "",
     s.revised[label] ? "доработан после критики" : ""].filter(Boolean).join(" · ");
   const foot = s.done ? `<a class="button secondary" href="${reportUrl(s.id, "html")}#proposal-${label}" target="_blank" rel="noopener">Открыть в отчёте ↗</a>` : "";
-  history.replaceState(null, "", `#/s/${encodeURIComponent(s.id)}/p/${label}`);
+  const target = `#/s/${encodeURIComponent(s.id)}/p/${label}`;
+  if (!sameHash(location.hash, target)) {
+    if (/\/p\/[A-Z]$/.test(location.hash)) history.replaceState(null, "", target);  // другой вариант из открытого окна
+    else { history.pushState(null, "", target); modalPushed = true; }
+  }
   openModal({ eyebrow: `Вариант ${label}`, title: p.title, sub, tabs, foot });
 }
 
@@ -1833,6 +1853,7 @@ function route() {
     const id = decodeURIComponent(m[1]);
     if (current && current.id === id && view === "session") {
       if (m[2] && current.done) openProposal(current, m[2]);
+      else if (!m[2]) closeModal(true);  // «Назад» из окна варианта
       return;
     }
     openSession(id);
@@ -1843,6 +1864,9 @@ function route() {
     if (view !== "stats") openStats().then(() => markAllScroll($("statsBody")));
   } else if (location.hash.startsWith("#/settings")) {
     if (view !== "settings" && window.openSettings) window.openSettings();
+  } else if (!location.hash || location.hash === "#" || location.hash === "#/") {
+    closeModal(true);
+    if (view !== "empty") { goCompose(); window.scrollTo({ top: 0 }); }
   }
 }
 
@@ -1858,4 +1882,5 @@ function route() {
   if (!location.hash) showView("empty");
   route();
   window.addEventListener("hashchange", route);
+  window.addEventListener("popstate", route);
 })();

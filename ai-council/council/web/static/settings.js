@@ -4,7 +4,7 @@
 const SET = { data: null, orig: "", tab: "members", writable: true, logo: "", models: null, upgrades: null,
   sys: null, check: null, poll: null, restarting: false };
 const EFFORTS = [["", "как в общих"], ["none", "не задавать"], ["low", "низкая"], ["medium", "средняя"], ["high", "высокая"]];
-const MODES = [["debate", "Дебаты"], ["quick", "Быстрый"]];
+const MODES = [["debate", "Подробное обсуждение"], ["quick", "Быстрый ответ"]];
 
 function setDirty() {
   const dirty = JSON.stringify(SET.data) !== SET.orig;
@@ -21,7 +21,7 @@ function notice(html, kind = "") {
 async function openSettings() {
   if (typeof closeStream === "function") closeStream();
   current = null;
-  history.replaceState(null, "", "#/settings");
+  go("#/settings");
   showView("settings");
   markActiveHistory();
   notice("");
@@ -106,13 +106,13 @@ function renderSettings() {
       <p class="muted small">Значения по умолчанию для новых заседаний (в форме вопроса их можно поменять для отдельного заседания).</p>
       <div class="row2">
         <label class="field"><span>Режим по умолчанию</span>${sel("sMode", MODES, d.mode, ro)}</label>
-        <label class="field"><span>Раундов «критика → доработка»</span><input type="number" id="sRounds" min="0" max="5" value="${d.debate_rounds}" ${ro}></label>
-        <label class="field"><span>Лимит стоимости заседания, $</span><input type="number" id="sBudget" min="0.01" step="any" value="${d.max_cost_usd}" ${ro}></label>
-        <label class="field"><span>Кворум (минимум вариантов)</span><input type="number" id="sQuorum" min="1" value="${d.min_quorum}" ${ro}></label>
-        <label class="field"><span>Глубина рассуждений «думающих» моделей</span>${sel("sEffort", EFFORTS.slice(1), d.reasoning_effort, ro)}</label>
-        <label class="field"><span>Лимит длины ответа, токенов <em>(длинные ответы продолжаются автоматически)</em></span><input type="number" id="sMaxTokens" min="500" step="500" value="${d.max_tokens}" ${ro}></label>
-        <label class="field"><span>Температура <em>(0 — строже, 1 — креативнее)</em></span><input type="number" id="sTemp" min="0" max="2" step="0.1" value="${d.temperature}" ${ro}></label>
-        <label class="field"><span>Язык ответов <em>(по-английски: Russian, English…)</em></span><input type="text" id="sLang" value="${esc(d.language)}" ${ro}></label>
+        <label class="field"><span>Раундов критики</span><input type="number" id="sRounds" min="0" max="5" value="${d.debate_rounds}" ${ro}></label>
+        <label class="field"><span>Лимит заседания, $</span><input type="number" id="sBudget" min="0.01" step="any" value="${d.max_cost_usd}" ${ro}></label>
+        <label class="field"><span>Кворум</span><input type="number" id="sQuorum" min="1" value="${d.min_quorum}" ${ro}><small class="hint">минимум вариантов, чтобы продолжить</small></label>
+        <label class="field"><span>Глубина рассуждений</span>${sel("sEffort", EFFORTS.slice(1), d.reasoning_effort, ro)}<small class="hint">для «думающих» моделей</small></label>
+        <label class="field"><span>Лимит длины ответа, токенов</span><input type="number" id="sMaxTokens" min="500" step="500" value="${d.max_tokens}" ${ro}><small class="hint">длинные ответы продолжаются автоматически</small></label>
+        <label class="field"><span>Температура</span><input type="number" id="sTemp" min="0" max="2" step="0.1" value="${d.temperature}" ${ro}><small class="hint">0 — строже, 1 — креативнее</small></label>
+        <label class="field"><span>Язык ответов</span><input type="text" id="sLang" value="${esc(d.language)}" ${ro}><small class="hint">по-английски: Russian, English…</small></label>
       </div>
       <h2 style="margin-top:1rem">Экономия</h2>
       <label class="switch"><input type="checkbox" id="sCompact" ${d.compact_proposals ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span>
@@ -140,12 +140,12 @@ function renderSettings() {
     html = `
       <p class="muted small">Оформление отчётов PDF, Word и Markdown. Новые отчёты получат его сразу; чтобы обновить старые — «Пересобрать отчёты архива» ниже.</p>
       <div class="row2">
-        <label class="field"><span>Название в шапке <em>(пусто — «Совет нейросетей»)</em></span><input type="text" id="bTitle" value="${esc(b.title)}" ${ro}></label>
-        <label class="field"><span>Текст в колонтитуле <em>(например, «Конфиденциально»)</em></span><input type="text" id="bFooter" value="${esc(b.footer)}" ${ro}></label>
+        <label class="field"><span>Название в шапке</span><input type="text" id="bTitle" value="${esc(b.title)}" ${ro}><small class="hint">пусто — «Совет нейросетей»</small></label>
+        <label class="field"><span>Текст в колонтитуле</span><input type="text" id="bFooter" value="${esc(b.footer)}" ${ro}><small class="hint">например, «Конфиденциально»</small></label>
         <label class="field"><span>Фирменный цвет</span>
           <div class="color-row"><input type="color" id="bColorPick" value="${/^#[0-9a-f]{6}$/i.test(b.color) ? b.color : "#4f46e5"}" ${ro}>
           <input type="text" id="bColor" value="${esc(b.color)}" placeholder="#0a7d5a" ${ro}></div></label>
-        <div class="field"><span>Логотип <em>(PNG или JPG до 2 МБ)</em></span>
+        <div class="field"><span>Логотип <em>— PNG или JPG до 2 МБ</em></span>
           <div class="logo-row">${b.logo ? `<img src="/api/branding/logo?t=${Date.now()}" alt="логотип" class="logo-prev">` : '<span class="muted small">не задан</span>'}
             <label class="btn secondary">Загрузить<input type="file" id="bLogo" accept="image/png,image/jpeg" hidden ${SET.logoWritable ? "" : "disabled"}></label>
             ${b.logo ? `<button type="button" class="link" id="bLogoDel" ${ro}>Убрать</button>` : ""}</div></div>
