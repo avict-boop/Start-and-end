@@ -503,3 +503,24 @@ def test_fact_check_toggle_in_bot(env):
     key = next(b for b in buttons(fake.last("sendMessage")) if b.startswith("res:more:")).split(":")[2]
     asyncio.run(bot.handle_update(press(f"res:more:{key}", 999)))
     assert "Проверка фактов" in fake.texts()[-1] and "❌" in fake.texts()[-1]
+
+
+def test_long_question_split_by_telegram_is_joined(env):
+    bot, fake, tmp = env
+    part1 = "Начало вопроса. " + "текст " * 700 + "конец первой части"   # ~4200 символов, как режет Telegram
+    part2 = "вторая часть вопроса"
+
+    async def scenario():
+        await bot.handle_update(msg(part1))
+        card_id = bot.pending[CHAT].card_id
+        await bot.handle_update(msg(part2))
+        p = bot.pending[CHAT]
+        assert p.card_id == card_id and p.question == part1 + "\n" + part2  # одна карточка, вопрос склеен
+        assert "совет получит вопрос целиком" in fake.last("editMessageText")["text"]
+        # короткое следующее сообщение после короткого вопроса — уже новый вопрос
+        await bot.handle_update(msg("Другой вопрос?"))
+        assert bot.pending[CHAT].question == "Другой вопрос?"
+        await bot.handle_update(press("go", bot.pending[CHAT].card_id))
+        await finish(bot)
+
+    asyncio.run(scenario())

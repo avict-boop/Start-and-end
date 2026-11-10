@@ -100,12 +100,12 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
 
 
 class RunRequest(BaseModel):
-    question: str = Field(min_length=3, max_length=20000)
+    question: str = Field(min_length=3)  # без ограничения длины
     mode: Mode = "debate"
     rounds: int | None = Field(default=None, ge=0, le=5)
     criteria: list[str] | None = None
     options: list[str] | None = None
-    context: str | None = Field(default=None, max_length=50000)
+    context: str | None = None
     members: list[str] | None = None
     chair: str | None = None
     devil_advocate: str | None = None  # "" — без адвоката дьявола

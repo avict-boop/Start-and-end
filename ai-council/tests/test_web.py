@@ -198,3 +198,11 @@ def test_uploads_and_session_with_attachments(client, tmp_path):
     assert any(e["type"] == "attachments" for e in replay)
     assert client.delete(f"/api/sessions/{sid}").json() == {"ok": True}
     assert not (runs / f"{sid}.files").exists()
+
+
+def test_very_long_question_is_accepted(client):
+    q = "Проанализируй документ. " + "Очень длинное условие задачи. " * 3000  # ~90 000 символов
+    r = client.post("/api/sessions", json={"question": q, "mock": True, "mode": "quick", "context": "к" * 80000})
+    assert r.status_code == 200
+    events = read_events(client, r.json()["id"])
+    assert events[0]["question"] == q and events[-1]["type"] == "done"

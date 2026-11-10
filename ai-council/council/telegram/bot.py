@@ -86,6 +86,8 @@ class Pending:
     card_id: int | None = None
     view: str = "main"  # main | members
     attachments: list[Attachment] = field(default_factory=list)
+    last_at: float = 0.0   # когда пришла последняя часть текста вопроса
+    last_len: int = 0      # её длина (длинный текст Telegram сам режет на сообщения по ~4096 символов)
     parent: str = ""        # уточнение к заседанию
     parent_title: str = ""
 
@@ -457,6 +459,8 @@ class CouncilBot:
             if private:
                 await self.send(chat_id, "Неизвестная команда. /help — справка.")
         elif private:
+            if await self.continue_question(chat_id, arg):
+                return
             await self.new_question(chat_id, arg, parent=self.followup_wait.pop(chat_id, ""))
 
     async def on_voice(self, msg: dict[str, Any]) -> None:
@@ -633,15 +637,38 @@ class CouncilBot:
                 await self.api.edit_message(chat_id, old.card_id, "<i>Вопрос заменён новым.</i>")
             except TelegramError:
                 pass
-        p = Pending(question=question[:20000], options=options,
+        p = Pending(question=question, options=options,
                     attachments=(attachments or []) + self.drafts.pop(chat_id, []))
         if parent and self.archive.exists(parent):
             p.parent = parent
             p.parent_title = await asyncio.to_thread(lambda: self.archive.view(parent).title_text)
         self.pending[chat_id] = p
+        p.last_at, p.last_len = time.monotonic(), len(question)
         text, markup = await self.card(chat_id, p)
         msg = await self.send(chat_id, text, reply_markup=markup)
         p.card_id = msg["message_id"] if msg else None
+
+    SPLIT_LEN = 3500      # такая длина предыдущей части — признак, что Telegram разрезал длинный текст
+    SPLIT_WINDOW = 15.0   # секунд между частями
+
+    async def continue_question(self, chat_id: int, text: str) -> bool:
+        """Склеивает длинный вопрос, который приложение Telegram разбило на несколько сообщений.
+
+        Telegram не принимает сообщения длиннее 4096 символов и при вставке длинного текста сам отправляет
+        его частями подряд. Если предыдущая часть была почти предельной длины и пришла только что, новое
+        сообщение — продолжение того же вопроса, а не новый вопрос.
+        """
+        p = self.pending.get(chat_id)
+        if not p or p.options or p.last_len < self.SPLIT_LEN or time.monotonic() - p.last_at > self.SPLIT_WINDOW:
+            return False
+        p.question = p.question + "\n" + text
+        p.last_at, p.last_len = time.monotonic(), len(text)
+        card, markup = await self.card(chat_id, p)
+        try:
+            await self.api.edit_message(chat_id, p.card_id, card, reply_markup=markup)
+        except TelegramError:
+            pass
+        return True
 
     async def card(self, chat_id: int, p: Pending) -> tuple[str, dict]:
         s = self.chat_settings(chat_id)
@@ -651,7 +678,9 @@ class CouncilBot:
         lines = ["🏛 <b>Вопрос для совета</b>"]
         if p.parent:
             lines.append(f"<i>↳ уточнение к «{esc(p.parent_title)}» — совет учтёт его решение и вложения</i>")
-        lines.append(esc(p.question[:1500]))
+        lines.append(esc(p.question[:1500]) + (f"\n<i>… ещё {len(p.question) - 1500:,} симв. — совет получит вопрос "
+                                                f"целиком ({len(p.question):,} симв.)</i>".replace(",", " ")
+                                                if len(p.question) > 1500 else ""))
         if p.options:
             lines += ["", "<b>Варианты:</b>"] + [f"{chr(65 + i)}. {esc(o[:200])}" for i, o in enumerate(p.options)]
         if p.attachments:
