@@ -143,7 +143,7 @@ function renderSettings() {
         <label class="field"><span>Название в шапке <em>(пусто — «Совет нейросетей»)</em></span><input type="text" id="bTitle" value="${esc(b.title)}" ${ro}></label>
         <label class="field"><span>Текст в колонтитуле <em>(например, «Конфиденциально»)</em></span><input type="text" id="bFooter" value="${esc(b.footer)}" ${ro}></label>
         <label class="field"><span>Фирменный цвет</span>
-          <div class="color-row"><input type="color" id="bColorPick" value="${/^#[0-9a-f]{6}$/i.test(b.color) ? b.color : "#4545c8"}" ${ro}>
+          <div class="color-row"><input type="color" id="bColorPick" value="${/^#[0-9a-f]{6}$/i.test(b.color) ? b.color : "#4f46e5"}" ${ro}>
           <input type="text" id="bColor" value="${esc(b.color)}" placeholder="#0a7d5a" ${ro}></div></label>
         <div class="field"><span>Логотип <em>(PNG или JPG до 2 МБ)</em></span>
           <div class="logo-row">${b.logo ? `<img src="/api/branding/logo?t=${Date.now()}" alt="логотип" class="logo-prev">` : '<span class="muted small">не задан</span>'}

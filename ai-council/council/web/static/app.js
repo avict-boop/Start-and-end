@@ -1394,7 +1394,7 @@ function renderProposals(s) {
     const p = s.proposals[l];
     const list = (name, xs) => (xs && xs.length ? `<div><b>${name}:</b> ${xs.map(inline).join("; ")}</div>` : "");
     return `<article class="proposal ${l === win ? "win" : ""}">
-      <header><span class="lbl">${esc(l)}</span><div><h3 class="clickable" data-full="${esc(l)}">${esc(p.title)}${s.revised[l] ? '<span class="tag">доработан</span>' : ""}${l === win ? ' <span class="tag" style="background:var(--gold-soft);color:var(--gold)">решение</span>' : ""}</h3>
+      <header><span class="lbl">${esc(l)}</span><div><h3 class="clickable" data-full="${esc(l)}">${esc(p.title)}${s.revised[l] ? '<span class="tag">доработан</span>' : ""}${l === win ? ' <span class="tag dec">решение</span>' : ""}</h3>
       <div class="author">${esc(authorOf(s, l))}</div></div></header>
       <div class="body md">${md(p.summary)}</div>
       <button class="open-full" type="button" data-full="${esc(l)}"><svg class="ic" aria-hidden="true" style="width:16px;height:16px"><use href="#i-expand"/></svg>Читать полностью</button>

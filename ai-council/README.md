@@ -190,6 +190,16 @@ curl -fsSL https://raw.githubusercontent.com/avict-boop/Start-and-end/refs/heads
 
 Подробная инструкция с нуля, от аренды сервера до первого вопроса: **[DEPLOY.md](DEPLOY.md)**.
 
+## Логотип
+
+Логотип и иконки — в [`docs/brand/`](docs/brand/) (SVG в кривых, PNG, иконки, палитра; см. `README_RU.txt` там же).
+Веб-интерфейс уже использует знак, иконки вкладки и палитру логотипа.
+
+- **Аватарка Telegram-бота:** напишите [@BotFather](https://t.me/BotFather) команду `/setuserpic`, выберите бота и
+  пришлите картинку `docs/brand/png/ru_app_light_512.png` (или `ru_app_dark_512.png` для тёмной плашки).
+- **Логотип в отчётах PDF/Word:** «Настройки → Отчёты → Логотип → Загрузить», например
+  `docs/brand/png/ru_horizontal_color.png`. Без логотипа в шапке отчёта — название текстом.
+
 ## Как выкатить обновление интерфейса на сервер
 
 Новый интерфейс лежит в ветке `claude/ui-redesign`. Сервер, установленный через `install.sh`, обновляется из ветки

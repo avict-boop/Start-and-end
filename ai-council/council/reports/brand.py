@@ -11,7 +11,7 @@ from pathlib import Path
 log = logging.getLogger("council.reports")
 
 DEFAULT_TITLE = "Совет нейросетей"
-DEFAULT_COLOR = "#5b5bd6"
+DEFAULT_COLOR = "#4f46e5"  # индиго логотипа
 
 
 @dataclass
