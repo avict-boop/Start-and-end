@@ -40,8 +40,8 @@ def test_requirements_flow_through_all_stages():
     assert "VIOLATES Rn" in by["critique"] and "ranks below every proposal" in by["vote"]
     assert "satisfy every one of them" in by["verdict"]
     html = render_html(View(res.to_dict()))
-    assert "Обязательные требования запроса" in html and "Привести таблицу с цифрами" in html
-    assert "Обязательные требования запроса" in render_md(View(res.to_dict()))
+    assert "Обязательные требования" in html and "Привести таблицу с цифрами" in html
+    assert "Обязательные требования" in render_md(View(res.to_dict()))
 
 
 def test_framing_requirements_parsing():

@@ -26,6 +26,19 @@ class Brand:
         return "data:image/png;base64," + base64.b64encode(self.logo_png).decode() if self.logo_png else ""
 
     @property
+    def logo_is_wordmark(self) -> bool:
+        """Логотип широкий (в 2,5 раза шире высоты и больше) — скорее всего, в нём уже есть надпись.
+        Тогда название рядом не повторяем: в шапке только сам логотип."""
+        if not self.logo_png:
+            return False
+        try:
+            from PIL import Image
+            w, h = Image.open(io.BytesIO(self.logo_png)).size
+            return h > 0 and w / h >= 2.5
+        except Exception:  # noqa: BLE001
+            return False
+
+    @property
     def footer_text(self) -> str:
         return " · ".join(x for x in (self.title, self.footer) if x)
 

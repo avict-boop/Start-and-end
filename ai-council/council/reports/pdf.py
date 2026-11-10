@@ -40,4 +40,11 @@ def render_pdf(view: View, summary: bool = False, decision: bool = False) -> byt
     if not PDF_AVAILABLE:
         raise RuntimeError(f"PDF недоступен: не установлен WeasyPrint или системные библиотеки ({PDF_ERROR})")
     html = render_html(view, summary=summary, decision=decision)
-    return weasyprint.HTML(string=html, url_fetcher=_fetcher()).write_pdf()
+    doc = weasyprint.HTML(string=html, url_fetcher=_fetcher())
+    # размеченный PDF (PDF/UA-1): теги, порядок чтения, язык — для экранных дикторов и копирования текста;
+    # если версия WeasyPrint этого не умеет — обычный PDF
+    try:
+        return doc.write_pdf(pdf_variant="pdf/ua-1")
+    except (TypeError, ValueError, KeyError) as e:
+        log.info("PDF/UA недоступен (%s), собираю обычный PDF", e)
+        return doc.write_pdf()
