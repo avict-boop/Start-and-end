@@ -718,9 +718,16 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    # метка версии статики: после обновления программы браузер сразу берёт новые app.js и style.css, а не старые из кэша
+    import hashlib
+    static_tag = hashlib.sha1(b"".join((STATIC / n).read_bytes() for n in ("app.js", "settings.js", "style.css"))).hexdigest()[:10]
+    index_html = (STATIC / "index.html").read_text(encoding="utf-8")
+    for name in ("app.js", "settings.js", "style.css"):
+        index_html = index_html.replace(f'"/static/{name}"', f'"/static/{name}?v={static_tag}"')
+
     @app.get("/")
-    async def index() -> FileResponse:
-        return FileResponse(STATIC / "index.html")
+    async def index() -> HTMLResponse:
+        return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 

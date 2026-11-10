@@ -223,3 +223,16 @@ def test_balance_endpoint(client, monkeypatch):
     assert len(calls) == 1  # кэш на минуту
     client.get("/api/balance?force=1")
     assert len(calls) == 2
+
+
+def test_index_busts_static_cache(tmp_path):
+    from council.web.app import create_app
+    from fastapi.testclient import TestClient
+    import re
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("chair: a\nmembers:\n  - {name: a, model: m/a}\n  - {name: b, model: m/b}\nruns_dir: runs\n", encoding="utf-8")
+    c = TestClient(create_app(cfg, password=""))
+    r = c.get("/")
+    assert r.headers["cache-control"] == "no-cache"
+    assert re.search(r'/static/app\.js\?v=[0-9a-f]{10}"', r.text) and re.search(r'/static/style\.css\?v=[0-9a-f]{10}"', r.text)
+    assert c.get(re.search(r'"(/static/app\.js\?v=[0-9a-f]+)"', r.text).group(1)).status_code == 200

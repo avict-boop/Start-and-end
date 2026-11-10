@@ -499,7 +499,8 @@ async function initForm() {
   if (config.upload) {
     uploadCfg = config.upload;
     $("fileInput").accept = uploadCfg.accept.join(",");
-    $("uploadHint").textContent = `Картинки, PDF, Word, Excel — до ${uploadCfg.max_files} файлов по ${uploadCfg.max_mb} МБ. Скриншот можно вставить: Ctrl+V`;
+    const touch = matchMedia("(pointer: coarse)").matches;  // на телефоне Ctrl+V не подсказываем
+    $("uploadHint").textContent = `Картинки, PDF, Word, Excel — до ${uploadCfg.max_files} файлов по ${uploadCfg.max_mb} МБ.${touch ? "" : " Скриншот можно вставить: Ctrl+V"}`;
   }
   $("members").innerHTML = config.members.map((m) => `
     <label class="member" title="${esc(m.model)}"><input type="checkbox" value="${esc(m.name)}" ${m.enabled ? "checked" : ""}>
