@@ -11,6 +11,7 @@ from docx.oxml.ns import qn
 from docx.shared import Pt, RGBColor
 from lxml import html as LH
 
+from . import brand
 from .view import View, md_to_html
 
 MONO = "Consolas"
@@ -55,10 +56,66 @@ def _hyperlink(par, text: str, url: str) -> None:
     par._p.append(link)
 
 
+def _brand_header(doc) -> None:
+    """Логотип и название в верхнем колонтитуле, фирменный цвет заголовков."""
+    b = brand.current()
+    color = RGBColor(*b.rgb)
+    for name in ("Heading 1", "Heading 2", "Heading 3", "Title"):
+        try:
+            doc.styles[name].font.color.rgb = color
+        except KeyError:
+            pass
+    par = doc.sections[0].header.paragraphs[0]
+    if b.logo_png:
+        from docx.shared import Cm
+        par.add_run().add_picture(io.BytesIO(b.logo_png), height=Cm(0.9))
+        par.add_run("   ")
+    r = par.add_run(b.title)
+    r.font.size = Pt(8)
+    r.font.color.rgb = MUTED
+
+
+def _toc_field(doc, entries: list[str]) -> None:
+    """Оглавление Word: поле TOC, которое Word обновляет при открытии (заголовки 1–2 уровня).
+
+    До обновления (LibreOffice, просмотрщики на телефоне) внутри поля виден готовый список разделов.
+    """
+    par = doc.add_paragraph()
+    run = par.add_run()
+    begin = OxmlElement("w:fldChar")
+    begin.set(qn("w:fldCharType"), "begin")
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = 'TOC \\o "1-2" \\h \\z \\u'
+    sep = OxmlElement("w:fldChar")
+    sep.set(qn("w:fldCharType"), "separate")
+    end = OxmlElement("w:fldChar")
+    end.set(qn("w:fldCharType"), "end")
+    for el in (begin, instr, sep):
+        run._r.append(el)
+    for i, entry in enumerate(entries):  # содержимое поля до обновления
+        r = OxmlElement("w:r")
+        if i:
+            r.append(OxmlElement("w:br"))
+        t = OxmlElement("w:t")
+        t.set(qn("xml:space"), "preserve")
+        t.text = entry
+        r.append(t)
+        par._p.append(r)
+    tail = OxmlElement("w:r")
+    tail.append(end)
+    par._p.append(tail)
+    # попросить Word обновить поля при открытии файла
+    settings = doc.settings.element
+    upd = OxmlElement("w:updateFields")
+    upd.set(qn("w:val"), "true")
+    settings.append(upd)
+
+
 def _page_number_footer(doc) -> None:
     par = doc.sections[0].footer.paragraphs[0]
     par.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    run = par.add_run("Совет нейросетей · стр. ")
+    run = par.add_run(f"{brand.current().footer_text} · стр. ")
     run.font.size = Pt(8)
     run.font.color.rgb = MUTED
     for instr in ("PAGE",):
@@ -282,17 +339,22 @@ def render_docx(view: View, summary: bool = False) -> bytes:
     sec.left_margin = sec.right_margin = Pt(50)
     sec.top_margin = sec.bottom_margin = Pt(48)
     _page_number_footer(doc)
+    _brand_header(doc)
     doc.core_properties.title = v.title_text
     doc.core_properties.subject = "Отчёт «Совета нейросетей»"
 
-    brand = doc.add_paragraph()
-    r = brand.add_run("СОВЕТ НЕЙРОСЕТЕЙ · " + ("ИТОГОВОЕ РЕШЕНИЕ" if summary else "ОТЧЁТ О ЗАСЕДАНИИ"))
+    brand_par = doc.add_paragraph()
+    r = brand_par.add_run(brand.current().title.upper() + " · " + ("ИТОГОВОЕ РЕШЕНИЕ" if summary else "ОТЧЁТ О ЗАСЕДАНИИ"))
     r.font.size = Pt(8)
     r.font.color.rgb = MUTED
     r.bold = True
     title = _heading(doc, v.title_text, 1)
     for run in title.runs:
         run.font.size = Pt(16)
+    if v.followup_title:
+        fp = doc.add_paragraph()
+        fp.add_run("↳ Уточнение к заседанию: ").bold = True
+        fp.add_run(v.followup_title)
     if v.question_is_long:
         lab = doc.add_paragraph()
         r = lab.add_run("ЗАПРОС")
@@ -346,6 +408,15 @@ def render_docx(view: View, summary: bool = False) -> bytes:
             ("Критерии", ", ".join(v.criteria) or "—"), ("Стоимость", f"${v.cost:.4f}"),
             ("Длительность", v.duration)]
     _meta_table(doc, meta[:3] if summary else meta)
+    if not summary:
+        toc_title = doc.add_paragraph().add_run("СОДЕРЖАНИЕ")  # не заголовок — иначе попадёт в само оглавление
+        toc_title.bold = True
+        toc_title.font.size = Pt(8)
+        toc_title.font.color.rgb = MUTED
+        entries = ["Решение совета", "Голосование", "Варианты"] + [f"   Вариант {l}: {p.get('title', '')}"
+                                                                for l, p in v.proposals.items()]
+        entries += (["Критика: средние оценки (1–10)"] if v.critiques else []) + ["Участники и расходы"]
+        _toc_field(doc, entries)
 
     # Решение
     if summary:

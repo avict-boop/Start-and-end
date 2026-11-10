@@ -22,7 +22,7 @@ from .reports.view import MODE_NAME, View
 
 log = logging.getLogger("council.archive")
 
-REPORT_VERSION = "5"  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
+REPORT_VERSION = "6"  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
 MARKER = ".reports-version"
 ID_RE = re.compile(r"^[\w\-]{1,160}$", re.U)
 MIME = {
@@ -119,6 +119,7 @@ class Archive:
                 "winner_author": v.author(w) if w else "", "cost": round(v.cost, 4),
                 "members": v.members, "proposals": len(v.proposals), "status": "done",
                 "attachments": len(v.attachments),
+                "followup_of": v.d.get("followup_of", ""),
             }
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
             log.warning("не удалось прочитать %s: %s", p.name, e)
@@ -229,6 +230,34 @@ class Archive:
         t = threading.Thread(target=run, name="archive-reports", daemon=True)
         t.start()
         return t
+
+    MAX_THREAD = 4
+    MAX_ANSWER_CHARS = 4000
+
+    def followup(self, parent: str) -> tuple[list[dict[str, Any]], list]:
+        """Для уточняющего вопроса: цепочка «вопрос — решение» (последние 4) и вложения исходного заседания."""
+        from .attachments import load_from_dir
+
+        d = self.load(parent)
+        v = View(d, parent)
+        answer = (d.get("verdict") or {}).get("final_answer", "")
+        if len(answer) > self.MAX_ANSWER_CHARS:
+            answer = answer[:self.MAX_ANSWER_CHARS] + "…"
+        thread = list(d.get("thread") or []) + [{"id": parent, "title": v.title_text, "question": v.question,
+                                                  "answer": answer, "winner": v.title(v.winner)}]
+        atts = load_from_dir(self.files_dir(parent), d.get("attachments") or [])
+        return thread[-self.MAX_THREAD:], atts
+
+    def request_of(self, stem: str) -> dict[str, Any]:
+        """Настройки, с которыми заседание запускали (для «Повторить»); для старых заседаний — восстановленные."""
+        d = self.load(stem)
+        req = dict(d.get("request") or {})
+        req.setdefault("question", d.get("question", ""))
+        req.setdefault("mode", d.get("mode", "debate"))
+        req.setdefault("members", list(d.get("stats") or {}))
+        if d.get("mode") == "evaluate" and "options" not in req:
+            req["options"] = [p.get("summary", "") for _, p in sorted((d.get("initial_proposals") or {}).items())]
+        return req
 
     def files_dir(self, stem: str) -> Path:
         return self.path(stem, "files")

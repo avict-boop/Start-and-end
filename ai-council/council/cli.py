@@ -12,13 +12,23 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.table import Table
 
+from .attachments import MAX_FILES, AttachmentError, assign_files, human_size, limit_total, load_attachment, merge
 from .client import OpenRouterClient
-from .config import load_config, load_dotenv
-from .attachments import MAX_FILES, AttachmentError, assign_files, human_size, limit_total, load_attachment
+from .config import load_config as _load_config
+from .config import load_dotenv
 from .estimate import estimate, parse_pricing, unknown_models, vision_map
 from .mock import MockClient
 from .report import save
+from .reports.brand import set_brand
 from .session import Council, CouncilError
+
+
+def load_config(path):
+    """Конфиг + фирменное оформление отчётов."""
+    cfg = _load_config(path)
+    set_brand(cfg.branding, Path(path).resolve().parent)
+    return cfg
+
 
 console = Console()
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -240,6 +250,19 @@ async def _ask(args) -> int:
     if len(atts) > MAX_FILES:
         console.print(f"[red]Можно приложить не больше {MAX_FILES} файлов[/]")
         return 2
+    history: list = []
+    followup_of = ""
+    if args.followup:
+        from .archive import Archive
+        arch = Archive(_runs_dir(cfg))
+        stem = args.followup if arch.exists(args.followup) else arch.find_key(args.followup)
+        if not stem:
+            console.print(f"[red]Заседание «{args.followup}» не найдено в архиве[/] (список: python -m council archive)")
+            return 2
+        history, parent_atts = arch.followup(stem)
+        atts = merge(parent_atts, atts)
+        followup_of = stem
+        console.print(f"↳ Уточнение к заседанию: {history[-1]['title']}")
     assign_files(atts)
     for w in limit_total(atts):
         console.print(f"[yellow]{w}[/]")
@@ -273,7 +296,13 @@ async def _ask(args) -> int:
                     mode=mode,
                     rounds=rounds,
                     attachments=atts,
+                    history=history,
+                    followup_of=followup_of,
                 )
+                res.request = {"question": question, "mode": mode, "rounds": rounds, "criteria": criteria or [],
+                               "options": options or [], "context": context or "",
+                               "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
+                               "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd}
             finally:
                 tick.cancel()
                 _live.status = None
@@ -352,6 +381,28 @@ def _runs_dir(cfg) -> Path:
     return d if d.is_absolute() else PROJECT_DIR / d
 
 
+def _stats_cmd(args) -> int:
+    from .archive import Archive
+    from .stats import compute, fmt_duration
+
+    d = compute(Archive(_runs_dir(load_config(args.config))))
+    if not d["sessions"]:
+        console.print("Пока нет заседаний.")
+        return 0
+    console.print(f"Заседаний: [bold]{d['sessions']}[/] · потрачено [bold]${d['total_cost']:.2f}[/] · "
+                  f"в этом месяце ${d['month_cost']:.2f} · в среднем ${d['avg_cost']:.3f} и "
+                  f"{fmt_duration(d['avg_duration'])} на заседание")
+    t = Table(title="Модели")
+    for col in ("Участник", "Модель", "Заседаний", "Побед", "Доля побед", "Ср. оценка", "Сбоев", "Расходы"):
+        t.add_column(col)
+    for m in d["models"]:
+        t.add_row(m["name"], m["model"], str(m["sessions"]), f"{m['wins']}/{m['proposals']}",
+                  f"{round(m['win_rate'] * 100)}%" if m["win_rate"] is not None else "—",
+                  f"{m['avg_score']:.1f}" if m["avg_score"] is not None else "—", str(m["failures"]), f"${m['cost']:.4f}")
+    console.print(t)
+    return 0
+
+
 def _archive_cmd(args) -> int:
     from .archive import Archive, available_formats
     from .reports.pdf import PDF_AVAILABLE, PDF_ERROR
@@ -366,13 +417,14 @@ def _archive_cmd(args) -> int:
         return 1 if failed else 0
     items = arch.list(args.search)
     t = Table(title=f"Архив заседаний ({len(items)})")
-    for col in ("Дата", "Вопрос", "Решение", "Режим", "$"):
-        t.add_column(col)
+    for col in ("Ключ", "Дата", "Вопрос", "Решение", "Режим", "$"):
+        t.add_column(col, no_wrap=col == "Ключ")
     for s in items:
-        t.add_row(s["date"], s["question"][:70], f"{s['winner']}: {s['winner_title'][:40]}", s["mode_name"],
-                  f"{s['cost']:.3f}")
+        t.add_row(s["key"], s["date"], ("↳ " if s.get("followup_of") else "") + s["question"][:70],
+                  f"{s['winner']}: {s['winner_title'][:40]}", s["mode_name"], f"{s['cost']:.3f}")
     console.print(t)
-    console.print(f"Отчёты лежат рядом со стенограммами: {arch.dir}")
+    console.print(f"Отчёты лежат рядом со стенограммами: {arch.dir}\n"
+                  "Уточняющий вопрос к заседанию: python -m council ask \"вопрос\" --followup <ключ>")
     return 0
 
 
@@ -406,6 +458,7 @@ def main(argv: list[str] | None = None) -> int:
     a.add_argument("--option", action="append", help="готовый вариант для оценки (можно несколько раз)")
     a.add_argument("--options-file", help="файл с вариантами, разделёнными строкой ---")
     a.add_argument("--context-file", help="файл с дополнительным контекстом")
+    a.add_argument("--followup", metavar="ID", help="уточняющий вопрос к заседанию из архива (id из `archive`)")
     a.add_argument("--file", action="append", metavar="ПУТЬ",
                    help="приложить файл: картинку, PDF, Word, Excel, текст (можно несколько раз)")
     a.add_argument("--only", help="участвуют только эти участники, через запятую")
@@ -424,6 +477,9 @@ def main(argv: list[str] | None = None) -> int:
     w.add_argument("--port", type=int, default=8000)
     w.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
 
+    stp = sub.add_parser("stats", help="статистика: расходы, длительность, успехи моделей")
+    stp.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
+
     ar = sub.add_parser("archive", help="архив заседаний (список, поиск)")
     ar.add_argument("search", nargs="?", default="", help="текст для поиска по вопросам и решениям")
     ar.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
@@ -440,6 +496,8 @@ def main(argv: list[str] | None = None) -> int:
         return _telegram(args)
     if args.cmd in ("archive", "reports"):
         return _archive_cmd(args)
+    if args.cmd == "stats":
+        return _stats_cmd(args)
     if args.cmd == "web":
         return _web(args)
     try:

@@ -13,7 +13,11 @@ def render_md(view: View, summary: bool = False) -> str:
     v = view
     vd = v.verdict
     w = v.winner
-    out = [f"# {v.title_text}", ""]
+    from . import brand
+    b = brand.current()
+    out = ([f"*{b.title}*", ""] if b.title != brand.DEFAULT_TITLE else []) + [f"# {v.title_text}", ""]
+    if v.followup_title:
+        out += [f"↳ **Уточнение к заседанию:** {v.followup_title}", ""]
     if v.question_is_long:
         # запрос целиком, с его переносами строк (два пробела в конце строки — перенос в Markdown)
         out += ["**Запрос:**", ""] + [f"> {line}  " if line.strip() else ">" for line in v.question.splitlines()] + [""]

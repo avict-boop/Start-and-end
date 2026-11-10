@@ -12,6 +12,7 @@ x-common: &common
   volumes:
     - ./config.yaml:/app/config.yaml:ro   # правьте config.yaml на сервере без пересборки
     - council-runs:/app/runs              # отчёты, стенограммы, настройки чатов бота
+    - ./branding:/app/branding:ro         # логотип для отчётов (см. branding в config.yaml)
   logging:
     driver: json-file
     options: { max-size: "10m", max-file: "3" }

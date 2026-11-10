@@ -197,6 +197,18 @@ JSON format:
 {{"winner": "A", "final_answer": "...", "why": "...", "dissent": ["..."], "risks": ["..."]}}"""
 
 
+def history_block(history: list[dict]) -> str:
+    """Контекст уточняющего вопроса: что совет уже обсуждал и решил (от старых к новым)."""
+    if not history:
+        return ""
+    parts = ["This is a FOLLOW-UP question. Earlier the council already discussed this topic "
+             "(oldest first). Build on these conclusions; revise them if the new question requires it:"]
+    for i, h in enumerate(history, 1):
+        parts.append(f"\n--- Earlier session {i} ---\nQuestion: {h.get('question', '')}\n"
+                     f"Council decision: {h.get('answer', '')}\n--- End of session {i} ---")
+    return "\n".join(parts)
+
+
 def describe_images(question: str, names: list[str]) -> str:
     listed = "\n".join(f"- {n}" for n in names)
     return f"""The user attached images to a question for the council. Some council members cannot see images,

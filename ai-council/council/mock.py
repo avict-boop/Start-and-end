@@ -71,6 +71,9 @@ class MockClient:
                     for l in meta["labels"]
                 ]
             }
+        elif stage == "transcribe":
+            text = f"Как назвать кофейню рядом с университетом? (демо-расшифровка записи {meta.get('seconds', 0):.0f} с)"
+            return Completion(text=text, prompt_tokens=100, completion_tokens=30, cost=0.0002, model=model)
         elif stage == "describe":
             out = {"images": [{"name": n, "description": f"Описание (демо): на картинке «{n}» таблица с цифрами."}
                               for n in meta.get("images", [])]}

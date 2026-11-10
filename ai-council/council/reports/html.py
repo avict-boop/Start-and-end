@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from html import escape
 
+from . import brand
 from .view import View, md_to_html
 
 CSS = """
@@ -78,6 +79,15 @@ tr.win td { background: #fff6d8; }
 [id] { scroll-margin-top: 64px; }
 .toc { columns: 2; font-size: 9.5pt; margin: 6px 0; }
 .toc a { text-decoration: none; }
+.toc-title { font-size: 8.5pt; text-transform: uppercase; letter-spacing: .06em; color: #6b6b80; font-weight: bold; margin-top: 8px; }
+.logo { max-height: 36px; max-width: 180px; vertical-align: middle; margin-right: 8px; }
+.brand-row { display: flex; align-items: center; gap: 8px; }
+@media print {
+  /* оглавление с номерами страниц (в PDF) */
+  .toc { columns: 1; }
+  .toc a { display: block; }
+  .toc a::after { content: leader(".") " " target-counter(attr(href), page); color: #6b6b80; }
+}
 /* Широкие таблицы из ответов моделей.
    PDF (print): таблица всегда в ширину страницы — мельче шрифт, переносы по слогам и внутри длинных слов.
    Экран: таблица прокручивается внутри своего блока, а не раздвигает страницу. */
@@ -159,8 +169,13 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False) -> str:
     add = parts.append
 
     add('<div class="page">')
-    add(f'<div class="brand">Совет нейросетей · {"итоговое решение" if summary else "отчёт о заседании"}</div>')
+    b = brand.current()
+    logo = f'<img class="logo" src="{b.logo_data_url}" alt="">' if b.logo_png else ""
+    add(f'<div class="brand-row">{logo}<div class="brand">{_e(b.title)} · '
+        f'{"итоговое решение" if summary else "отчёт о заседании"}</div></div>')
     add(f"<h1>{_e(v.title_text)}</h1>")
+    if v.followup_title:
+        add(f'<div class="refined">↳ <b>Уточнение к заседанию:</b> {_e(v.followup_title)}</div>')
     if v.question_is_long:
         add(f'<div class="query"><div class="query-label">Запрос</div><div class="md">{md_to_html(v.question, breaks=True)}</div></div>')
     if v.attachments:
@@ -203,7 +218,8 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False) -> str:
         toc.append(("critique", "Критика"))
     toc.append(("members", "Участники и расходы"))
     if not summary:
-        add('<div class="toc">' + "".join(f'<div><a href="#{a}">{_e(t)}</a></div>' for a, t in toc) + "</div>")
+        add('<div class="toc-title">Содержание</div><div class="toc">'
+            + "".join(f'<div><a href="#{a}">{_e(t)}</a></div>' for a, t in toc) + "</div>")
 
     # Решение
     add('<div class="verdict" id="verdict">')
@@ -322,8 +338,16 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False) -> str:
     return _document(v, "\n".join(parts), toolbar)
 
 
+def _css() -> str:
+    """CSS с фирменным цветом и текстом колонтитула."""
+    b = brand.current()
+    footer = b.footer_text.replace("\\", "").replace('"', "'")
+    return (CSS.replace("#4545c8", b.color).replace("#5b5bd6", b.color)
+            .replace('content: "Совет нейросетей"', f'content: "{footer}"'))
+
+
 def _document(v: View, body: str, toolbar: str) -> str:
     return (f'<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f"<title>{_e(v.title_text)} — Совет нейросетей</title><style>{CSS}</style></head>"
+            f"<title>{_e(v.title_text)} — {_e(brand.current().title)}</title><style>{_css()}</style></head>"
             f"<body>{toolbar}{body}{SCROLL_HINT}</body></html>")

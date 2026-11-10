@@ -167,8 +167,62 @@ function payload() {
     budget: Number($("budget").value) || null,
     mock: $("mock").checked,
     attachments: uploads.filter((u) => u.status === "ready").map((u) => u.meta.id),
+    parent: formMode && formMode.kind === "followup" ? formMode.id : null,
   };
 }
+
+/* ------------------------------------------------------------ уточнение и повтор */
+
+let formMode = null;  // {kind: "followup" | "repeat", id, title}
+
+function setFormMode(mode) {
+  formMode = mode;
+  $("formBanner").hidden = !mode;
+  if (mode) {
+    $("formBannerText").innerHTML = mode.kind === "followup"
+      ? `↳ <b>Уточнение</b> к заседанию «${esc(mode.title)}». Совет учтёт его решение и вложения.`
+      : `🔁 <b>Повтор</b> заседания «${esc(mode.title)}». Можно поменять модели, режим или вопрос.`;
+  }
+}
+$("formBannerX").addEventListener("click", () => setFormMode(null));
+
+function focusForm() {
+  $("form").scrollIntoView({ behavior: "smooth", block: "start" });
+  setTimeout(() => $("question").focus(), 300);
+}
+
+$("followBtn").addEventListener("click", () => {
+  if (!current) return;
+  setFormMode({ kind: "followup", id: current.id, title: shortTitle(current.question) });
+  $("question").value = "";
+  $("question").placeholder = "Например: а если бюджет вдвое меньше? Раскрой подробнее вариант B";
+  focusForm();
+});
+
+$("repeatBtn").addEventListener("click", async () => {
+  if (!current) return;
+  let data;
+  try { data = await api(`/api/sessions/${encodeURIComponent(current.id)}/repeat`, { method: "POST" }); }
+  catch (e) { alert(e.message); return; }
+  const r = data.request || {};
+  $("question").value = r.question || "";
+  setMode(["debate", "quick", "evaluate"].includes(r.mode) ? r.mode : "debate");
+  if (r.rounds) $("rounds").value = r.rounds;
+  $("criteria").value = (r.criteria || []).join(", ");
+  $("options").value = (r.options || []).join("\n---\n");
+  $("context").value = r.context || "";
+  if (r.members && r.members.length) {
+    for (const cb of $("members").querySelectorAll("input")) cb.checked = r.members.includes(cb.value);
+    refreshRoleSelects();
+  }
+  if (r.chair) $("chair").value = r.chair;
+  if (r.devil_advocate !== undefined) $("devil").value = r.devil_advocate || "";
+  if (r.budget) $("budget").value = r.budget;
+  uploads = (data.uploads || []).map((m) => ({ key: ++uploadSeq, name: m.name, status: "ready", meta: m }));
+  renderUploads();
+  setFormMode({ kind: "repeat", id: current.id, title: data.title });
+  focusForm();
+});
 
 /* ------------------------------------------------------------ вложения в форме */
 
@@ -327,8 +381,10 @@ $("form").addEventListener("submit", async (ev) => {
       if (e.low != null && !confirm(`Оценка стоимости: $${e.low.toFixed(3)} – $${e.high.toFixed(3)}. Начать заседание?`)) return;
     }
     if (uploads.some((u) => u.status === "uploading")) return showFormError("Дождитесь окончания загрузки файлов");
+    if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
     const { id } = await api("/api/sessions", { method: "POST", body: p });
     uploads = []; renderUploads();  // файлы ушли в заседание
+    setFormMode(null); $("question").placeholder = "Например: какой стек выбрать для MVP интернет-магазина с бюджетом 1 млн ₽?";
     openSession(id);
     loadHistory();
   } catch (e) {
@@ -347,8 +403,11 @@ function showView(name) {
   $("empty").hidden = name !== "empty";
   $("session").hidden = name !== "session";
   $("archive").hidden = name !== "archive";
+  $("stats").hidden = name !== "stats";
+  $("statsBtn").classList.toggle("secondary", name === "stats");
   document.body.classList.toggle("has-session", name !== "empty");
   $("archiveBtn").classList.toggle("secondary", name === "archive");
+  if (name !== "session") document.title = BASE_TITLE;
 }
 
 $("newBtn").addEventListener("click", () => {
@@ -420,6 +479,7 @@ async function loadArchive() {
     const done = it.status === "done";
     const meta = [it.date, it.mode_name, it.members && it.members.length ? `участников: ${it.members.length}` : "",
       it.attachments ? `📎 ${it.attachments}` : "",
+      it.followup_of ? "↳ уточнение" : "",
       it.cost != null ? money(it.cost) : "", done ? "" : ({ running: "идёт…", error: "ошибка", cancelled: "остановлено" }[it.status] || "")]
       .filter(Boolean).map(esc).join(" · ");
     const del = `<button type="button" class="ghost" data-arc-del="${esc(it.id)}" title="Удалить">Удалить</button>`;
@@ -526,6 +586,9 @@ function apply(s, ev) {
   switch (ev.type) {
     case "ping":
       break;
+    case "followup":
+      logAdd(s, `Уточнение: совет видит ${ev.thread.length} предыдущ${ev.thread.length > 1 ? "их решения" : "ее решение"}`);
+      break;
     case "attachments":
       s.attachments = ev.items || [];
       s.blind = ev.blind || [];
@@ -567,7 +630,7 @@ function apply(s, ev) {
     }
     case "start":
       Object.assign(s, { question: ev.question, mode: ev.mode, rounds: ev.rounds, members: ev.members || [],
-        chair: ev.chair || null, mock: !!ev.mock });
+        chair: ev.chair || null, mock: !!ev.mock, parent: ev.parent || null });
       break;
     case "stage": {
       s.stageStart = Date.now();
@@ -642,11 +705,15 @@ function scoreColor(v) {
 
 function render(s) {
   if (view !== "session") return;
+  updateTitle();
   const finished = !!(s.done || s.error);
 
   const modeName = { debate: "Дебаты", quick: "Быстро", evaluate: "Оценка вариантов" }[s.mode] || s.mode;
   $("sMeta").textContent = [modeName, s.mode === "debate" && s.rounds ? `раундов: ${s.rounds}` : "",
     s.members.length ? `участников: ${s.members.length}` : "", s.mock ? "демо" : ""].filter(Boolean).join(" · ");
+  $("sParent").hidden = !s.parent;
+  if (s.parent) $("sParent").innerHTML = `↳ Уточнение к заседанию <a href="#/s/${encodeURIComponent(s.parent.id)}">${esc(s.parent.title || "…")}</a>`;
+  $("nextActions").hidden = !s.done;
   const title = shortTitle(s.question);
   $("sQuestion").textContent = title;
   const longQuery = !!s.question && s.question.trim() !== title;
@@ -978,6 +1045,8 @@ function openSession(id) {
     scheduleRender();
     if (pendingProposal && ev.type === "done") { const l = pendingProposal; pendingProposal = null; setTimeout(() => openProposal(s, l), 50); }
     if (ev.type === "done" || ev.type === "error") {
+      // уведомляем только о заседании, которое шло у нас на глазах (не о повторном открытии из архива)
+      if (Date.now() - s.startedAt > 5000) notifyFinished(s, ev.type === "done");
       closeStream();
       scheduleRender();
       loadHistory();
@@ -1003,6 +1072,165 @@ $("cancelBtn").addEventListener("click", async () => {
   try { await api(`/api/sessions/${encodeURIComponent(current.id)}/cancel`, { method: "POST" }); } catch (e) { alert(e.message); }
 });
 $("blind").addEventListener("change", () => current && render(current));
+
+/* ------------------------------------------------------------ голосовой ввод */
+
+let recorder = null, recChunks = [], recStart = 0, recTimer = null;
+const MAX_REC_SEC = 300;
+// микрофон доступен только по HTTPS или на localhost
+if (navigator.mediaDevices && window.MediaRecorder && window.isSecureContext) $("micBtn").hidden = false;
+
+function micLabel() {
+  const s = Math.floor((Date.now() - recStart) / 1000);
+  $("micBtn").textContent = `⏹ ${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  if (s >= MAX_REC_SEC) stopRecording();
+}
+
+async function startRecording() {
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch { showFormError("Нет доступа к микрофону — разрешите его в настройках браузера"); return; }
+  recChunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => e.data.size && recChunks.push(e.data);
+  recorder.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    clearInterval(recTimer);
+    const blob = new Blob(recChunks, { type: recorder.mimeType || "audio/webm" });
+    $("micBtn").classList.remove("rec"); $("micBtn").classList.add("busy"); $("micBtn").textContent = "Распознаю…";
+    try {
+      const res = await fetch(`/api/transcribe${$("mock").checked ? "?mock=1" : ""}`, { method: "POST", body: blob,
+        headers: { "Content-Type": blob.type || "application/octet-stream" } });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+      const q = $("question");
+      q.value = q.value.trim() ? `${q.value.trim()}\n${data.text}` : data.text;
+      q.focus();
+      showFormError("");
+      $("estimate").hidden = true;
+    } catch (e) {
+      showFormError(`Не удалось распознать речь: ${e.message}`);
+    } finally {
+      $("micBtn").classList.remove("busy"); $("micBtn").textContent = "🎤"; recorder = null;
+    }
+  };
+  recorder.start();
+  recStart = Date.now();
+  $("micBtn").classList.add("rec");
+  micLabel();
+  recTimer = setInterval(micLabel, 500);
+}
+
+function stopRecording() { if (recorder && recorder.state === "recording") recorder.stop(); }
+
+$("micBtn").addEventListener("click", (e) => {
+  e.preventDefault();
+  if ($("micBtn").classList.contains("busy")) return;
+  if (recorder) stopRecording(); else startRecording();
+});
+
+/* ------------------------------------------------------------ статистика */
+
+async function openStats() {
+  closeStream();
+  current = null;
+  history.replaceState(null, "", "#/stats");
+  showView("stats");
+  markActiveHistory();
+  let d;
+  try { d = await api("/api/stats"); } catch (e) { $("statsBody").innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  if (!d.sessions) { $("statsBody").innerHTML = '<div class="arc-empty">Пока нет заседаний — статистика появится после первого.</div>'; return; }
+  const dur = (s) => (s >= 60 ? `${Math.floor(s / 60)} мин ${Math.round(s % 60)} с` : `${Math.round(s)} с`);
+  const kpi = (v, l) => `<div class="kpi"><div class="kv">${v}</div><div class="kl">${l}</div></div>`;
+  const maxCost = Math.max(...d.months.map((m) => m.cost), 0.0001);
+  const monthName = (m) => { const [y, mm] = m.split("-"); return new Date(+y, +mm - 1, 1).toLocaleDateString("ru-RU", { month: "short", year: "2-digit" }); };
+  const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+  $("statsBody").innerHTML = `
+    <div class="kpis">
+      ${kpi(d.sessions, "заседаний")}
+      ${kpi(money(d.total_cost), "потрачено всего")}
+      ${kpi(money(d.month_cost), `в этом месяце (${d.month_sessions})`)}
+      ${kpi(money(d.avg_cost), "средняя цена заседания")}
+      ${kpi(dur(d.avg_duration), "среднее время")}
+      ${kpi(`${d.with_files} / ${d.followups}`, "с файлами / уточнений")}
+    </div>
+    <div class="stats-grid">
+      <div>
+        <h2>Расходы по месяцам</h2>
+        <div class="mbars">${d.months.map((m) => `<div class="mbar"><span>${esc(monthName(m.month))}</span>
+          <div class="track" title="${m.sessions} заседаний"><i style="width:${Math.max(2, (m.cost / maxCost) * 100)}%"></i></div>
+          <span class="val">${money(m.cost)}</span></div>`).join("")}</div>
+        <h2 style="margin-top:1.2rem">Режимы</h2>
+        <div class="chips">${d.modes.map((m) => `<span class="chip">${esc(m.name)}: ${m.count}</span>`).join("")}</div>
+      </div>
+      <div>
+        <h2>Модели</h2>
+        <div class="table-wrap"><table class="table">
+          <thead><tr><th>Участник</th><th>Заседаний</th><th>Побед</th><th>Доля побед</th><th>Ср. оценка</th><th>Сбоев</th><th>Расходы</th></tr></thead>
+          <tbody>${d.models.map((m) => `<tr>
+            <td><b>${esc(m.name)}</b><div class="muted small">${esc(m.model)}</div></td>
+            <td class="num">${m.sessions}</td>
+            <td class="num">${m.wins} из ${m.proposals}</td>
+            <td><div class="win-cell"><div class="bar"><i style="width:${Math.round((m.win_rate || 0) * 100)}%"></i></div>${pct(m.win_rate)}</div></td>
+            <td class="num">${m.avg_score == null ? "—" : m.avg_score.toFixed(1)}</td>
+            <td class="num" style="${m.failures ? "color:var(--bad)" : ""}">${m.failures}</td>
+            <td class="num" title="в среднем ${money(m.cost_per_session)} за заседание">${money(m.cost)}</td></tr>`).join("")}</tbody>
+        </table></div>
+        <p class="muted small">Доля побед — сколько предложенных моделью вариантов стали решением совета.
+          Средняя оценка — как её варианты оценивали другие модели (1–10). Сбои — пустые ответы, ошибки формата и связи.</p>
+      </div>
+    </div>`;
+}
+$("statsBtn").addEventListener("click", openStats);
+
+/* ------------------------------------------------------------ уведомления и заголовок вкладки */
+
+const BASE_TITLE = document.title;
+
+function updateTitle() {
+  const s = current;
+  if (!s || view !== "session") { document.title = BASE_TITLE; return; }
+  const t = shortTitle(s.question).slice(0, 40);
+  if (s.error) document.title = `⚠️ Прервано — ${t}`;
+  else if (s.done) document.title = `✅ Готово — ${t}`;
+  else if (s.saving) document.title = "⏳ Отчёты… — Совет";
+  else if (s.stage) {
+    const names = Object.keys(s.work);
+    const ready = names.filter((n) => s.work[n] !== "work"
+      || (s.calls[n] && s.calls[n].stage === s.stage && ["done", "failed"].includes(s.calls[n].phase))).length;
+    document.title = `⏳ ${STAGE_NAME[s.stage] || s.stage} ${ready}/${names.length} — Совет`;
+  } else document.title = "⏳ Запуск — Совет";
+}
+
+function beep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const tone = (freq, at) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = freq; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.0001, ctx.currentTime + at);
+      g.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + at + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + at + 0.35);
+      o.start(ctx.currentTime + at); o.stop(ctx.currentTime + at + 0.4);
+    };
+    tone(880, 0); tone(1320, 0.18);
+    setTimeout(() => ctx.close(), 1000);
+  } catch { /* звук недоступен — не страшно */ }
+}
+
+function notifyFinished(s, ok) {
+  if (!document.hidden) return;  // вкладка открыта — и так видно
+  beep();
+  const body = ok && s.verdict
+    ? `Решение: ${(s.proposals[s.verdict.winner] || {}).title || s.verdict.winner}`
+    : (s.error || "Заседание прервано");
+  if ("Notification" in window && Notification.permission === "granted") {
+    try {
+      const n = new Notification(ok ? "✅ Совет вынес решение" : "⚠️ Заседание прервано", { body: `${shortTitle(s.question)}\n${body}`, tag: s.id });
+      n.onclick = () => { window.focus(); n.close(); };
+    } catch { /* например, Safari без разрешения */ }
+  }
+}
 
 /* ------------------------------------------------------------ полноэкранное окно */
 
@@ -1121,6 +1349,8 @@ function route() {
     if (m[2]) pendingProposal = m[2];
   } else if (location.hash === "#/archive") {
     if (view !== "archive") openArchive();
+  } else if (location.hash === "#/stats") {
+    if (view !== "stats") openStats();
   }
 }
 

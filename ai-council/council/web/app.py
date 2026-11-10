@@ -20,14 +20,15 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from ..client import OpenRouterClient
+from ..client import OpenRouterClient, ProviderError
 from ..config import CouncilConfig, Mode, OverrideError, load_config, with_overrides
 from ..estimate import ModelCatalog, estimate, parse_pricing, unknown_models, vision_map
 from ..mock import MockClient
 from ..archive import MIME, Archive, available_formats, download_name, report_kind
 from ..attachments import (ACCEPT, MAX_FILE_BYTES, MAX_FILES, AttachmentError, assign_files, human_size,
-                           limit_total, load_attachment, safe_name)
+                           limit_total, load_attachment, merge, safe_name)
 from ..report import make_stem, save
+from ..reports.brand import set_brand
 from ..session import Council, CouncilError
 from .auth import BasicAuth
 
@@ -57,7 +58,9 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
     """Восстанавливает ленту событий из сохранённого заседания (для истории)."""
     ev: list[dict[str, Any]] = [
         {"type": "start", "id": session_id, "question": d["question"], "mode": d["mode"],
-         "members": list(d.get("stats", {})), "rounds": None},
+         "members": list(d.get("stats", {})), "rounds": None,
+         "parent": ({"id": d["followup_of"], "title": (d.get("thread") or [{}])[-1].get("title", "")}
+                    if d.get("followup_of") else None)},
         {"type": "framing", "refined_question": d.get("refined_question", d["question"]), "criteria": d["criteria"]},
     ]
     if d.get("attachments"):
@@ -102,6 +105,7 @@ class RunRequest(BaseModel):
     budget: float | None = Field(default=None, gt=0, le=100)
     mock: bool = False
     attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)  # id загрузок
+    parent: str | None = None  # уточнение к этому заседанию
 
     @property
     def clean_options(self) -> list[str] | None:
@@ -157,9 +161,11 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 
     def base_config() -> CouncilConfig:
         try:
-            return load_config(config_path)
+            cfg = load_config(config_path)
         except (OSError, ValueError) as e:
             raise HTTPException(500, f"ошибка в {config_path.name}: {e}") from e
+        set_brand(cfg.branding, config_path.parent)  # правки оформления подхватываются без перезапуска
+        return cfg
 
     def runs_dir(cfg: CouncilConfig) -> Path:
         d = Path(cfg.runs_dir)
@@ -254,6 +260,61 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             shutil.rmtree(uploads_dir() / uid, ignore_errors=True)
         return {"ok": True}
 
+    @app.post("/api/transcribe")
+    async def transcribe_audio(request: Request, mock: bool = False) -> dict[str, Any]:
+        """Голосовой ввод: тело запроса — запись из браузера (WebM/MP4/OGG/WAV). Возвращает распознанный текст."""
+        from ..transcribe import MAX_AUDIO_BYTES, TranscribeError, transcribe
+        data = await request.body()
+        if len(data) > MAX_AUDIO_BYTES:
+            raise HTTPException(413, "запись больше 20 МБ")
+        cfg = base_config()
+        if mock:
+            client = MockClient(delay=0.3)
+        else:
+            key = os.environ.get("OPENROUTER_API_KEY")
+            if not key:
+                raise HTTPException(400, "нет OPENROUTER_API_KEY — расшифровка голоса доступна в демо-режиме или с ключом")
+            client = OpenRouterClient(key, timeout=cfg.timeout_s, max_retries=1)
+        try:
+            text, seconds, cost = await transcribe(client, cfg.transcribe_model, data)
+        except TranscribeError as e:
+            raise HTTPException(400, str(e)) from e
+        except ProviderError as e:
+            raise HTTPException(502, f"модель расшифровки не ответила: {e}") from e
+        finally:
+            await client.aclose()
+        return {"text": text, "seconds": round(seconds, 1), "cost": cost}
+
+    @app.get("/api/stats")
+    async def stats() -> dict[str, Any]:
+        from ..stats import compute
+        return await asyncio.to_thread(compute, archive())
+
+    @app.post("/api/sessions/{sid}/repeat")
+    async def repeat(sid: str) -> dict[str, Any]:
+        """Данные для «Повторить»: исходные настройки и вложения (скопированы в черновики формы)."""
+        import secrets
+        arch = archive()
+        if not arch.exists(sid):
+            raise HTTPException(404, "заседание не найдено")
+        req = await asyncio.to_thread(arch.request_of, sid)
+        d = await asyncio.to_thread(arch.load, sid)
+        uploads = []
+        for m in d.get("attachments") or []:
+            try:
+                data = await asyncio.to_thread(arch.attachment(sid, m["file"]).read_bytes)
+                att = await asyncio.to_thread(load_attachment, data, m["name"])
+            except (KeyError, OSError, AttachmentError):
+                continue
+            uid = secrets.token_hex(8)
+            folder = uploads_dir() / uid
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / "data").write_bytes(data)
+            (folder / "meta.json").write_text(json.dumps({"name": att.name}, ensure_ascii=False), encoding="utf-8")
+            uploads.append(await asyncio.to_thread(upload_meta, att, uid))
+        title = await asyncio.to_thread(lambda: arch.view(sid).title_text)
+        return {"request": req, "uploads": uploads, "title": title}
+
     @app.get("/api/sessions/{sid}/files/{file}")
     async def session_file(sid: str, file: str) -> FileResponse:
         try:
@@ -335,6 +396,14 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         if req.mode == "evaluate" and (not opts or len(opts) < 2):
             raise HTTPException(400, "для оценки нужно минимум 2 варианта")
         atts = await asyncio.to_thread(load_uploads, req.attachments) if req.attachments else []
+        history: list[dict[str, Any]] = []
+        parent_title = ""
+        if req.parent:
+            if not archive().exists(req.parent):
+                raise HTTPException(400, "заседание, к которому задаётся уточнение, не найдено")
+            history, parent_atts = await asyncio.to_thread(archive().followup, req.parent)
+            parent_title = history[-1]["title"]
+            atts = merge(parent_atts, atts)  # вложения исходного заседания тоже видны совету (без повторов)
         assign_files(atts)
         att_warnings = limit_total(atts)
         vision = vision_map(cfg, None if req.mock else await catalog.get())
@@ -354,7 +423,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         rounds = cfg.debate_rounds if req.rounds is None else req.rounds
         st.push({"type": "start", "id": sid, "question": req.question, "mode": "evaluate" if opts else req.mode,
                  "rounds": rounds, "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
-                 "budget": cfg.max_cost_usd, "mock": req.mock})
+                 "budget": cfg.max_cost_usd, "mock": req.mock,
+                 "parent": {"id": req.parent, "title": parent_title} if req.parent else None})
 
         def on_event(event: str, **data: Any) -> None:
             st.push({"type": event, **jsonable(data)})
@@ -366,7 +436,11 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     st.push({"type": "member_failed", "stage": "attachments", "member": "вложения", "error": w})
                 res = await council.run(req.question, criteria=req.clean_criteria, options=opts,
                                         context=req.context or None, mode=req.mode, rounds=rounds,
-                                        attachments=atts)
+                                        attachments=atts, history=history, followup_of=req.parent or "")
+                res.request = {"question": req.question, "mode": "evaluate" if opts else req.mode, "rounds": rounds,
+                               "criteria": req.clean_criteria or [], "options": opts or [], "context": req.context or "",
+                               "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
+                               "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd}
                 st.push({"type": "saving"})
                 await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts)
                 import shutil

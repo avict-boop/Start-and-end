@@ -12,6 +12,7 @@
   <div class="brand"><span class="logo" aria-hidden="true"></span>Совет нейросетей</div>
   <div class="topbar-right">
     <span id="keyStatus" class="pill"></span>
+    <button id="statsBtn" class="ghost" type="button" title="Статистика">📊<span class="hide-sm">&nbsp;Статистика</span></button>
     <button id="archiveBtn" class="ghost" type="button">Архив</button>
     <button id="newBtn" class="ghost" type="button">+ Новое<span class="hide-sm">заседание</span></button>
   </div>
@@ -20,8 +21,14 @@
 <div class="layout">
   <aside class="sidebar">
     <form id="form" class="card" autocomplete="off">
+      <div id="formBanner" class="form-banner" hidden>
+        <span id="formBannerText"></span>
+        <button type="button" id="formBannerX" class="rm" aria-label="Отменить" title="Отменить">×</button>
+      </div>
       <label class="field">
-        <span>Вопрос для совета</span>
+        <span class="label-row">Вопрос для совета
+          <button type="button" id="micBtn" class="mic" title="Надиктовать вопрос голосом" aria-label="Надиктовать голосом" hidden>🎤</button>
+        </span>
         <textarea id="question" rows="4" required minlength="3"
           placeholder="Например: какой стек выбрать для MVP интернет-магазина с бюджетом 1 млн ₽?"></textarea>
       </label>
@@ -142,11 +149,17 @@
       <div id="archiveList" class="archive-list"></div>
     </section>
 
+    <section id="stats" class="card" hidden>
+      <h1>Статистика</h1>
+      <div id="statsBody"><div class="muted">Загрузка…</div></div>
+    </section>
+
     <div id="session" hidden>
       <section class="card head">
         <div class="head-top">
           <div>
             <div class="eyebrow" id="sMeta"></div>
+            <div id="sParent" class="s-parent" hidden></div>
             <h1 id="sQuestion"></h1>
             <div id="sQuery" class="query" hidden>
               <div class="query-label">Запрос</div>
@@ -201,6 +214,10 @@
           <div><h3>Почему</h3><div id="vWhy" class="md"></div></div>
           <div id="vDissentBox"><h3>Особые мнения</h3><ul id="vDissent"></ul></div>
           <div id="vRisksBox"><h3>Риски</h3><ul id="vRisks"></ul></div>
+        </div>
+        <div id="nextActions" class="next-actions" hidden>
+          <button type="button" id="followBtn" class="primary" title="Новое заседание с учётом этого решения и вложений">💬 Задать уточнение</button>
+          <button type="button" id="repeatBtn" class="secondary" title="Тот же вопрос — можно поменять модели или режим">🔁 Повторить</button>
         </div>
       </section>
 

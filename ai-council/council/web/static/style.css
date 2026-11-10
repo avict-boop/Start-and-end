@@ -165,6 +165,37 @@ button:disabled { opacity: .55; cursor: not-allowed; }
 .query-body:not(.open).clipped::after { content: ""; position: absolute; inset: auto 0 0 0; height: 2.2em;
   background: linear-gradient(transparent, var(--surface)); }
 .query button.link { padding: .2rem 0; font-size: .85rem; }
+/* ---------- голосовой ввод ---------- */
+.label-row { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+.mic { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: .2rem .65rem; font-size: .85rem;
+  font-weight: 600; cursor: pointer; }
+.mic.rec { background: var(--bad); color: #fff; border-color: var(--bad); animation: pulse 1.2s infinite; }
+.mic.busy { opacity: .7; cursor: progress; }
+
+/* ---------- статистика ---------- */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: .6rem; margin: .8rem 0 1.2rem; }
+.kpi { background: var(--surface-2); border-radius: 10px; padding: .7rem .8rem; }
+.kpi .kv { font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.kpi .kl { font-size: .78rem; color: var(--muted); }
+.stats-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 1.2rem; }
+@media (max-width: 900px) { .stats-grid { grid-template-columns: minmax(0, 1fr); } }
+.mbars { display: flex; flex-direction: column; gap: .3rem; font-size: .85rem; }
+.mbar { display: grid; grid-template-columns: 4.6rem minmax(0, 1fr) 5.2rem; gap: .5rem; align-items: center; }
+.mbar .track { height: 10px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
+.mbar .track i { display: block; height: 100%; background: var(--accent); border-radius: 5px; }
+.mbar .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.win-cell { display: flex; align-items: center; gap: .4rem; min-width: 110px; }
+.win-cell .bar { flex: 1; }
+
+/* ---------- уточнение и повтор ---------- */
+.form-banner { display: flex; align-items: flex-start; gap: .5rem; background: var(--accent-soft); color: var(--text);
+  border-radius: 9px; padding: .5rem .6rem; margin-bottom: .8rem; font-size: .88rem; }
+.form-banner span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.form-banner .rm { border: 0; background: none; font-size: 1.1rem; color: var(--muted); padding: 0 .3rem; }
+.next-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); }
+.s-parent { font-size: .82rem; color: var(--muted); margin-bottom: .15rem; }
+.s-parent a { color: var(--accent); }
+
 /* ---------- вложения ---------- */
 .dropzone { border: 1.5px dashed var(--border); border-radius: 9px; padding: .7rem .8rem; font-size: .85rem; color: var(--muted);
   cursor: pointer; text-align: center; background: var(--surface-2); transition: border-color .15s, background .15s; }
@@ -434,4 +465,9 @@ body.modal-open { overflow: hidden; }
 }
 @media (max-width: 700px) {
   .dl-label { flex-basis: 100%; margin: .2rem 0 0; }
+}
+.logo { flex: none; }
+@media (max-width: 520px) {
+  .brand { font-size: .9rem; gap: .45rem; line-height: 1.15; }
+  .topbar-right button { padding: .4rem .5rem; }
 }

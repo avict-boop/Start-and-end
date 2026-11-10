@@ -20,6 +20,16 @@ chair: claude            # председатель: формулирует кр
 devil_advocate: deepseek # ищет слабые места и неочевидные альтернативы (можно убрать)
 runs_dir: runs           # куда сохранять отчёты и стенограммы
 
+# Фирменное оформление отчётов (PDF, Word, Markdown). Всё необязательно.
+# После изменения пересоберите отчёты архива: ai-council reports --force
+branding:
+  title: ""              # название компании/проекта в шапке и колонтитулах (пусто — «Совет нейросетей»)
+  logo: ""               # логотип PNG/JPG, например branding/logo.png (папка branding рядом с config.yaml)
+  color: ""              # фирменный цвет, например "#0a7d5a"
+  footer: ""             # текст в колонтитуле, например «Конфиденциально»
+
+transcribe_model: google/gemini-2.5-flash  # модель для расшифровки голосовых (веб-микрофон и Telegram)
+
 members:
   - name: claude
     model: anthropic/claude-sonnet-4.5

@@ -21,6 +21,15 @@ class MemberConfig(BaseModel):
     reasoning_effort: Effort | None = None  # своя глубина рассуждений для участника
 
 
+class BrandingConfig(BaseModel):
+    """Фирменное оформление отчётов (необязательно)."""
+
+    title: str = ""   # название компании/проекта в шапке и колонтитулах (по умолчанию «Совет нейросетей»)
+    logo: str = ""    # путь к логотипу (PNG/JPG), относительно папки программы, например branding/logo.png
+    color: str = ""   # акцентный цвет, например "#0a7d5a"
+    footer: str = ""  # доп. текст в колонтитуле, например «Конфиденциально»
+
+
 class CouncilConfig(BaseModel):
     language: str = "Russian"
     mode: Mode = "debate"
@@ -38,6 +47,8 @@ class CouncilConfig(BaseModel):
     chair: str
     devil_advocate: str | None = None
     runs_dir: str = "runs"
+    branding: BrandingConfig = Field(default_factory=BrandingConfig)
+    transcribe_model: str = "google/gemini-2.5-flash"  # модель OpenRouter для расшифровки голосовых
     members: list[MemberConfig]
 
     @model_validator(mode="after")

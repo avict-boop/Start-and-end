@@ -118,11 +118,10 @@ def test_question_card_and_full_demo_session(env):
 
     asyncio.run(scenario())
     texts = fake.texts()
-    assert any("Решение совета" in t for t in texts)
-    assert any("Голосование" in t and "Борда" in t for t in texts)
+    assert any("🏆 <b>Решение:" in t for t in texts)  # короткий итог с кнопками
     edits = [b["text"] for m, b in fake.calls if m == "editMessageText"]
     assert any("Совет заседает" in t for t in texts) and "Заседание завершено" in edits[-1]
-    assert any(m == "sendDocument" for m, _ in fake.calls)
+    assert not any(m == "sendDocument" for m, _ in fake.calls)  # отчёт — по кнопке
     assert list((tmp / "runs").glob("*.json"))  # заседание видно и в веб-истории
     assert json.loads((tmp / "runs" / "telegram_settings.json").read_text())[str(CHAT)]["rounds"] == 2
 
@@ -162,7 +161,7 @@ def test_evaluate_command(env):
         await finish(bot)
 
     asyncio.run(scenario())
-    assert any("Решение совета" in t for t in fake.texts())
+    assert any("🏆 <b>Решение:" in t for t in fake.texts())
     asyncio.run(bot.handle_update(msg("/evaluate только вопрос")))
     assert "Формат" in fake.texts()[-1]
 
@@ -286,6 +285,15 @@ def test_reports_and_archive(env):
         await finish(bot)
 
     asyncio.run(scenario())
+    summary = next(b for m, b in reversed(fake.calls) if m == "sendMessage" and "🏆" in b.get("text", ""))
+    btn = [b["callback_data"].split(":")[0] + ":" + b["callback_data"].split(":")[1] for row in summary["reply_markup"]["inline_keyboard"] for b in row]
+    assert [b.split(":")[0] + (":" + b.split(":")[1] if b.split(":")[0] in ("res", "rep") else "") for b in btn] == ["res:more", "res:tally", "rep:pdf", "rep:summary.pdf", "fup", "rpt"]
+    key = summary["reply_markup"]["inline_keyboard"][0][0]["callback_data"].split(":")[2]
+    asyncio.run(bot.handle_update(press(f"res:more:{key}", 999)))
+    assert "Решение совета: вариант" in fake.texts()[-1] and "Почему:" in fake.texts()[-1]
+    asyncio.run(bot.handle_update(press(f"res:tally:{key}", 999)))
+    assert "Голосование" in fake.texts()[-1] and "Борда" in fake.texts()[-1]
+    asyncio.run(bot.handle_update(press(f"rep:pdf:{key}", 999)))
     d = docs(fake)[-1]
     assert d["filename"].endswith(".pdf") and d["is_pdf"]
     rows = d["reply_markup"]["inline_keyboard"]
@@ -307,8 +315,8 @@ def test_reports_and_archive(env):
     ses = [b for b in buttons(arc) if b.startswith("ses:")]
     assert len(ses) == 1
     asyncio.run(bot.handle_update(press(ses[0], 999)))
-    d = docs(fake)[-1]
-    assert d["is_pdf"] and "язык программирования" in d["_multipart"]
+    card = fake.last("sendMessage")
+    assert "🏆" in card["text"] and "язык программирования" in card["text"] and "fup:" + ses[0][4:] in buttons(card)
     # поиск
     asyncio.run(bot.handle_update(msg("/archive кофейня")))
     assert "Ничего не найдено" in fake.last("sendMessage")["text"]
@@ -427,3 +435,45 @@ def test_same_chat_updates_processed_in_order(env):
     p = bot.pending[CHAT]
     assert p.question == "Сравни эти две картинки" and [a.name for a in p.attachments] == ["фото-31.jpg", "фото-32.jpg"]
     assert sum("Принял" in t for t in fake.texts()) == 1  # на альбом — один ответ
+
+
+def test_followup_repeat_voice_stats_in_bot(env):
+    bot, fake, tmp = env
+
+    async def run_session(q):
+        await bot.handle_update(msg(q))
+        await bot.handle_update(press("go", bot.pending[CHAT].card_id))
+        await finish(bot)
+
+    asyncio.run(run_session("Как назвать кофейню?"))
+    first = next(s for s in bot.archive.stems() if "кофейню" in s)
+    from council.archive import key_of
+    key = key_of(first)
+    # «Уточнить» → бот ждёт вопрос → следующий текст становится уточнением
+    asyncio.run(bot.handle_update(press(f"fup:{key}", 999)))
+    assert "уточняющий вопрос" in fake.texts()[-1] and bot.followup_wait[CHAT] == first
+    asyncio.run(bot.handle_update(msg("А если бюджет меньше?")))
+    p = bot.pending[CHAT]
+    assert p.parent == first and "уточнение к «Как назвать кофейню?»" in fake.last("sendMessage")["text"]
+    async def go():
+        await bot.handle_update(press("go", p.card_id))
+        await finish(bot)
+
+    asyncio.run(go())
+    second = next(s for s in bot.archive.stems() if "бюджет" in s)
+    assert bot.archive.load(second)["followup_of"] == first
+    # «Повторить» → новая карточка с тем же вопросом
+    asyncio.run(bot.handle_update(press(f"rpt:{key}", 999)))
+    assert bot.pending[CHAT].question == "Как назвать кофейню?" and "Повтор" in fake.texts()[-2]
+    asyncio.run(bot.handle_update(msg("/cancel")))
+    assert CHAT not in bot.pending
+    # голосовое → расшифровка → вопрос (демо-режим)
+    from tests.test_features import audio
+    fake.files["VOICE1"] = audio("ogg", "libopus", 2.0)
+    asyncio.run(bot.handle_update({"update_id": 40, "message": {"message_id": 41, "from": {"id": OWNER},
+        "chat": {"id": CHAT, "type": "private"}, "voice": {"file_id": "VOICE1", "duration": 2, "file_size": 30000}}}))
+    assert any("🎤 <b>Распознано:</b>" in t for t in fake.texts())
+    assert "демо-расшифровка" in bot.pending[CHAT].question
+    # статистика
+    asyncio.run(bot.handle_update(msg("/stats")))
+    assert "Заседаний: <b>2</b>" in fake.texts()[-1]

@@ -72,6 +72,9 @@ class SessionResult:
     attachments: list[dict[str, Any]] = field(default_factory=list)  # описания вложений (без содержимого)
     image_notes: dict[str, str] = field(default_factory=dict)         # картинка -> текстовое описание
     image_notes_by: str = ""
+    followup_of: str = ""                                             # id заседания, к которому это уточнение
+    request: dict[str, Any] = field(default_factory=dict)             # исходные настройки запуска (для «Повторить»)
+    thread: list[dict[str, Any]] = field(default_factory=list)        # предыдущие вопросы и решения цепочки
 
     @property
     def total_cost(self) -> float:
@@ -98,6 +101,9 @@ class SessionResult:
             "attachments": self.attachments,
             "image_notes": self.image_notes,
             "image_notes_by": self.image_notes_by,
+            "followup_of": self.followup_of,
+            "request": self.request,
+            "thread": self.thread,
             "transcript": self.transcript,
         }
 
@@ -125,6 +131,7 @@ class Council:
         self.attachments: list[Attachment] = []
         self.image_notes: dict[str, str] = {}
         self.image_notes_by = ""
+        self.history: list[dict[str, Any]] = []
 
     # ------------------------------------------------------------------ helpers
 
@@ -268,10 +275,10 @@ class Council:
 
     def _with_attachments(self, member: MemberConfig, stage: str, prompt: str) -> str | list[dict[str, Any]]:
         """Добавляет к запросу вложения: текст документов и картинки (или их описание для «незрячих»)."""
-        if not self.attachments or stage not in self.ATTACHMENT_STAGES:
+        if not (self.attachments or self.history) or stage not in self.ATTACHMENT_STAGES:
             return prompt
         sees = self.can_see(member)
-        extra = [x for x in (documents_block(self.attachments),
+        extra = [x for x in (prompts.history_block(self.history), documents_block(self.attachments),
                              images_note(self.attachments, self.image_notes, sees)) if x]
         text = "\n\n".join(extra + [prompt])
         parts = image_parts(self.attachments) if sees else []
@@ -338,7 +345,10 @@ class Council:
         mode: Mode | None = None,
         rounds: int | None = None,
         attachments: list[Attachment] | None = None,
+        history: list[dict[str, Any]] | None = None,
+        followup_of: str = "",
     ) -> SessionResult:
+        """history — предыдущие вопросы и решения (для уточняющего вопроса), от старых к новым."""
         mode = "evaluate" if options else (mode or self.cfg.mode)
         if mode == "evaluate" and not options:
             raise CouncilError("для режима evaluate нужны варианты (--option или --options-file)")
@@ -349,6 +359,9 @@ class Council:
         chair = self.cfg.member(self.cfg.chair)
 
         self.attachments = list(attachments or [])
+        self.history = list(history or [])
+        if self.history:
+            self._emit("followup", of=followup_of, thread=self.history)
         if self.attachments:
             self._emit("attachments", items=[a.meta() for a in self.attachments],
                        blind=[m.name for m in members if not self.can_see(m)])
@@ -521,6 +534,8 @@ class Council:
             attachments=[a.meta() for a in self.attachments],
             image_notes=dict(self.image_notes),
             image_notes_by=self.image_notes_by,
+            followup_of=followup_of,
+            thread=self.history,
         )
 
 

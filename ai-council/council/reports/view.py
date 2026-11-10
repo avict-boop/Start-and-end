@@ -25,6 +25,12 @@ class View:
     files_dir: Any = None  # папка с вложениями заседания (Path) — для картинок в отчёте
 
     @property
+    def followup_title(self) -> str:
+        """Название заседания, к которому это уточнение (или пусто)."""
+        thread = self.d.get("thread") or []
+        return (thread[-1].get("title") or thread[-1].get("question", "")[:100]) if thread and self.d.get("followup_of") else ""
+
+    @property
     def attachments(self) -> list[dict[str, Any]]:
         return list(self.d.get("attachments") or [])
 

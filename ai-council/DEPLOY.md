@@ -43,6 +43,7 @@
 | `ai-council password` | сменить пароль веб-интерфейса |
 | `ai-council access` | показать адреса и пароли |
 | `ai-council backup` | копия всех отчётов |
+| `ai-council stats` | статистика: расходы по месяцам, какие модели чаще побеждают и чаще сбоят |
 | `ai-council archive` | список заседаний (поиск: `ai-council archive кофейня`) |
 | `ai-council reports` | досоздать отчёты PDF/Word/MD для всего архива (`--force` — пересобрать все) |
 | `ai-council ask "вопрос"` | заседание прямо из консоли |

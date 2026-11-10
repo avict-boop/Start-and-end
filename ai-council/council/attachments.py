@@ -255,6 +255,18 @@ def load_attachment(data: bytes, name: str, file: str = "") -> Attachment:
     return att
 
 
+def merge(*groups: list[Attachment]) -> list[Attachment]:
+    """Объединяет списки вложений без повторов (одинаковые имя и размер) и не больше MAX_FILES."""
+    out, seen = [], set()
+    for group in groups:
+        for a in group:
+            key = (a.name, a.size)
+            if key not in seen:
+                seen.add(key)
+                out.append(a)
+    return out[:MAX_FILES]
+
+
 def assign_files(atts: list[Attachment]) -> None:
     """Уникальные имена файлов для сохранения: 01-имя.pdf, 02-имя.jpg…"""
     for i, a in enumerate(atts, 1):
