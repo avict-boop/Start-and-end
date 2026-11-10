@@ -512,6 +512,7 @@ class Council:
                     "revision",
                     prompts.revision(refined, criteria, own, proposals[own], feedback, others(m.name), question),
                     Revision,
+                    check=_normalize_revision,
                     meta={"label": own},
                 )
             revised = await self._parallel("revision", jobs)
@@ -659,6 +660,16 @@ STATUS_ALIASES = {
     "refuted": "refuted", "false": "refuted", "incorrect": "refuted", "wrong": "refuted",
     "опровергнуто": "refuted", "неверно": "refuted", "ложно": "refuted",
 }
+
+
+POSITION_ALIASES = {"kept": "kept", "keep": "kept", "same": "kept", "сохранена": "kept", "сохранил": "kept",
+                    "improved": "improved", "refined": "improved", "strengthened": "improved", "доработана": "improved",
+                    "switched": "switched", "changed": "switched", "replaced": "switched", "сменена": "switched"}
+
+
+def _normalize_revision(r: Revision) -> Revision:
+    pos = POSITION_ALIASES.get(str(r.position).strip().lower().split()[0] if str(r.position).strip() else "", "improved")
+    return r.model_copy(update={"position": pos})
 
 
 def normalize_status(raw: str) -> str:

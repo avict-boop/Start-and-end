@@ -23,9 +23,12 @@ class Proposal(BaseModel):
 
 
 class Revision(Proposal):
-    """Шаг 4: доработанное предложение после критики."""
+    """Шаг 4: доработанное предложение после критики и сравнения с чужими вариантами."""
 
     changes: str = ""
+    comparison: str = ""                                  # честное сравнение своего варианта с чужими
+    borrowed: list[str] = Field(default_factory=list)     # что взято у других (с меткой варианта)
+    position: str = "improved"                            # kept | improved | switched (нормализуется в session)
 
 
 class Review(BaseModel):

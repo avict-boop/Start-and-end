@@ -79,6 +79,15 @@ def _proposal_block(label: str, p: Proposal) -> str:
     return "\n".join(lines)
 
 
+MAX_OTHER_CHARS = 8000  # сколько символов чужого варианта показывать на доработке
+
+
+def _clip(p: Proposal) -> Proposal:
+    if len(p.summary) <= MAX_OTHER_CHARS:
+        return p
+    return p.model_copy(update={"summary": p.summary[:MAX_OTHER_CHARS] + " …(truncated)"})
+
+
 def proposals_block(proposals: dict[str, Proposal]) -> str:
     return "\n\n".join(_proposal_block(label, p) for label, p in proposals.items())
 
@@ -149,7 +158,7 @@ def revision(
     original: str | None = None,
 ) -> str:
     fb = json.dumps(feedback, ensure_ascii=False, indent=1) if feedback else "(no feedback received)"
-    others_short = "\n".join(f"- {l}: {p.title} — {p.summary[:400]}" for l, p in others.items())
+    others_full = "\n\n".join(_proposal_block(l, _clip(p)) for l, p in others.items())
     return f"""Question for the council:
 {question}
 {_original(question, original)}
@@ -162,16 +171,29 @@ Your current proposal (label {own_label}):
 Anonymous feedback other members gave on your proposal:
 {fb}
 
-Other proposals (short):
-{others_short}
+Other proposals, in full (anonymous):
 
-Revise your proposal: fix real weaknesses, keep what is strong, borrow good ideas from others if they make it better.
-If another proposal is clearly better, you may rework yours to build on it. Do not change things just to please critics.
+{others_full}
+
+Do this in order:
+1. Compare honestly: where is each other proposal stronger than yours, and where is yours stronger? Be specific.
+2. Revise: fix the real weaknesses named by critics or revealed by the comparison, keep what is strong, and take
+   specific ideas from other proposals when they make yours better (say which ideas and from which label).
+3. Keep your independence: change your core approach only if a specific argument, fact or piece of evidence shows
+   it is wrong or clearly inferior — name it. That others agree with each other is not a reason by itself, and do
+   not change things just to please critics. If another proposal is clearly better overall, you may rebuild yours
+   on it — then say so.
 {FORMAT_RULE}
 
 JSON format:
-{{"title": "...", "summary": "...", "reasoning": "...", "pros": ["..."], "risks": ["..."],
-  "confidence": 0.0-1.0, "changes": "what you changed and why"}}"""
+{{"title": "...", "summary": "the full revised answer", "reasoning": "...", "pros": ["..."], "risks": ["..."],
+  "confidence": 0.0-1.0,
+  "comparison": "where other proposals are stronger than yours and where yours is stronger",
+  "borrowed": ["idea taken from another proposal (label)"],
+  "position": "kept | improved | switched",
+  "changes": "what you changed and why; if position changed, the specific argument that convinced you"}}
+"position": kept — same approach, only small fixes; improved — same core approach, substantially strengthened;
+switched — core approach replaced (for example, rebuilt on another proposal)."""
 
 
 def vote(question: str, criteria: list[str], proposals: dict[str, Proposal]) -> str:

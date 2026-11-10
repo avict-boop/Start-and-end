@@ -963,10 +963,20 @@ const AGREE_HINT = {
 };
 const TIE_NAME = { pairwise: "попарное сравнение", critique: "оценка критики", label: "жребий (метка)" };
 
+const POSITION_NAME = { kept: "позиция сохранена", improved: "доработан в рамках своего подхода", switched: "подход сменён" };
 const FLAG_NAME = { against: "порядок почти обратный общему мнению",
   leader_last: "ставит на последнее место вариант, который остальные считают лучшим" };
 const FACT_ICON = { confirmed: "✅", refuted: "❌", unclear: "❔" };
 const FACT_NAME = { confirmed: "подтверждено", refuted: "опровергнуто", unclear: "не удалось проверить" };
+
+function positionsHtml(s) {
+  const c = { kept: 0, improved: 0, switched: 0 };
+  for (const [l, p] of Object.entries(s.proposals || {})) if (s.revised[l] && p.comparison !== undefined && p.position in c) c[p.position]++;
+  const n = c.kept + c.improved + c.switched;
+  if (!n) return "";
+  return `<br>После доработки: сохранили позицию — ${c.kept}, доработали свой подход — ${c.improved}, сменили подход — ${c.switched}`
+    + (n >= 2 && c.switched * 2 >= n ? ". <b>Половина и больше сменили подход — варианты могли сблизиться, смотрите особые мнения.</b>" : ".");
+}
 
 function flagsHtml(s) {
   const f = Object.entries(s.ballotFlags || {});
@@ -1009,7 +1019,7 @@ function renderTally(s) {
     const a = s.agreement;
     $("tallyNote").innerHTML = (a ? `<b>Согласие совета: ${AGREE_NAME[a.level]}</b> (τ = ${a.tau.toFixed(2)}) — ${AGREE_HINT[a.level]}.<br>` : "")
       + "Порядок: балл Борда; при равенстве — попарное сравнение, затем оценка критики."
-      + ties.map((t) => `<br>• ${t}`).join("") + flagsHtml(s);
+      + ties.map((t) => `<br>• ${t}`).join("") + positionsHtml(s) + flagsHtml(s);
   } else {
     $("tally").innerHTML = "";
     $("tallyNote").innerHTML = "";
@@ -1033,7 +1043,7 @@ function renderProposals(s) {
       <div class="body md">${md(p.summary)}${p.reasoning ? `<p><b>Обоснование:</b> ${inline(p.reasoning)}</p>` : ""}</div>
       <button class="open-full" type="button" data-full="${esc(l)}">Открыть полностью ⤢</button>
       <div class="lists">${list("Плюсы", p.pros)}${list("Риски", p.risks)}</div>
-      ${p.changes ? `<div class="changes"><b>Что изменено:</b> ${inline(p.changes)}</div>` : ""}
+      ${p.changes ? `<div class="changes"><b>Что изменено${s.revised[l] && POSITION_NAME[p.position] && p.comparison !== undefined ? ` (${POSITION_NAME[p.position]})` : ""}:</b> ${inline(p.changes)}</div>` : ""}
       ${conf}
     </article>`;
   }).join("");
@@ -1369,7 +1379,9 @@ function proposalHtml(p, s, label) {
   if (p.reasoning) parts.push(`<h3>Обоснование</h3><div class="section">${md(p.reasoning)}</div>`);
   if (p.pros && p.pros.length) parts.push(`<h3>Плюсы</h3><ul>${p.pros.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`);
   if (p.risks && p.risks.length) parts.push(`<h3>Риски</h3><ul>${p.risks.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`);
-  if (p.changes) parts.push(`<div class="changes"><b>Что изменено после критики:</b> ${inline(p.changes)}</div>`);
+  if (p.comparison) parts.push(`<h3>Сравнение с другими вариантами</h3><div class="section">${md(p.comparison)}</div>`);
+  if (p.borrowed && p.borrowed.length) parts.push(`<h3>Взято у других</h3><ul>${p.borrowed.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`);
+  if (p.changes) parts.push(`<div class="changes"><b>Что изменено после критики${POSITION_NAME[p.position] && p.comparison !== undefined ? ` (${POSITION_NAME[p.position]})` : ""}:</b> ${inline(p.changes)}</div>`);
   if (p.confidence != null && s.authors[label] != null) parts.push(`<p class="muted small">Уверенность автора: ${Math.round(p.confidence * 100)}%</p>`);
   return parts.join("");
 }

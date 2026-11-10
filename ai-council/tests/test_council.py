@@ -456,3 +456,35 @@ def test_content_parts_are_joined():
     from council.client import _as_text
     assert _as_text([{"type": "text", "text": "Привет, "}, {"type": "image_url"}, "мир"]) == "Привет, мир"
     assert _as_text(None) == "" and _as_text("x") == "x"
+
+
+# ---------------------------------------------------------------- доработка с полным сравнением
+
+
+def test_revision_sees_full_other_proposals_and_compares():
+    from council import prompts
+    from council.schemas import Proposal
+    long = "Начало. " + "подробности " * 200 + "КОНЕЦ_ВАРИАНТА"
+    others = {"B": Proposal(title="Другой", summary=long), "C": Proposal(title="Третий", summary="x" * 9000)}
+    txt = prompts.revision("Q", ["Цена"], "A", Proposal(title="Мой", summary="s"), [], others, None)
+    assert "КОНЕЦ_ВАРИАНТА" in txt  # чужой вариант виден целиком, а не первые 400 символов
+    assert "…(truncated)" in txt    # но очень длинный — обрезан
+    assert "Compare honestly" in txt and '"position": "kept | improved | switched"' in txt
+    assert "That others agree with each other is not a reason by itself" in txt
+
+
+def test_revision_position_is_normalized_and_saved():
+    from council.schemas import Revision
+    from council.session import _normalize_revision
+    assert _normalize_revision(Revision(title="t", summary="s", position="Switched — rebuilt on B")).position == "switched"
+    assert _normalize_revision(Revision(title="t", summary="s", position="???")).position == "improved"
+    res = run(Council(make_cfg(), MockClient(delay=0), seed=1).run("Вопрос?"))
+    revised = [p for l, p in res.proposals.items() if p is not res.initial_proposals[l]]
+    assert revised and all(p.position in ("kept", "improved", "switched") and p.comparison for p in revised)
+    d = res.to_dict()
+    from council.reports.view import View
+    from council.reports.html import render_html
+    v = View(d)
+    assert v.position_line.startswith("После доработки:")
+    html = render_html(v)
+    assert "Сравнение с другими вариантами" in html and "Взято у других" in html and "После доработки:" in html

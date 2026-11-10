@@ -58,6 +58,9 @@ class MockClient:
             }
             if stage == "revision":
                 out["changes"] = "Учёл замечания по рискам."
+                out["comparison"] = "Сильнее в плане запуска; у других лучше проработан маркетинг (демо)."
+                out["borrowed"] = ["лендинг для проверки спроса (из другого варианта)"]
+                out["position"] = ["kept", "improved", "switched"][_h(who) % 3]
         elif stage == "critique":
             crit = meta["criteria"]
             out = {

@@ -184,6 +184,32 @@ class View:
     def tally(self) -> list[dict]:
         return list(self.d.get("tally") or [])
 
+    # ------------------------------------------------------------ доработка: сравнение и смена позиции
+
+    POSITION_NAME = {"kept": "позиция сохранена", "improved": "доработан в рамках своего подхода",
+                     "switched": "подход сменён"}
+
+    def position(self, label: str) -> str:
+        """Позиция автора после доработки (только для доработанных вариантов новых заседаний)."""
+        p = self.proposals.get(label) or {}
+        return p.get("position", "") if self.revised(label) and "comparison" in p else ""
+
+    @property
+    def position_line(self) -> str:
+        """«После доработки: сохранили позицию 1 · доработали 2 · сменили подход 1»."""
+        c = {"kept": 0, "improved": 0, "switched": 0}
+        for l in self.proposals:
+            pos = self.position(l)
+            if pos in c:
+                c[pos] += 1
+        if not sum(c.values()):
+            return ""
+        line = (f"После доработки: сохранили позицию — {c['kept']}, доработали свой подход — {c['improved']}, "
+                f"сменили подход — {c['switched']}")
+        if c["switched"] * 2 >= sum(c.values()) and sum(c.values()) >= 2:
+            line += ". Половина и больше сменили подход — варианты могли сблизиться, смотрите особые мнения"
+        return line
+
     # ------------------------------------------------------------ проверка бюллетеней и фактов
 
     @property

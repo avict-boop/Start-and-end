@@ -311,6 +311,8 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
         + (f" Согласие совета: {_e(v.agreement_line)}." if v.agreement_line else "") + "</p>")
     for note in v.tie_notes:
         add(f'<p class="muted small">• {_e(note)}</p>')
+    if v.position_line:
+        add(f'<p class="muted small">{_e(v.position_line)}.</p>')
     if v.flag_notes:
         add('<div class="agree-warn"><b>Бюллетени против общего мнения</b> (голоса учтены, это только пометка):'
             + "".join(f"<br>• {_e(n)}" for n in v.flag_notes) + f"<br>{_e(v.robust_note)}</div>")
@@ -346,8 +348,14 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
             add("<h4>Плюсы</h4>" + _list(p["pros"]))
         if p.get("risks"):
             add("<h4>Риски</h4>" + _list(p["risks"]))
+        if p.get("comparison") and v.revised(l):
+            add(f'<h4>Сравнение с другими вариантами</h4><div class="md">{md_to_html(p["comparison"])}</div>')
+        if p.get("borrowed") and v.revised(l):
+            add("<h4>Взято у других</h4>" + _list(p["borrowed"]))
         if p.get("changes"):
-            add(f'<div class="box"><b>Что изменено после критики:</b> {_inline(p["changes"])}</div>')
+            pos = v.position(l)
+            add(f'<div class="box"><b>Что изменено после критики'
+                + (f" ({_e(v.POSITION_NAME.get(pos, pos))})" if pos else "") + f':</b> {_inline(p["changes"])}</div>')
         ini = v.initial(l)
         if v.revised(l) and ini:
             add(f'<div class="initial"><h4>Первоначальная версия: {_e(ini.get("title", ""))}</h4>'

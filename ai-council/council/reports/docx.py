@@ -542,7 +542,7 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
                                        "затем оценка критики." + (f" Согласие совета: {v.agreement_line}." if v.agreement_line else ""))
     note.font.size = Pt(8.5)
     note.font.color.rgb = MUTED
-    for tn in v.tie_notes:
+    for tn in v.tie_notes + ([v.position_line + "."] if v.position_line else []):
         r = doc.add_paragraph().add_run("• " + tn)
         r.font.size = Pt(8.5)
         r.font.color.rgb = MUTED
@@ -589,10 +589,17 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
         if p.get("risks"):
             _heading(doc, "Риски", 3)
             _bullets(doc, p["risks"])
+        if p.get("comparison") and v.revised(l):
+            _heading(doc, "Сравнение с другими вариантами", 3)
+            add_markdown(doc, p["comparison"])
+        if p.get("borrowed") and v.revised(l):
+            _heading(doc, "Взято у других", 3)
+            _bullets(doc, p["borrowed"])
         if p.get("changes"):
             par = doc.add_paragraph()
             _shade(par, "F6F6FA")
-            par.add_run("Что изменено после критики: ").bold = True
+            pos = v.position(l)
+            par.add_run("Что изменено после критики" + (f" ({v.POSITION_NAME.get(pos, pos)})" if pos else "") + ": ").bold = True
             par.add_run(_clean(p["changes"]))
         ini = v.initial(l)
         if v.revised(l) and ini:

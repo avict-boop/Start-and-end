@@ -105,6 +105,8 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
                    f"{'—' if avg is None else f'{avg:.1f}'} | {r.get('first_places', 0)}/{r.get('ballots', 0)} |")
     out += ["", "*Порядок: балл Борда; при равенстве — попарное сравнение (побед минус поражений), затем оценка критики.*"]
     out += [f"- {n}" for n in v.tie_notes]
+    if v.position_line:
+        out += [f"*{v.position_line}.*"]
     if v.flag_notes:
         out += ["", "> ⚠️ **Бюллетени против общего мнения** (голоса учтены):"] + [f"> - {n}" for n in v.flag_notes]
         out += [f"> {v.robust_note}"]
@@ -130,8 +132,13 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
             out += ["**Плюсы:**", "", *[f"- {x}" for x in p["pros"]], ""]
         if p.get("risks"):
             out += ["**Риски:**", "", *[f"- {x}" for x in p["risks"]], ""]
+        if p.get("comparison") and v.revised(l):
+            out += ["**Сравнение с другими вариантами.** " + p["comparison"], ""]
+        if p.get("borrowed") and v.revised(l):
+            out += ["**Взято у других:**", "", *[f"- {x}" for x in p["borrowed"]], ""]
         if p.get("changes"):
-            out += [f"> **Что изменено после критики:** {p['changes']}", ""]
+            pos = v.position(l)
+            out += [f"> **Что изменено после критики{f' ({v.POSITION_NAME.get(pos, pos)})' if pos else ''}:** {p['changes']}", ""]
         ini = v.initial(l)
         if v.revised(l) and ini:
             out += [f"<details><summary>Первоначальная версия: {ini.get('title', '')}</summary>", "",
