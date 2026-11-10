@@ -206,3 +206,20 @@ def test_very_long_question_is_accepted(client):
     assert r.status_code == 200
     events = read_events(client, r.json()["id"])
     assert events[0]["question"] == q and events[-1]["type"] == "done"
+
+
+def test_balance_endpoint(client, monkeypatch):
+    assert client.get("/api/balance").json() == {"has_key": False, "balance": None}
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    calls = []
+
+    async def fake_balance(self):
+        calls.append(1)
+        return 12.5
+
+    monkeypatch.setattr("council.web.app.OpenRouterClient.balance", fake_balance)
+    assert client.get("/api/balance").json() == {"has_key": True, "balance": 12.5}
+    client.get("/api/balance")
+    assert len(calls) == 1  # кэш на минуту
+    client.get("/api/balance?force=1")
+    assert len(calls) == 2

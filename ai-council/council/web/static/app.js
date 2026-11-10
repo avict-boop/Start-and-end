@@ -373,8 +373,32 @@ async function initForm() {
   const ks = $("keyStatus");
   ks.textContent = config.has_key ? "Ключ OpenRouter подключён" : "Нет ключа — только демо";
   ks.className = `pill ${config.has_key ? "ok" : "warn"}`;
+  if (config.has_key) refreshBalance();
   setMode(config.mode === "evaluate" ? "debate" : config.mode);
 }
+
+/* остаток на балансе OpenRouter — в верхней панели, обновляется раз в 2 минуты и после заседания */
+let balanceTimer = null;
+async function refreshBalance(force = false) {
+  const ks = $("keyStatus");
+  try {
+    const r = await api(`/api/balance${force ? "?force=1" : ""}`);
+    if (!r.has_key) return;
+    if (r.balance == null) {
+      ks.textContent = "OpenRouter: баланс недоступен";
+      ks.className = "pill";
+    } else {
+      const b = r.balance;
+      ks.innerHTML = `<span class="hide-sm">Баланс OpenRouter: </span>$${b.toFixed(2)}`;
+      ks.className = `pill clickable ${b < 0.5 ? "bad" : b < 3 ? "warn" : "ok"}`;
+      ks.title = "Остаток на балансе OpenRouter (обновляется раз в 2 минуты и после заседания). Нажмите, чтобы пополнить.";
+    }
+  } catch { /* оставляем прежнее значение */ }
+  if (!balanceTimer) balanceTimer = setInterval(() => { if (!document.hidden) refreshBalance(); }, 120000);
+}
+$("keyStatus").addEventListener("click", () => {
+  if ($("keyStatus").classList.contains("clickable")) window.open("https://openrouter.ai/settings/credits", "_blank", "noopener");
+});
 
 $("modeSeg").addEventListener("click", (e) => { const b = e.target.closest("button"); if (b) setMode(b.dataset.mode); });
 for (const id of ["question", "options", "criteria", "rounds", "mock", "budget", "compact", "factCheck"]) $(id).addEventListener("input", () => { $("estimate").hidden = true; });
@@ -721,6 +745,7 @@ function apply(s, ev) {
       logAdd(s, `Председатель выбрал вариант ${ev.verdict.winner}`, "k-ok");
       break;
     case "done":
+      setTimeout(() => refreshBalance(true), 3000);  // расход заседания уже списан
       logAdd(s, `✓ Заседание завершено, отчёты готовы`, "k-ok");
       s.done = ev;
       s.cost = ev.total_cost ?? s.cost;

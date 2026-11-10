@@ -392,6 +392,25 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             "has_key": bool(os.environ.get("OPENROUTER_API_KEY")),
         }
 
+    balance_cache: dict[str, float | None] = {"at": 0.0, "value": None}
+
+    @app.get("/api/balance")
+    async def get_balance(force: bool = False) -> dict[str, Any]:
+        """Остаток на балансе OpenRouter (кэш на минуту, чтобы не дёргать OpenRouter при каждом обновлении)."""
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            return {"has_key": False, "balance": None}
+        if force or time.time() - (balance_cache["at"] or 0) > 60:
+            bc = OpenRouterClient(key, timeout=15)
+            try:
+                value = await bc.balance()
+            finally:
+                await bc.aclose()
+            if value is not None or balance_cache["value"] is None:
+                balance_cache["value"] = value
+            balance_cache["at"] = time.time()
+        return {"has_key": True, "balance": balance_cache["value"]}
+
     @app.post("/api/estimate")
     async def post_estimate(req: RunRequest) -> dict[str, Any]:
         cfg = build_config(req)

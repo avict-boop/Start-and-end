@@ -326,7 +326,10 @@ tr.winner td { background: color-mix(in srgb, var(--win) 12%, transparent); }
   body.has-session main { order: -1; }
 }
 @media (max-width: 520px) {
-  #keyStatus { display: none; }
+  #keyStatus:not(.clickable) { display: none; }  /* «нет ключа» прячем, остаток баланса — показываем */
+  #keyStatus.clickable { padding: .2rem .45rem; }
+  .topbar-right { gap: .3rem; }
+  .topbar-right button { padding-left: .55rem; padding-right: .55rem; }
   .topbar { padding: .6rem 1rem; }
   .head-stats { width: 100%; justify-content: flex-start; }
   .head-stats > div { align-items: flex-start; }
@@ -530,3 +533,9 @@ label.check.small:has(#factCheck) { display: flex; gap: .45rem; align-items: cen
 
 .reqs { margin-top: .4rem; font-size: .85rem; }
 .chip.req { background: var(--warn-soft); }
+
+.pill.bad { background: var(--bad-soft); color: var(--bad); }
+.pill.clickable { cursor: pointer; font-variant-numeric: tabular-nums; }
+@media (max-width: 430px) {
+  .brand { font-size: 0; gap: 0; }  /* на узком телефоне — только значок, чтобы поместились кнопки и баланс */
+}
