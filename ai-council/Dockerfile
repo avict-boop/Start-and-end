@@ -8,9 +8,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Для отчётов в PDF: движок вёрстки (Pango) и шрифты с кириллицей
+# Для отчётов в PDF: движок вёрстки (Pango) и шрифты с кириллицей:
+# Inter — основной текст отчётов, JetBrains Mono — код, DejaVu — запасной (символы, формулы)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 fonts-dejavu-core \
+    && apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
+       fonts-dejavu-core fonts-inter fonts-jetbrains-mono \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
