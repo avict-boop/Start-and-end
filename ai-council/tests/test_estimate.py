@@ -86,6 +86,7 @@ def test_catalog_upgrades_and_families():
     cat = [
         {"id": "anthropic/claude-sonnet-4.5", "created": 1_750_000_000},
         {"id": "anthropic/claude-sonnet-5", "created": 1_780_000_000, "architecture": {"input_modalities": ["text", "image"]}},
+        {"id": "anthropic/claude-sonnet-5:batch", "created": 1_780_000_000},
         {"id": "anthropic/claude-opus-5", "created": 1_781_000_000},
         {"id": "anthropic/claude-3-haiku", "created": 1_700_000_000},
         {"id": "google/gemini-2.5-pro", "created": 1_745_000_000},

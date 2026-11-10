@@ -23,10 +23,15 @@ def date(m: dict[str, Any]) -> str:
     return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d") if ts else "—"
 
 
+# варианты, которые не подходят совету: :batch — пакетная обработка с ответом позже, :free — с жёсткими лимитами
+UNSUITABLE_SUFFIX = (":batch", ":free")
+
+
 def is_text_model(m: dict[str, Any]) -> bool:
     arch = m.get("architecture") or {}
     out = arch.get("output_modalities") or ["text"]
-    return "text" in out and not SKIP.search(m.get("id", ""))
+    mid = m.get("id", "")
+    return "text" in out and not SKIP.search(mid) and not mid.endswith(UNSUITABLE_SUFFIX)
 
 
 def modalities(m: dict[str, Any]) -> set[str]:
@@ -54,7 +59,7 @@ def sort_newest(models: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def upgrades(cfg: CouncilConfig, models: list[dict[str, Any]], per_provider: int = 3) -> list[dict[str, Any]]:
     """Для каждого участника: его модель, более новые модели того же семейства и самые свежие у того же разработчика."""
     by_id = {m["id"]: m for m in models if m.get("id")}
-    text = [m for m in models if m.get("id") and is_text_model(m) and ":free" not in m["id"]]
+    text = [m for m in models if m.get("id") and is_text_model(m)]
     out = []
     for member in cfg.members:
         cur = by_id.get(member.model)
