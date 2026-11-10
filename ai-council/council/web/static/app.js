@@ -12,7 +12,8 @@ const STAGES = [
   ["vote", "Голосование"],
   ["verdict", "Вердикт"],
 ];
-const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения" };
+const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения",
+  factcheck: "Проверка фактов" };
 const MODE_HINT = {
   debate: "Предложения → критика → доработка → голосование → вердикт. Для важных решений.",
   quick: "Предложения → голосование → вердикт. Быстро и дёшево.",
@@ -145,6 +146,8 @@ function refreshRoleSelects() {
   fill($("chair"), false, config.chair);
   fill($("devil"), true, config.devil_advocate);
   $("chairProposes").checked = !!config.chair_proposes;
+  $("factCheck").checked = !!(config.fact_check && config.fact_check.enabled);
+  $("factCheckHint").textContent = config.fact_check ? `(${config.fact_check.model}, топ-${config.fact_check.top})` : "";
 }
 
 function parseOptions(text) {
@@ -166,6 +169,7 @@ function payload() {
     chair: $("chair").value || null,
     devil_advocate: $("devil").value,
     chair_proposes: $("chairProposes").checked,
+    fact_check: $("factCheck").checked,
     budget: Number($("budget").value) || null,
     mock: $("mock").checked,
     attachments: uploads.filter((u) => u.status === "ready").map((u) => u.meta.id),
@@ -220,6 +224,7 @@ $("repeatBtn").addEventListener("click", async () => {
   if (r.chair) $("chair").value = r.chair;
   if (r.devil_advocate !== undefined) $("devil").value = r.devil_advocate || "";
   if (r.chair_proposes !== undefined) $("chairProposes").checked = !!r.chair_proposes;
+  if (r.fact_check !== undefined) $("factCheck").checked = !!r.fact_check;
   if (r.budget) $("budget").value = r.budget;
   uploads = (data.uploads || []).map((m) => ({ key: ++uploadSeq, name: m.name, status: "ready", meta: m }));
   renderUploads();
@@ -648,7 +653,8 @@ function apply(s, ev) {
       s.stageTitle[ev.stage] = ev.title;
       if (ev.stage === "proposal") s.chairJudge = ev.chair_proposes === false;
       // председатель без своего варианта не участвует в предложениях и доработке
-      const who = ["framing", "verdict"].includes(ev.stage) ? [s.chair].filter(Boolean)
+      const who = ev.stage === "factcheck" ? ["факт-чек"]
+        : ["framing", "verdict"].includes(ev.stage) ? [s.chair].filter(Boolean)
         : ["proposal", "revision"].includes(ev.stage) && s.chairJudge ? s.members.filter((m) => m !== s.chair) : s.members;
       s.work = Object.fromEntries(who.map((n) => [n, "work"]));
       break;
@@ -677,7 +683,15 @@ function apply(s, ev) {
     case "tally":
       s.tally = ev.rows;
       s.agreement = ev.agreement || null;
+      s.ballotFlags = ev.ballot_flags || {};
+      s.leaderWithout = ev.leader_without_flagged || null;
       if (ev.rows && ev.rows[0]) logAdd(s, `Голосование: лидирует вариант ${ev.rows[0].label}`);
+      break;
+    case "factcheck":
+      s.facts = ev.results || {};
+      s.factModel = ev.model || "";
+      if (s.stage === "factcheck") s.work = {};
+      logAdd(s, `Проверка фактов: ${Object.keys(s.facts).join(", ") || "нет результатов"}`);
       break;
     case "cost":
       s.cost = ev.total;
@@ -927,6 +941,8 @@ function renderVerdict(s) {
   $("vAgreeWarn").hidden = !low;
   $("vAgreeWarn").textContent = low ? `⚠️ Низкое согласие совета (τ = ${s.agreement.tau.toFixed(2)}): ${AGREE_HINT.low}` : "";
   $("vAnswer").innerHTML = md(v.final_answer);
+  $("vFacts").hidden = !s.facts || !Object.keys(s.facts).length;
+  $("vFacts").innerHTML = s.facts ? factsHtml(s) : "";
   $("vWhy").innerHTML = md(v.why);
   $("vDissentBox").hidden = !(v.dissent || []).length;
   $("vDissent").innerHTML = (v.dissent || []).map((x) => `<li>${inline(x)}</li>`).join("");
@@ -943,6 +959,33 @@ const AGREE_HINT = {
   low: "мнения совета разошлись — относитесь к решению осторожно и посмотрите особые мнения",
 };
 const TIE_NAME = { pairwise: "попарное сравнение", critique: "оценка критики", label: "жребий (метка)" };
+
+const FLAG_NAME = { against: "порядок почти обратный общему мнению",
+  leader_last: "ставит на последнее место вариант, который остальные считают лучшим" };
+const FACT_ICON = { confirmed: "✅", refuted: "❌", unclear: "❔" };
+const FACT_NAME = { confirmed: "подтверждено", refuted: "опровергнуто", unclear: "не удалось проверить" };
+
+function flagsHtml(s) {
+  const f = Object.entries(s.ballotFlags || {});
+  if (!f.length) return "";
+  const leader = s.tally && s.tally[0] && s.tally[0].label;
+  const robust = s.leaderWithout && s.leaderWithout !== leader
+    ? `<b>Без них лидер был бы ${esc(s.leaderWithout)}</b> — победа зависит от спорных голосов.`
+    : "Без них лидер тот же — результат устойчив.";
+  return `<div class="flags">⚠️ <b>Бюллетени против общего мнения</b> (голоса учтены, это только пометка):`
+    + f.map(([n, x]) => `<br>• ${esc(n)} — ${x.flags.map((k) => FLAG_NAME[k] || k).join("; ")}${x.tau != null ? ` (τ = ${x.tau.toFixed(2)})` : ""}`).join("")
+    + `<br>${robust}</div>`;
+}
+
+function factsHtml(s) {
+  const safeUrl = (u) => /^https?:\/\//i.test(u) ? u : "";
+  return `<h3>Проверка фактов <span class="muted small">(${esc(s.factModel || "")}, поиск в интернете)</span></h3>`
+    + Object.entries(s.facts).map(([label, r]) => `<div class="fact-block"><b>Вариант ${esc(label)}</b>${
+      (s.proposals[label] || {}).title ? ` — ${esc(s.proposals[label].title)}` : ""}${r.summary ? `<div class="muted small">${inline(r.summary)}</div>` : ""}
+      <ul>${(r.claims || []).map((c) => `<li class="fact-${esc(c.status)}">${FACT_ICON[c.status] || "❔"} <b>${FACT_NAME[c.status] || esc(c.status)}:</b> ${inline(c.claim)}${
+        c.note ? `<div class="muted small">${inline(c.note)}</div>` : ""}${(c.sources || []).map(safeUrl).filter(Boolean).length
+        ? `<div class="small">${(c.sources || []).map(safeUrl).filter(Boolean).slice(0, 3).map((u, i) => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">источник ${i + 1}</a>`).join(" · ")}</div>` : ""}</li>`).join("")}</ul></div>`).join("");
+}
 
 function renderTally(s) {
   const ballots = Object.entries(s.ballots);
@@ -963,7 +1006,7 @@ function renderTally(s) {
     const a = s.agreement;
     $("tallyNote").innerHTML = (a ? `<b>Согласие совета: ${AGREE_NAME[a.level]}</b> (τ = ${a.tau.toFixed(2)}) — ${AGREE_HINT[a.level]}.<br>` : "")
       + "Порядок: балл Борда; при равенстве — попарное сравнение, затем оценка критики."
-      + ties.map((t) => `<br>• ${t}`).join("");
+      + ties.map((t) => `<br>• ${t}`).join("") + flagsHtml(s);
   } else {
     $("tally").innerHTML = "";
     $("tallyNote").innerHTML = "";
@@ -1191,6 +1234,9 @@ async function openStats() {
         <div class="mbars">${d.months.map((m) => `<div class="mbar"><span>${esc(monthName(m.month))}</span>
           <div class="track" title="${m.sessions} заседаний"><i style="width:${Math.max(2, (m.cost / maxCost) * 100)}%"></i></div>
           <span class="val">${money(m.cost)}</span></div>`).join("")}</div>
+        ${d.fact_check && d.fact_check.sessions ? `<h2 style="margin-top:1.2rem">Проверка фактов</h2>
+        <p>Заседаний с проверкой: <b>${d.fact_check.sessions}</b> · ✅ ${d.fact_check.confirmed} подтверждено ·
+          ❌ ${d.fact_check.refuted} опровергнуто · ❔ ${d.fact_check.unclear} не удалось проверить</p>` : ""}
         <h2 style="margin-top:1.2rem">Режимы</h2>
         <div class="chips">${d.modes.map((m) => `<span class="chip">${esc(m.name)}: ${m.count}</span>`).join("")}</div>
       </div>
@@ -1209,6 +1255,19 @@ async function openStats() {
         </table></div>
         <p class="muted small">Доля побед — сколько предложенных моделью вариантов стали решением совета.
           Средняя оценка — как её варианты оценивали другие модели (1–10). Сбои — пустые ответы, ошибки формата и связи.</p>
+        ${(d.chairs || []).length ? `<h2 style="margin-top:1.2rem">Председатели</h2>
+        <div class="table-wrap"><table class="table">
+          <thead><tr><th>Председатель</th><th>Заседаний</th><th>Выбрал не лидера</th><th>Доля</th><th>Ср. согласие</th></tr></thead>
+          <tbody>${d.chairs.map((c) => `<tr>
+            <td><b>${esc(c.name)}</b>${c.fallbacks ? `<div class="muted small">не ответил: ${c.fallbacks}</div>` : ""}</td>
+            <td class="num">${c.sessions}</td>
+            <td class="num" title="${esc((c.examples || []).map((e) => `${e.title}: лидер ${e.leader}, выбран ${e.winner}`).join("\n"))}">${c.overrides} из ${c.decisions}</td>
+            <td class="num">${pct(c.override_rate)}</td>
+            <td class="num">${c.avg_agreement == null ? "—" : c.avg_agreement.toFixed(2)}</td></tr>`).join("")}</tbody>
+        </table></div>
+        <p class="muted small">«Выбрал не лидера» — председатель назвал победителем не первый вариант голосования
+          (он обязан это обосновать). Изредка — нормально; часто — председатель своеволен, стоит сменить модель.
+          Согласие — насколько одинаково модели ранжировали варианты (τ: 1 — полностью, 0 — никак).</p>` : ""}
       </div>
     </div>`;
 }

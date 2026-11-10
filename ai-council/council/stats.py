@@ -9,6 +9,8 @@ from typing import Any
 from .archive import Archive
 from .reports.view import MODE_NAME, View
 
+FACT_CHECKER = "факт-чек"  # как в session.FACT_CHECKER (не участник совета — в таблицу моделей не попадает)
+
 
 def _month(d: dict[str, Any], stem: str) -> str:
     raw = d.get("started_at") or ""
@@ -34,6 +36,9 @@ def compute(archive: Archive) -> dict[str, Any]:
     models: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "sessions": 0, "proposals": 0, "wins": 0, "cost": 0.0, "failures": 0,
         "scores": [], "borda": [], "model": Counter()})
+    fact = {"sessions": 0, "confirmed": 0, "refuted": 0, "unclear": 0}
+    chairs: dict[str, dict[str, Any]] = defaultdict(lambda: {
+        "sessions": 0, "decisions": 0, "overrides": 0, "fallbacks": 0, "agreement": [], "examples": []})
 
     for stem, d in sessions:
         v = View(d, stem)
@@ -47,7 +52,10 @@ def compute(archive: Archive) -> dict[str, Any]:
         with_files += bool(v.attachments)
         followups += bool(d.get("followup_of"))
         tally = {r.get("label"): r for r in v.tally}
+        _facts(fact, d)
         for name, s in v.stats.items():
+            if name == FACT_CHECKER:
+                continue
             st = models[name]
             st["sessions"] += 1
             st["cost"] += float((s or {}).get("cost") or 0)
@@ -66,6 +74,7 @@ def compute(archive: Archive) -> dict[str, Any]:
         for e in d.get("transcript") or []:
             if e.get("member") in models and e.get("model"):
                 models[e["member"]]["model"][e["model"]] += 1
+        _chair_stats(chairs, stem, d, v)
 
     model_rows = []
     for name, st in models.items():
@@ -84,6 +93,20 @@ def compute(archive: Archive) -> dict[str, Any]:
         })
     model_rows.sort(key=lambda r: (-(r["win_rate"] or 0), -r["wins"], r["name"]))
 
+    chair_rows = []
+    for name, st in chairs.items():
+        chair_rows.append({
+            "name": name,
+            "sessions": st["sessions"],
+            "decisions": st["decisions"],
+            "overrides": st["overrides"],
+            "override_rate": st["overrides"] / st["decisions"] if st["decisions"] else None,
+            "fallbacks": st["fallbacks"],
+            "avg_agreement": round(mean(st["agreement"]), 2) if st["agreement"] else None,
+            "examples": st["examples"][-5:],
+        })
+    chair_rows.sort(key=lambda r: (-r["sessions"], r["name"]))
+
     month_rows = [{"month": k, "sessions": int(v["sessions"]), "cost": round(v["cost"], 4)}
                   for k, v in sorted(months.items())][-12:]
     return {
@@ -98,7 +121,54 @@ def compute(archive: Archive) -> dict[str, Any]:
         "modes": [{"mode": k, "name": MODE_NAME.get(k, k), "count": c} for k, c in modes.most_common()],
         "months": month_rows,
         "models": model_rows,
+        "chairs": chair_rows,
+        "fact_check": fact,
     }
+
+
+def _facts(acc: dict[str, int], d: dict[str, Any]) -> None:
+    fc = d.get("fact_check") or {}
+    if not fc:
+        return
+    acc["sessions"] += 1
+    for r in fc.values():
+        for c in r.get("claims", []):
+            acc[c.get("status") if c.get("status") in ("confirmed", "refuted") else "unclear"] += 1
+
+
+FALLBACK_WHY = "Председатель не ответил"
+
+
+def _chair_of(d: dict[str, Any]) -> str:
+    """Кто был председателем: из настроек запуска, иначе — кто писал вердикт по стенограмме."""
+    chair = (d.get("request") or {}).get("chair")
+    if chair:
+        return chair
+    for e in reversed(d.get("transcript") or []):
+        if e.get("stage") == "verdict" and e.get("member"):
+            return e["member"]
+    return ""
+
+
+def _chair_stats(chairs: dict[str, dict[str, Any]], stem: str, d: dict[str, Any], v: View) -> None:
+    """Насколько председатель самостоятелен: как часто он выбирает не лидера голосования."""
+    chair = _chair_of(d)
+    tally = v.tally
+    if not chair or not tally:
+        return
+    st = chairs[chair]
+    st["sessions"] += 1
+    a = v.agreement
+    if a:
+        st["agreement"].append(float(a["tau"]))
+    if str((d.get("verdict") or {}).get("why", "")).startswith(FALLBACK_WHY):
+        st["fallbacks"] += 1  # председатель не ответил — итог по голосованию, это не его решение
+        return
+    st["decisions"] += 1
+    leader = tally[0].get("label")
+    if v.winner and leader and v.winner != leader:
+        st["overrides"] += 1
+        st["examples"].append({"id": stem, "title": v.title_text[:80], "leader": leader, "winner": v.winner})
 
 
 def fmt_duration(sec: float) -> str:

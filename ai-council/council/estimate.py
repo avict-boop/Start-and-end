@@ -17,7 +17,9 @@ TOKENS = {
     "revision": (1600, 250, 1000, 0),
     "vote": (550, 750, 200, 0),
     "verdict": (900, 850, 1500, 0),
+    "factcheck": (1400, 0, 900, 0),  # один вариант на вызов; поиск у Perplexity оплачивается ещё и за запрос
 }
+FACT_CHECKER = "факт-чек"  # как в session.FACT_CHECKER
 HIGH_FACTOR = 2.5
 ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}  # как в session.Council
 
@@ -26,6 +28,7 @@ ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}  
 class Price:
     prompt: float  # $ за токен
     completion: float
+    request: float = 0.0  # $ за запрос (у моделей с поиском, например Perplexity)
 
 
 @dataclass
@@ -60,7 +63,8 @@ def parse_pricing(models: list[dict[str, Any]]) -> dict[str, Price]:
     for m in models:
         pr = m.get("pricing") or {}
         try:
-            out[m["id"]] = Price(float(pr.get("prompt") or 0), float(pr.get("completion") or 0))
+            out[m["id"]] = Price(float(pr.get("prompt") or 0), float(pr.get("completion") or 0),
+                                 float(pr.get("request") or 0))
         except (KeyError, TypeError, ValueError):
             continue
     return out
@@ -103,6 +107,8 @@ def plan_calls(
                 plan[name].append(("revision", n - mine))
         plan[name].append(("vote", n - mine))
     plan[cfg.chair].append(("verdict", n))
+    if cfg.fact_check.enabled:
+        plan[FACT_CHECKER] = [("factcheck", 1)] * min(cfg.fact_check.top, n)
     return plan
 
 
@@ -146,6 +152,18 @@ def estimate(
         me.cost = (
             me.prompt_tokens * price.prompt + me.completion_tokens * price.completion if price else None
         )
+        est.members.append(me)
+    if FACT_CHECKER in plan:
+        fc = cfg.fact_check
+        me = MemberEstimate(FACT_CHECKER, fc.model)
+        for stage, _ in plan[FACT_CHECKER]:
+            ib, _, ob, _ = TOKENS[stage]
+            me.calls += 1
+            me.prompt_tokens += ib
+            me.completion_tokens += min(ob, fc.max_tokens)
+        price = pricing.get(fc.model)
+        me.cost = (me.prompt_tokens * price.prompt + me.completion_tokens * price.completion + me.calls * price.request
+                   if price else None)
         est.members.append(me)
     return est
 

@@ -15,11 +15,14 @@ from . import prompts
 from .client import Completion, LLMClient, ProviderError
 from .config import CouncilConfig, MemberConfig, Mode
 from .attachments import Attachment, documents_block, image_parts, images_note
-from .schemas import Ballot, CritiqueSet, Framing, ImageNotes, Proposal, Revision, Verdict
+from .schemas import Ballot, CritiqueSet, FactCheck, Framing, ImageNotes, Proposal, Revision, Verdict
 from .voting import (
+    FLAG_NAME,
     TallyRow,
     agreement,
     assign_labels,
+    ballot_flags,
+    leader_without,
     extract_json,
     normalize_critique,
     normalize_label,
@@ -78,6 +81,10 @@ class SessionResult:
     thread: list[dict[str, Any]] = field(default_factory=list)        # предыдущие вопросы и решения цепочки
     agreement: dict[str, Any] | None = None                           # согласие совета (средний τ Кендалла)
     chair_proposed: bool = True                                       # был ли у председателя свой вариант
+    ballot_flags: dict[str, dict[str, Any]] = field(default_factory=dict)  # подозрительные бюллетени
+    leader_without_flagged: str | None = None                         # лидер без них (если пометки есть)
+    fact_check: dict[str, dict[str, Any]] = field(default_factory=dict)    # метка -> итоги проверки фактов
+    fact_checker: str = ""                                            # модель, проверявшая факты
 
     @property
     def total_cost(self) -> float:
@@ -109,6 +116,10 @@ class SessionResult:
             "thread": self.thread,
             "agreement": self.agreement,
             "chair_proposed": self.chair_proposed,
+            "ballot_flags": self.ballot_flags,
+            "leader_without_flagged": self.leader_without_flagged,
+            "fact_check": self.fact_check,
+            "fact_checker": self.fact_checker,
             "transcript": self.transcript,
         }
 
@@ -130,6 +141,8 @@ class Council:
         self.rng = random.Random(seed)
         self._sem = asyncio.Semaphore(config.max_concurrency)
         self.stats: dict[str, MemberStats] = {m.name: MemberStats() for m in config.active_members}
+        if config.fact_check.enabled:
+            self.stats[FACT_CHECKER] = MemberStats()
         self.transcript: list[dict[str, Any]] = []
         self._last_call_emit: dict[tuple[str, str], tuple[str, float]] = {}
         self.vision = vision or {}
@@ -184,13 +197,16 @@ class Council:
         meta: dict[str, Any] | None = None,
         content: list[dict[str, Any]] | None = None,
     ) -> T:
-        system = prompts.system(
-            member.name,
-            self.cfg.language,
-            devil=member.name == self.cfg.devil_advocate and stage in {"proposal", "critique", "revision"},
-            chair=member.name == self.cfg.chair and stage in {"framing", "verdict"},
-            judge_only=self.chair_judge,
-        )
+        if stage == "factcheck":
+            system = prompts.FACTCHECK_SYSTEM.format(language=self.cfg.language)
+        else:
+            system = prompts.system(
+                member.name,
+                self.cfg.language,
+                devil=member.name == self.cfg.devil_advocate and stage in {"proposal", "critique", "revision"},
+                chair=member.name == self.cfg.chair and stage in {"framing", "verdict"},
+                judge_only=self.chair_judge,
+            )
         base_messages = [{"role": "system", "content": system},
                          {"role": "user", "content": content or self._with_attachments(member, stage, user_prompt)}]
         messages = list(base_messages)
@@ -500,7 +516,19 @@ class Council:
         rankings = {n: b.ranking for n, b in ballots.items()}
         rows = tally(list(proposals), rankings, critiques)
         agree = agreement(rankings)
-        self._emit("tally", rows=rows, authors=authors, agreement=agree)
+        flags = ballot_flags(rows, rankings)
+        robust = leader_without(list(proposals), rankings, critiques, set(flags)) if flags else None
+        self._emit("tally", rows=rows, authors=authors, agreement=agree, ballot_flags=flags,
+                   leader_without_flagged=robust)
+        ballot_notes = ""
+        if flags:
+            parts = [f"{n} ({'; '.join(FLAG_NAME[f] for f in fl['flags'])})" for n, fl in flags.items()]
+            ballot_notes = ("ballots strongly diverging from the others' consensus: " + ", ".join(parts)
+                            + (f". Without them the leader would be {robust}" if robust and robust != rows[0].label
+                               else ". Without them the leader stays the same"))
+
+        # 5½. Проверка фактов лидеров голосования моделью с поиском (если включена)
+        facts = await self._fact_check(refined, proposals, rows)
 
         # 6. Синтез решения председателем
         self._emit("stage", stage="verdict", title="Итоговое решение председателя")
@@ -519,7 +547,8 @@ class Council:
                 "verdict",
                 prompts.verdict(refined, criteria, proposals, tally_text(rows), notes, question,
                                 (f"{agree['level']} (mean Kendall tau between ballots = {agree['tau']:.2f}; "
-                                 "1 = identical rankings, 0 = unrelated)") if agree else ""),
+                                 "1 = identical rankings, 0 = unrelated)") if agree else "",
+                                prompts.factcheck_block(facts), ballot_notes),
                 Verdict,
                 check=check_verdict,
                 meta={"labels": valid, "leader": rows[0].label},
@@ -559,7 +588,54 @@ class Council:
             thread=self.history,
             agreement=agree,
             chair_proposed=not self.chair_judge and mode != "evaluate",
+            ballot_flags=flags,
+            leader_without_flagged=robust,
+            fact_check=facts,
+            fact_checker=self.cfg.fact_check.model if facts else "",
         )
+
+    async def _fact_check(self, question: str, proposals: dict[str, Proposal], rows: list[TallyRow]) -> dict[str, dict]:
+        """Проверяет ключевые факты в лидирующих вариантах (топ-N голосования). Сбой проверки не прерывает заседание."""
+        fc = self.cfg.fact_check
+        if not fc.enabled or not rows:
+            return {}
+        targets = [r.label for r in rows[:fc.top]]
+        checker = MemberConfig(name=FACT_CHECKER, model=fc.model, max_tokens=fc.max_tokens, temperature=0.1,
+                               reasoning_effort="none")
+        self._emit("stage", stage="factcheck", title=f"Проверка фактов: варианты {', '.join(targets)}",
+                   targets=targets, model=fc.model)
+
+        def check(r: FactCheck) -> FactCheck:
+            return r.model_copy(update={"claims": [c.model_copy(update={"status": normalize_status(c.status)})
+                                                   for c in r.claims if c.claim.strip()][:fc.max_claims]})
+
+        jobs = [self._ask(checker, "factcheck", prompts.factcheck(question, l, proposals[l], fc.max_claims), FactCheck,
+                          check=check, meta={"label": l}) for l in targets]
+        results = await asyncio.gather(*jobs, return_exceptions=True)
+        out: dict[str, dict] = {}
+        for label, res in zip(targets, results):
+            if isinstance(res, BudgetExceeded):
+                raise res
+            if isinstance(res, BaseException):
+                self.stats[FACT_CHECKER].failures.append(f"factcheck: {label}: {res}")
+                self._emit("member_failed", stage="factcheck", member=f"{FACT_CHECKER} ({label})", error=str(res))
+                continue
+            out[label] = res.model_dump()
+        self._emit("factcheck", results=out, model=fc.model)
+        return out
+
+
+FACT_CHECKER = "факт-чек"
+STATUS_ALIASES = {
+    "confirmed": "confirmed", "true": "confirmed", "verified": "confirmed", "supported": "confirmed",
+    "подтверждено": "confirmed", "подтверждён": "confirmed", "верно": "confirmed",
+    "refuted": "refuted", "false": "refuted", "incorrect": "refuted", "wrong": "refuted",
+    "опровергнуто": "refuted", "неверно": "refuted", "ложно": "refuted",
+}
+
+
+def normalize_status(raw: str) -> str:
+    return STATUS_ALIASES.get(str(raw).strip().lower(), "unclear")
 
 
 def _critique_notes(critiques: dict[str, CritiqueSet], per_label: int = 6) -> str:

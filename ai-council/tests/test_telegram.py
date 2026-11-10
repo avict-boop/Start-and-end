@@ -482,3 +482,24 @@ def test_followup_repeat_voice_stats_in_bot(env):
     # статистика
     asyncio.run(bot.handle_update(msg("/stats")))
     assert "Заседаний: <b>2</b>" in fake.texts()[-1]
+
+
+def test_fact_check_toggle_in_bot(env):
+    bot, fake, tmp = env
+
+    async def scenario():
+        await bot.handle_update(msg("Сколько стоит открыть кофейню?"))
+        card_id = bot.pending[CHAT].card_id
+        assert "facts" in buttons(fake.last("sendMessage"))
+        await bot.handle_update(press("facts", card_id))
+        assert bot.settings[CHAT].fact_check is True
+        assert "Проверка фактов: вкл" in json.dumps(fake.last("editMessageText"), ensure_ascii=False)
+        await bot.handle_update(press("go", card_id))
+        await finish(bot)
+
+    asyncio.run(scenario())
+    summary = next(t for t in reversed(fake.texts()) if "🏆" in t)
+    assert "🔎 Факты: проверены варианты" in summary
+    key = next(b for b in buttons(fake.last("sendMessage")) if b.startswith("res:more:")).split(":")[2]
+    asyncio.run(bot.handle_update(press(f"res:more:{key}", 999)))
+    assert "Проверка фактов" in fake.texts()[-1] and "❌" in fake.texts()[-1]

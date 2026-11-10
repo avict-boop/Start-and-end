@@ -83,7 +83,11 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
     ev += [{"type": "member_done", "stage": "vote", "member": m, "result": b} for m, b in d["ballots"].items()]
     from ..voting import agreement
     agree = d.get("agreement") or agreement({m: b.get("ranking", []) for m, b in (d.get("ballots") or {}).items()})
-    ev.append({"type": "tally", "rows": d["tally"], "authors": d["authors"], "agreement": agree})
+    ev.append({"type": "tally", "rows": d["tally"], "authors": d["authors"], "agreement": agree,
+               "ballot_flags": d.get("ballot_flags") or {}, "leader_without_flagged": d.get("leader_without_flagged")})
+    if d.get("fact_check"):
+        ev.append({"type": "stage", "stage": "factcheck", "title": "Проверка фактов"})
+        ev.append({"type": "factcheck", "results": d["fact_check"], "model": d.get("fact_checker", "")})
     ev.append({"type": "stage", "stage": "verdict", "title": "Итоговое решение"})
     for name, s in d.get("stats", {}).items():
         for f in s.get("failures", []):
@@ -106,6 +110,7 @@ class RunRequest(BaseModel):
     chair: str | None = None
     devil_advocate: str | None = None  # "" — без адвоката дьявола
     chair_proposes: bool | None = None  # None — как в config.yaml
+    fact_check: bool | None = None      # проверка фактов лидеров; None — как в config.yaml
     budget: float | None = Field(default=None, gt=0, le=100)
     mock: bool = False
     attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)  # id загрузок
@@ -179,7 +184,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         try:
             return with_overrides(base_config(), members=req.members, chair=req.chair,
                                   devil_advocate=req.devil_advocate, budget=req.budget,
-                                  chair_proposes=req.chair_proposes)
+                                  chair_proposes=req.chair_proposes, fact_check=req.fact_check)
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
 
@@ -351,6 +356,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             "chair": cfg.chair,
             "devil_advocate": cfg.devil_advocate,
             "chair_proposes": cfg.chair_proposes,
+            "fact_check": {"enabled": cfg.fact_check.enabled, "model": cfg.fact_check.model, "top": cfg.fact_check.top},
             "mode": cfg.mode,
             "rounds": cfg.debate_rounds,
             "budget": cfg.max_cost_usd,
@@ -447,7 +453,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                "criteria": req.clean_criteria or [], "options": opts or [], "context": req.context or "",
                                "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
                                "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
-                               "chair_proposes": cfg.chair_proposes}
+                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled}
                 st.push({"type": "saving"})
                 await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts)
                 import shutil

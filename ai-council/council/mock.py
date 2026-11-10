@@ -74,6 +74,16 @@ class MockClient:
         elif stage == "transcribe":
             text = f"Как назвать кофейню рядом с университетом? (демо-расшифровка записи {meta.get('seconds', 0):.0f} с)"
             return Completion(text=text, prompt_tokens=100, completion_tokens=30, cost=0.0002, model=model)
+        elif stage == "factcheck":
+            label = meta.get("label", "?")
+            out = {"claims": [
+                {"claim": f"Средний чек кофейни у вуза — 250–350 ₽ (вариант {label})", "status": "confirmed",
+                 "note": "Совпадает с обзорами рынка (демо).", "sources": ["https://example.com/market"]},
+                {"claim": "Аренда у кампуса дешевле, чем в центре, в 3 раза", "status": "refuted",
+                 "note": "По данным объявлений — примерно в 1,5 раза (демо).", "sources": ["https://example.com/rent"]},
+                {"claim": "Студенты тратят на кофе больше 5 000 ₽ в месяц", "status": "unclear",
+                 "note": "Надёжных данных не найдено (демо).", "sources": []},
+            ], "summary": "Фактическая база в целом надёжна, одно утверждение завышено (демо)."}
         elif stage == "describe":
             out = {"images": [{"name": n, "description": f"Описание (демо): на картинке «{n}» таблица с цифрами."}
                               for n in meta.get("images", [])]}

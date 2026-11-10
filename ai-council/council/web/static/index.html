@@ -92,6 +92,9 @@
       <label class="check small" title="По умолчанию председатель не предлагает свой вариант: он ставит задачу, оценивает, голосует и пишет итог — так он не судит собственный вариант.">
         <input id="chairProposes" type="checkbox"> Председатель тоже предлагает свой вариант
       </label>
+      <label class="check small" id="factCheckRow" title="После голосования модель с поиском в интернете проверяет ключевые факты в лидирующих вариантах. Председатель учитывает результат. Дороже на 2 запроса с поиском.">
+        <input id="factCheck" type="checkbox"> <span>Проверка фактов лидеров через поиск <small class="hint" id="factCheckHint"></small></span>
+      </label>
 
       <div class="row2">
         <label class="field">
@@ -214,6 +217,7 @@
         </div>
         <div id="vAgreeWarn" class="agree-warn" hidden></div>
         <div id="vAnswer" class="md"></div>
+        <div id="vFacts" class="facts" hidden></div>
         <div class="verdict-grid">
           <div><h3>Почему</h3><div id="vWhy" class="md"></div></div>
           <div id="vDissentBox"><h3>Особые мнения</h3><ul id="vDissent"></ul></div>

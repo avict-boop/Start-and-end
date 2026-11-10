@@ -59,6 +59,20 @@ class ImageNotes(BaseModel):
     images: list[ImageNote]
 
 
+class Claim(BaseModel):
+    claim: str
+    status: str = "unclear"  # confirmed | refuted | unclear (нормализуется в session)
+    note: str = ""
+    sources: list[str] = Field(default_factory=list)
+
+
+class FactCheck(BaseModel):
+    """Проверка ключевых фактических утверждений одного варианта."""
+
+    claims: list[Claim] = Field(default_factory=list)
+    summary: str = ""
+
+
 class Verdict(BaseModel):
     """Шаг 6: итоговое решение председателя."""
 

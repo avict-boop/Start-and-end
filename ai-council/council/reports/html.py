@@ -157,6 +157,28 @@ def _inline(text: str) -> str:
     return h
 
 
+def _facts_html(v: View) -> str:
+    parts = [f'<h2 id="facts">Проверка фактов</h2><p class="muted small">Модель с поиском в интернете '
+             f'({_e(v.d.get("fact_checker", ""))}) проверила ключевые утверждения лидирующих вариантов. '
+             f'Итог: {_e(v.fact_line)}.</p>']
+    for label, r in v.fact_check.items():
+        parts.append(f'<h3>Вариант {_e(label)}: {_e(v.title(label))}</h3>')
+        if r.get("summary"):
+            parts.append(f'<p class="muted">{_inline(r["summary"])}</p>')
+        parts.append('<table><thead><tr><th style="width:18%">Статус</th><th>Утверждение и что показали источники</th>'
+                     '</tr></thead><tbody>')
+        for c in r.get("claims", []):
+            st = c.get("status", "unclear")
+            links = [u for u in map(v.safe_url, c.get("sources") or []) if u][:3]
+            src = " · ".join(f'<a href="{_e(u)}">{_e(u[:60])}</a>' for u in links)
+            parts.append(f'<tr><td>{v.FACT_ICON.get(st, "❔")} {_e(v.FACT_NAME.get(st, st))}</td>'
+                         f'<td><b>{_inline(c.get("claim", ""))}</b>'
+                         + (f'<div class="small">{_inline(c["note"])}</div>' if c.get("note") else "")
+                         + (f'<div class="small muted">{src}</div>' if src else "") + "</td></tr>")
+        parts.append("</tbody></table>")
+    return "\n".join(parts)
+
+
 SUMMARY_NOTE = ("Это краткая версия: только итоговое решение. Полный отчёт с вариантами всех моделей, "
                 "критикой и голосованием скачивается отдельно.")
 
@@ -235,7 +257,7 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
         add(f"<div><span>{k}</span><span>{val_html}</span></div>")
     add("</div>")
 
-    toc = [("verdict", "Решение совета"), ("voting", "Голосование")]
+    toc = [("verdict", "Решение совета")] + ([("facts", "Проверка фактов")] if v.fact_check else []) + [("voting", "Голосование")]
     toc += [(f"proposal-{l}", f"Вариант {l}: {v.title(l)}") for l in v.proposals]
     if v.critiques:
         toc.append(("critique", "Критика"))
@@ -262,6 +284,8 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
     if vd.get("risks"):
         add("<h3>Риски</h3>" + _list(vd["risks"]))
     add("</div>")
+    if v.fact_check:
+        add(_facts_html(v))
     if summary:
         add(f'<p class="muted small">{SUMMARY_NOTE}</p></div>')
         return _document(v, "\n".join(parts), toolbar)
@@ -287,6 +311,9 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
         + (f" Согласие совета: {_e(v.agreement_line)}." if v.agreement_line else "") + "</p>")
     for note in v.tie_notes:
         add(f'<p class="muted small">• {_e(note)}</p>')
+    if v.flag_notes:
+        add('<div class="agree-warn"><b>Бюллетени против общего мнения</b> (голоса учтены, это только пометка):'
+            + "".join(f"<br>• {_e(n)}" for n in v.flag_notes) + f"<br>{_e(v.robust_note)}</div>")
     if v.ballots:
         add("<h3>Бюллетени</h3><table><thead><tr><th>Участник</th><th>Порядок (лучший → худший)</th>"
             "<th>Почему</th></tr></thead><tbody>")

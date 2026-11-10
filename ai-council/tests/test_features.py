@@ -180,3 +180,21 @@ def test_branding_and_toc(tmp_path):
         render_docx(v)
     finally:
         brand.set_brand(None, tmp_path)
+
+
+def test_web_fact_check_and_chair_stats(web):
+    cfg = web.get("/api/config").json()
+    assert cfg["fact_check"]["enabled"] is False and cfg["fact_check"]["model"] == "perplexity/sonar-pro"
+    sid = web.post("/api/sessions", json={"question": "Сколько стоит кофейня?", "mock": True, "mode": "quick",
+                                          "fact_check": True}).json()["id"]
+    ev = wait_done(web, sid)
+    fc = next(e for e in ev if e["type"] == "factcheck")
+    assert len(fc["results"]) == 2 and fc["model"] == "perplexity/sonar-pro"
+    replay = wait_done(web, sid)  # из архива — те же результаты проверки
+    assert next(e for e in replay if e["type"] == "factcheck")["results"] == fc["results"]
+    assert "Проверка фактов" in web.get(f"/api/sessions/{sid}/report?format=md").text
+    assert web.post(f"/api/sessions/{sid}/repeat").json()["request"]["fact_check"] is True
+    s = web.get("/api/stats").json()
+    assert s["fact_check"]["sessions"] == 1 and s["fact_check"]["refuted"] == 2
+    assert "факт-чек" not in {m["name"] for m in s["models"]}
+    assert s["chairs"][0]["name"] == "a" and s["chairs"][0]["decisions"] == 1

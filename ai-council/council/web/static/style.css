@@ -477,3 +477,11 @@ body.modal-open { overflow: hidden; }
   border-radius: 8px; padding: .45rem .7rem; margin: .4rem 0 .8rem; font-size: .9rem; }
 #tallyNote { margin: .6rem 0 0; line-height: 1.5; }
 label.check.small:has(#chairProposes) { display: flex; gap: .45rem; align-items: center; margin: -.2rem 0 .8rem; color: var(--muted); }
+.flags { margin-top: .6rem; padding: .45rem .7rem; border-radius: 8px; border: 1px dashed color-mix(in srgb, #e9a23b 60%, transparent); }
+.facts { margin-top: 1rem; border-top: 1px solid var(--line, #e4e4ee); padding-top: .4rem; }
+.facts h3 { margin: .4rem 0 .5rem; }
+.fact-block { margin: .5rem 0 .8rem; }
+.fact-block ul { margin: .3rem 0 0; padding-left: 1.1rem; list-style: none; }
+.fact-block li { margin: .35rem 0; }
+.fact-refuted > b { color: var(--bad, #c0392b); }
+label.check.small:has(#factCheck) { display: flex; gap: .45rem; align-items: center; margin: -.4rem 0 .8rem; color: var(--muted); }

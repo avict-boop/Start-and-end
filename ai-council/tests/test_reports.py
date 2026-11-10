@@ -119,3 +119,45 @@ def test_reports_show_agreement_and_pairwise():
     assert "| Попарно |" in md and "Низкое согласие" in md
     text = "\n".join(p.text for p in Document(io.BytesIO(render_docx(v))).paragraphs)
     assert "Низкое согласие совета" in text
+
+
+def test_reports_show_fact_check_and_flags():
+    d = session("Ответ совета")
+    d["fact_checker"] = "perplexity/sonar-pro"
+    d["fact_check"] = {"A": {"summary": "Почти всё верно", "claims": [
+        {"claim": "Население — 1 млн", "status": "confirmed", "note": "Росстат", "sources": ["https://rosstat.example/x"]},
+        {"claim": "Налог 5%", "status": "refuted", "note": "На деле 6%", "sources": ["javascript:alert(1)"]}]}}
+    d["ballot_flags"] = {"kimi": {"tau": -1.0, "flags": ["against", "leader_last"], "consensus_top": "A"}}
+    d["leader_without_flagged"] = "B"
+    v = View(d)
+    assert "✅ 1 подтверждено" in v.fact_line and "❌ 1 опровергнуто" in v.fact_line
+    html = render_html(v)
+    assert 'id="facts"' in html and "Налог 5%" in html and "https://rosstat.example/x" in html
+    assert "javascript:" not in html  # небезопасные ссылки отбрасываются
+    assert "Бюллетени против общего мнения" in html and "лидером был бы вариант B" in html
+    assert "Проверка фактов" in render_html(v, summary=True)  # и в кратком итоге
+    assert "Проверка фактов" not in render_html(v, decision=True)
+    md = render_md(v)
+    assert "## Проверка фактов" in md and "❌ **опровергнуто:** Налог 5%" in md and "kimi —" in md
+    text = "\n".join(p.text for p in Document(io.BytesIO(render_docx(v))).paragraphs)
+    assert "Проверка фактов" in text and "опровергнуто" in text and "Бюллетени против общего мнения" in text
+
+
+def test_stats_chair_overrides(tmp_path):
+    import json
+    from council.archive import Archive
+    from council.stats import compute
+    base = session("Ответ")
+    base["request"] = {"chair": "claude"}
+    base["tally"] = [{"label": "A", "borda": 1, "first_places": 1, "ballots": 1},
+                     {"label": "B", "borda": 0, "first_places": 0, "ballots": 1}]
+    for i, winner in enumerate(["A", "B", "A"]):
+        d = json.loads(json.dumps(base))
+        d["verdict"]["winner"] = winner
+        (tmp_path / f"2025010{i}-000000-s{i}.json").write_text(json.dumps(d), encoding="utf-8")
+    d = json.loads(json.dumps(base))
+    d["verdict"]["why"] = "Председатель не ответил; победитель определён по голосованию."
+    (tmp_path / "20250109-000000-fb.json").write_text(json.dumps(d), encoding="utf-8")
+    ch = compute(Archive(tmp_path))["chairs"]
+    assert ch[0]["name"] == "claude" and ch[0]["sessions"] == 4 and ch[0]["decisions"] == 3
+    assert ch[0]["overrides"] == 1 and abs(ch[0]["override_rate"] - 1 / 3) < 1e-9 and ch[0]["fallbacks"] == 1

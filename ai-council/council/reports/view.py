@@ -184,6 +184,62 @@ class View:
     def tally(self) -> list[dict]:
         return list(self.d.get("tally") or [])
 
+    # ------------------------------------------------------------ проверка бюллетеней и фактов
+
+    @property
+    def ballot_flags(self) -> dict[str, dict]:
+        return dict(self.d.get("ballot_flags") or {})
+
+    @property
+    def flag_notes(self) -> list[str]:
+        """«kimi — ставит на последнее место вариант, который остальные считают лучшим (τ = −0.33)»."""
+        from ..voting import FLAG_NAME
+        out = []
+        for voter, f in self.ballot_flags.items():
+            tau = f" (τ = {f['tau']:.2f})" if f.get("tau") is not None else ""
+            out.append(f"{voter} — " + "; ".join(FLAG_NAME.get(k, k) for k in f.get("flags", [])) + tau)
+        return out
+
+    @property
+    def robust_note(self) -> str:
+        """Меняется ли лидер без помеченных бюллетеней."""
+        if not self.ballot_flags:
+            return ""
+        lead = self.tally[0].get("label") if self.tally else None
+        alt = self.d.get("leader_without_flagged")
+        if alt and alt != lead:
+            return f"Без этих бюллетеней лидером был бы вариант {alt} — победа зависит от спорных голосов."
+        return "Без этих бюллетеней лидер тот же — результат устойчив."
+
+    @property
+    def fact_check(self) -> dict[str, dict]:
+        return dict(self.d.get("fact_check") or {})
+
+    FACT_ICON = {"confirmed": "✅", "refuted": "❌", "unclear": "❔"}
+    FACT_NAME = {"confirmed": "подтверждено", "refuted": "опровергнуто", "unclear": "не удалось проверить"}
+
+    @property
+    def fact_counts(self) -> dict[str, int]:
+        c = {"confirmed": 0, "refuted": 0, "unclear": 0}
+        for r in self.fact_check.values():
+            for cl in r.get("claims", []):
+                c[cl.get("status") if cl.get("status") in c else "unclear"] += 1
+        return c
+
+    @property
+    def fact_line(self) -> str:
+        """«проверены варианты B, A: ✅ 4 · ❌ 1 · ❔ 2» или пустая строка."""
+        if not self.fact_check:
+            return ""
+        c = self.fact_counts
+        return (f"проверены варианты {', '.join(self.fact_check)}: ✅ {c['confirmed']} подтверждено · "
+                f"❌ {c['refuted']} опровергнуто · ❔ {c['unclear']} не удалось проверить")
+
+    @staticmethod
+    def safe_url(u: str) -> str:
+        u = str(u or "").strip()
+        return u if u.lower().startswith(("http://", "https://")) else ""
+
     @staticmethod
     def pairwise_str(row: dict) -> str:
         """Попарный счёт (побед минус поражений) или «—» для старых заседаний."""

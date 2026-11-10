@@ -234,3 +234,60 @@ def tally_text(rows: list[TallyRow]) -> str:
         lines.append(f"{i}. {r.label}: borda={r.borda:.2f}, pairwise={r.pairwise:+.0f}, critique={avg}, "
                      f"first places={r.first_places}/{r.ballots}{tie}")
     return "\n".join(lines)
+
+
+def _tau(a: list[str], b: list[str]) -> float | None:
+    """τ Кендалла двух порядков на их общих элементах (нужно хотя бы 2 общих)."""
+    common = [x for x in a if x in b]
+    if len(common) < 2:
+        return None
+    pb = {l: k for k, l in enumerate(b)}
+    conc = disc = 0
+    for i in range(len(common)):
+        for j in range(i + 1, len(common)):
+            if pb[common[i]] < pb[common[j]]:
+                conc += 1
+            else:
+                disc += 1
+    return (conc - disc) / (conc + disc)
+
+
+def ballot_flags(rows: list[TallyRow], ballots: dict[str, list[str]]) -> dict[str, dict]:
+    """Бюллетени, заметно расходящиеся с мнением остальных (возможное стратегическое голосование).
+
+    Для каждого бюллетеня из 3+ вариантов строим общий порядок по ОСТАЛЬНЫМ бюллетеням (без него самого) и
+    сравниваем: τ < 0 — порядок скорее обратный общему; «лидер последним» — вариант, который остальные
+    ставят первым, у голосующего на последнем месте. Это только пометка: голос не отбрасывается.
+    """
+    del rows  # общий порядок считается без проверяемого бюллетеня, чтобы он не влиял сам на себя
+    out: dict[str, dict] = {}
+    for voter, ranking in ballots.items():
+        if len(ranking) < 3:
+            continue
+        others = {v: r for v, r in ballots.items() if v != voter}
+        if not others:
+            continue
+        order = [r.label for r in tally(sorted({l for r in others.values() for l in r} | set(ranking)), others, {})]
+        order = [l for l in order if l in ranking]
+        t = _tau(ranking, order)
+        flags = []
+        if t is not None and t < 0:
+            flags.append("against")
+        if order and ranking[-1] == order[0]:
+            flags.append("leader_last")
+        if flags:
+            out[voter] = {"tau": round(t, 2) if t is not None else None, "flags": flags, "consensus_top": order[0]}
+    return out
+
+
+FLAG_NAME = {"against": "порядок почти обратный общему мнению",
+             "leader_last": "ставит на последнее место вариант, который остальные считают лучшим"}
+
+
+def leader_without(candidates: list[str], ballots: dict[str, list[str]], critiques: dict[str, CritiqueSet],
+                   skip: set[str]) -> str | None:
+    """Лидер голосования без указанных бюллетеней (проверка устойчивости). None — если бюллетеней не остаётся."""
+    rest = {v: r for v, r in ballots.items() if v not in skip}
+    if not rest:
+        return None
+    return tally(candidates, rest, critiques)[0].label

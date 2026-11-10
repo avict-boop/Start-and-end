@@ -131,6 +131,19 @@ def _on_event(event: str, **d) -> None:
             from .voting import AGREEMENT_HINT, agreement_text
             color = {"high": "green", "medium": "yellow", "low": "red"}[a["level"]]
             console.print(f"Согласие совета: [{color}]{agreement_text(a)}[/] — {AGREEMENT_HINT[a['level']]}")
+        if d.get("ballot_flags"):
+            from .voting import FLAG_NAME
+            console.print("[yellow]⚠ Бюллетени против общего мнения[/] (голоса учтены):")
+            for n, f in d["ballot_flags"].items():
+                console.print(f"  • {n} — " + "; ".join(FLAG_NAME[k] for k in f["flags"]))
+            alt, lead = d.get("leader_without_flagged"), d["rows"][0].label
+            console.print(f"  Без них лидер был бы [bold]{alt}[/]." if alt and alt != lead else "  Без них лидер тот же.")
+    elif event == "factcheck":
+        icon = {"confirmed": "[green]✓[/]", "refuted": "[red]✗[/]", "unclear": "[yellow]?[/]"}
+        for label, r in d["results"].items():
+            console.print(f"  [bold]{label}[/]: {r.get('summary', '')}")
+            for c in r.get("claims", []):
+                console.print(f"    {icon.get(c.get('status'), '?')} {c.get('claim')} — [dim]{c.get('note', '')}[/]")
 
 
 def _read_options(args) -> list[str] | None:
@@ -221,6 +234,8 @@ async def _ask(args) -> int:
         cfg.max_cost_usd = args.budget
     if args.chair_proposes:
         cfg.chair_proposes = True
+    if args.fact_check:
+        cfg.fact_check.enabled = True
     if args.only:
         wanted = {n.strip() for n in args.only.split(",") if n.strip()}
         unknown = wanted - {m.name for m in cfg.members}
@@ -311,7 +326,7 @@ async def _ask(args) -> int:
                                "options": options or [], "context": context or "",
                                "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
                                "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
-                               "chair_proposes": cfg.chair_proposes}
+                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled}
             finally:
                 tick.cancel()
                 _live.status = None
@@ -410,6 +425,17 @@ def _stats_cmd(args) -> int:
                   f"{round(m['win_rate'] * 100)}%" if m["win_rate"] is not None else "—",
                   f"{m['avg_score']:.1f}" if m["avg_score"] is not None else "—", str(m["failures"]), f"${m['cost']:.4f}")
     console.print(t)
+    if d.get("chairs"):
+        t = Table(title="Председатели: как часто итог расходится с голосованием")
+        for col in ("Председатель", "Заседаний", "Выбрал не лидера", "Доля", "Не ответил", "Ср. согласие"):
+            t.add_column(col)
+        for c in d["chairs"]:
+            t.add_row(c["name"], str(c["sessions"]), f"{c['overrides']}/{c['decisions']}",
+                      f"{round(c['override_rate'] * 100)}%" if c["override_rate"] is not None else "—",
+                      str(c["fallbacks"]), f"{c['avg_agreement']:.2f}" if c["avg_agreement"] is not None else "—")
+        console.print(t)
+        console.print("[dim]«Выбрал не лидера» — победителем назван не первый вариант голосования. Немного таких случаев "
+                      "(с обоснованием) — нормально; часто — председатель своеволен.[/]")
     return 0
 
 
@@ -473,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
                    help="приложить файл: картинку, PDF, Word, Excel, текст (можно несколько раз)")
     a.add_argument("--only", help="участвуют только эти участники, через запятую")
     a.add_argument("--budget", type=float, help="лимит стоимости заседания в $")
+    a.add_argument("--fact-check", action="store_true",
+                   help="проверить факты в лидирующих вариантах моделью с поиском (по умолчанию — Perplexity)")
     a.add_argument("--chair-proposes", action="store_true",
                    help="председатель тоже предлагает свой вариант (по умолчанию — только ставит задачу, оценивает и пишет итог)")
     a.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))

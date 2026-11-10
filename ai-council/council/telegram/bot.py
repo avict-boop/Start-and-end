@@ -34,7 +34,7 @@ from .format import esc, md_to_tg, split_message, strip_tags
 log = logging.getLogger("council.telegram")
 
 STAGES = [("framing", "Постановка"), ("proposal", "Предложения"), ("critique", "Критика"),
-          ("revision", "Доработка"), ("vote", "Голосование"), ("verdict", "Вердикт")]
+          ("revision", "Доработка"), ("vote", "Голосование"), ("factcheck", "Факты"), ("verdict", "Вердикт")]
 MODE_NAME = {"debate": "Дебаты", "quick": "Быстро", "evaluate": "Оценка вариантов"}
 COMMANDS = [
     ("ask", "задать вопрос совету"),
@@ -76,6 +76,7 @@ class ChatSettings:
     members: list[str] | None = None  # None — как в config.yaml
     budget: float | None = None
     demo: bool = False
+    fact_check: bool | None = None  # None — как в config.yaml
 
 
 @dataclass
@@ -110,6 +111,7 @@ class Progress:
     calls: dict[str, dict[str, Any]] = field(default_factory=dict)
     saving: bool = False
     chair_judge: bool = False  # председатель без своего варианта
+    fact_check: bool = False   # будет ли этап проверки фактов
 
     def apply(self, event: str, d: dict[str, Any]) -> None:
         if event == "call":
@@ -132,7 +134,8 @@ class Progress:
             self.stage, self.stage_title = d["stage"], d["title"]
             if d["stage"] == "proposal":
                 self.chair_judge = d.get("chair_proposes") is False
-            who = ([self.chair] if d["stage"] in ("framing", "verdict")
+            who = (["факт-чек"] if d["stage"] == "factcheck"
+                   else [self.chair] if d["stage"] in ("framing", "verdict")
                    else [m for m in self.members if m != self.chair]
                    if d["stage"] in ("proposal", "revision") and self.chair_judge else self.members)
             self.work = {n: "work" for n in who}
@@ -172,7 +175,8 @@ class Progress:
         return f"{text[0]} {esc(name)} — {esc(text[1][:120])} · {_fmt_secs(secs)}"
 
     def skipped(self) -> set[str]:
-        return {"quick": {"critique", "revision"}, "evaluate": {"proposal", "revision"}}.get(self.mode, set())
+        skip = {"quick": {"critique", "revision"}, "evaluate": {"proposal", "revision"}}.get(self.mode, set())
+        return skip if self.fact_check else skip | {"factcheck"}
 
     def render(self, *, final: str | None = None) -> str:
         head = final or "🏛 <b>Совет заседает…</b>"
@@ -298,7 +302,7 @@ class CouncilBot:
         if members is not None:
             known = {m.name for m in base.members}
             members = [m for m in members if m in known]  # участника могли удалить из config.yaml
-        return with_overrides(base, members=members, budget=s.budget)
+        return with_overrides(base, members=members, budget=s.budget, fact_check=s.fact_check)
 
     async def send(self, chat_id: int, text: str, **kw: Any) -> dict[str, Any] | None:
         """Отправка длинного HTML с разбиением; при ошибке разметки — простым текстом."""
@@ -551,6 +555,17 @@ class CouncilBot:
             score = f"{m['avg_score']:.1f}" if m["avg_score"] is not None else "—"
             fail = f" · ⚠️ {m['failures']}" if m["failures"] else ""
             lines.append(f"• <b>{esc(m['name'])}</b>: {m['wins']}/{m['proposals']} ({rate}) · {score}{fail} · ${m['cost']:.3f}")
+        fc = d.get("fact_check") or {}
+        if fc.get("sessions"):
+            lines += ["", f"🔎 <b>Проверка фактов</b>: {fc['sessions']} засед. · ✅ {fc['confirmed']} · "
+                          f"❌ {fc['refuted']} · ❔ {fc['unclear']}"]
+        if d.get("chairs"):
+            lines += ["", "<b>Председатели</b> (выбрал не лидера голосования / решений):"]
+            for c in d["chairs"]:
+                rate = f"{round(c['override_rate'] * 100)}%" if c["override_rate"] is not None else "—"
+                agree = f" · согласие {c['avg_agreement']:.2f}" if c["avg_agreement"] is not None else ""
+                fb = f" · не ответил {c['fallbacks']}" if c["fallbacks"] else ""
+                lines.append(f"• <b>{esc(c['name'])}</b>: {c['overrides']}/{c['decisions']} ({rate}){agree}{fb}")
         await self.send(chat_id, "\n".join(lines))
 
     async def repeat(self, chat_id: int, stem: str) -> None:
@@ -667,6 +682,8 @@ class CouncilBot:
         n = len(cfg.active_members) if cfg else 0
         kb.append([self._btn(f"👥 Участники ({n})", "view:members"),
                    self._btn(f"🧪 Демо: {'вкл' if s.demo else 'выкл'}", "demo")])
+        fc_on = cfg.fact_check.enabled if cfg else bool(s.fact_check)
+        kb.append([self._btn(f"🔎 Проверка фактов: {'вкл' if fc_on else 'выкл'}", "facts")])
         if p.attachments:
             kb.append([self._btn(f"🗑 Убрать вложения ({len(p.attachments)})", "noatt")])
         kb.append([self._btn("▶️ Начать", "go"), self._btn("✖️ Отмена", "drop")])
@@ -782,6 +799,9 @@ class CouncilBot:
             s.rounds = max(1, min(5, int(value)))
         elif kind == "demo":
             s.demo = not s.demo
+        elif kind == "facts":
+            current = s.fact_check if s.fact_check is not None else self.base_config().fact_check.enabled
+            s.fact_check = not current
         elif kind == "view" and value in ("main", "members"):
             p.view = value
         elif kind == "mem":
@@ -817,7 +837,8 @@ class CouncilBot:
         await self.api.edit_message(chat_id, p.card_id, f"🏛 <b>Вопрос передан совету</b>\n{esc(p.question[:1500])}")
 
         progress = Progress(question=p.question, mode=mode, rounds=s.rounds,
-                            members=[m.name for m in cfg.active_members], chair=cfg.chair, demo=s.demo)
+                            members=[m.name for m in cfg.active_members], chair=cfg.chair, demo=s.demo,
+                            fact_check=cfg.fact_check.enabled)
         stop_kb = {"inline_keyboard": [[self._btn("⏹ Остановить", "stop")]]}
         msg = await self.api.send_message(chat_id, progress.render(), reply_markup=stop_kb)
         client = self.llm_factory(cfg, s.demo)
@@ -847,7 +868,7 @@ class CouncilBot:
                 res.request = {"question": p.question, "mode": mode, "rounds": s.rounds, "criteria": [],
                                "options": p.options or [], "members": [m.name for m in cfg.active_members],
                                "chair": cfg.chair, "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
-                               "chair_proposes": cfg.chair_proposes}
+                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled}
                 progress.saving = True
                 r = self.running.get(chat_id)
                 if r:
@@ -937,6 +958,10 @@ class CouncilBot:
         if a:
             icon = {"high": "🟢", "medium": "🟡", "low": "🔴"}[a["level"]]
             lines += ["", f"{icon} Согласие совета: {esc(v.agreement_line)}"]
+        if v.fact_line:
+            lines.append(f"🔎 Факты: {esc(v.fact_line)}")
+        if v.ballot_flags:
+            lines.append(f"⚠️ Бюллетеней против общего мнения: {len(v.ballot_flags)}. {esc(v.robust_note)}")
         lines += ["", f"💰 ${v.cost:.4f} · ⏱ {v.duration} · вариантов: {len(v.proposals)}"]
         await self.send(chat_id, "\n".join(lines), reply_markup=self._result_buttons(stem))
 
@@ -949,6 +974,15 @@ class CouncilBot:
             parts += ["", "<b>Особые мнения:</b>"] + [f"• {md_to_tg(x)}" for x in vd["dissent"]]
         if vd.get("risks"):
             parts += ["", "<b>Риски:</b>"] + [f"• {md_to_tg(x)}" for x in vd["risks"]]
+        if v.fact_check:
+            parts += ["", f"🔎 <b>Проверка фактов</b> ({esc(v.d.get('fact_checker', ''))}):"]
+            for label, r in v.fact_check.items():
+                parts.append(f"<b>Вариант {esc(label)}</b> — {esc(v.title(label)[:80])}")
+                for c in r.get("claims", []):
+                    src = [u for u in map(v.safe_url, c.get("sources") or []) if u][:2]
+                    links = " ".join(f'<a href="{esc(u)}">[{i + 1}]</a>' for i, u in enumerate(src))
+                    parts.append(f"{v.FACT_ICON.get(c.get('status'), '❔')} {md_to_tg(c.get('claim', ''))}"
+                                 + (f" — <i>{md_to_tg(c.get('note', ''))}</i>" if c.get("note") else "") + (f" {links}" if links else ""))
         await self.send(chat_id, "\n".join(parts))
 
     async def send_tally(self, chat_id: int, stem: str) -> None:
@@ -964,6 +998,9 @@ class CouncilBot:
         lines += [f"• {esc(n)}" for n in v.tie_notes]
         if v.agreement_line:
             lines += ["", f"Согласие совета: {esc(v.agreement_line)}"]
+        if v.flag_notes:
+            lines += ["", "⚠️ <b>Бюллетени против общего мнения</b> (голоса учтены):"] + [f"• {esc(n)}" for n in v.flag_notes]
+            lines.append(esc(v.robust_note))
         await self.send(chat_id, "\n".join(lines))
 
     async def send_result(self, chat_id: int, res: SessionResult, stem: str) -> None:

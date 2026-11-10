@@ -335,3 +335,67 @@ def test_prompts_keep_original_request_and_format():
     v = prompts.verdict("Какой вариант лучше?", ["Цена"], props, "1. A: borda=1.00", "", original, "low (tau = 0.10)")
     assert "ФОРМАТ ОТВЕТА" in v and "Do not drop requested sections" in v and "copy them exactly" in v
     assert "Council agreement on the ranking: low" in v
+
+
+# ---------------------------------------------------------------- пакет 2: бюллетени и проверка фактов
+
+
+def test_ballot_flags_and_robustness():
+    from council.voting import ballot_flags, leader_without
+    b = {"claude": ["D", "B", "A", "C"], "chatgpt": ["D", "B", "A"], "gemini": ["D", "B", "C"],
+         "kimi": ["C", "A", "B"], "deepseek": ["D", "A", "C"]}
+    rows = tally(list("ABCD"), b, {})
+    f = ballot_flags(rows, b)
+    assert list(f) == ["kimi"] and set(f["kimi"]["flags"]) == {"against", "leader_last"} and f["kimi"]["tau"] == -1.0
+    assert leader_without(list("ABCD"), b, {}, set(f)) == "D"
+    # согласные бюллетени не помечаются
+    assert ballot_flags(rows, {"x": ["A", "B", "C"], "y": ["A", "B", "C"]}) == {}
+    # голос, решающий исход: без него лидер меняется
+    b2 = {"p": ["A", "B", "C"], "q": ["B", "A", "C"], "r": ["C", "B", "A"]}
+    rows2 = tally(list("ABC"), b2, {})
+    assert rows2[0].label == "B"
+    assert leader_without(list("ABC"), b2, {}, {"r"}) == "A"
+
+
+def test_fact_check_stage():
+    from council.session import FACT_CHECKER, normalize_status
+    cfg = make_cfg(chair_proposes=False, fact_check={"enabled": True, "top": 2, "max_claims": 2})
+    client = MockClient(delay=0)
+    events = []
+    res = run(Council(cfg, client, seed=1, on_event=lambda e, **d: events.append((e, d))).run("Вопрос?"))
+    calls = [c for c in client.calls if c["meta"]["stage"] == "factcheck"]
+    assert len(calls) == 2 and {c["model"] for c in calls} == {"perplexity/sonar-pro"}
+    assert list(res.fact_check) == [r.label for r in res.tally[:2]]
+    assert all(len(r["claims"]) == 2 for r in res.fact_check.values())  # обрезано до max_claims
+    assert res.stats[FACT_CHECKER].calls == 2 and res.fact_checker == "perplexity/sonar-pro"
+    order = [d.get("stage") for e, d in events if e == "stage"]
+    assert order.index("factcheck") == order.index("vote") + 1 and order[-1] == "verdict"
+    verdict_prompt = next(c for c in client.calls if c["meta"]["stage"] == "verdict")
+    assert verdict_prompt  # председатель получил итоги проверки (см. test_prompts_include_facts)
+    assert normalize_status("Подтверждено") == "confirmed" and normalize_status("FALSE") == "refuted"
+    assert normalize_status("maybe") == "unclear"
+
+
+def test_fact_check_failure_does_not_stop_session():
+    class Broken(MockClient):
+        async def complete(self, model, messages, **kw):
+            if (kw.get("meta") or {}).get("stage") == "factcheck":
+                raise ProviderError("поиск недоступен")
+            return await super().complete(model, messages, **kw)
+
+    cfg = make_cfg(fact_check={"enabled": True})
+    res = run(Council(cfg, Broken(delay=0), seed=1).run("Вопрос?"))
+    assert res.fact_check == {} and res.verdict.final_answer
+    assert any("factcheck" in f for f in res.stats["факт-чек"].failures)
+
+
+def test_prompts_include_facts_and_ballot_notes():
+    from council import prompts
+    from council.schemas import Proposal
+    props = {"A": Proposal(title="t", summary="s")}
+    facts = prompts.factcheck_block({"A": {"summary": "в целом верно",
+                                           "claims": [{"claim": "Х", "status": "refuted", "note": "на деле Y"}]}})
+    v = prompts.verdict("Q", ["Цена"], props, "1. A", "", None, "", facts, "ballots diverging: kimi")
+    assert "[refuted] Х" in v and "Do not repeat refuted claims" in v and "Ballot check: ballots diverging" in v
+    fc = prompts.factcheck("Q", "A", props["A"], 3)
+    assert "up to 3 key factual claims" in fc and '"status": "confirmed|refuted|unclear"' in fc

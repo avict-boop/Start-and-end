@@ -200,9 +200,17 @@ def verdict(
     critique_notes: str,
     original: str | None = None,
     agreement: str = "",
+    facts: str = "",
+    ballot_notes: str = "",
 ) -> str:
     labels = ", ".join(proposals)
     agree = f"\nCouncil agreement on the ranking: {agreement}\n" if agreement else ""
+    if ballot_notes:
+        agree += f"\nBallot check: {ballot_notes}\n"
+    if facts:
+        agree += ("\nIndependent web fact-check of the leading proposals:\n" + facts + "\n"
+                  "Do not repeat refuted claims in final_answer (correct them using the fact-check); present unclear "
+                  "ones as uncertain. A proposal resting on refuted facts is a weaker candidate.\n")
     return f"""Question for the council:
 {question}
 {_original(question, original)}
@@ -230,6 +238,41 @@ Write the council's final verdict.
 
 JSON format:
 {{"winner": "A", "final_answer": "...", "why": "...", "dissent": ["..."], "risks": ["..."]}}"""
+
+
+FACTCHECK_SYSTEM = """You are an independent fact-checker for an expert council of AI models. Use web search.
+Check factual claims only (numbers, dates, names, laws, prices, technical facts, studies) — not opinions or recommendations.
+Be strict: "confirmed" only if reliable sources support the claim; "refuted" if reliable sources contradict it;
+otherwise "unclear". Write human-readable text in {language}. Reply with ONE valid JSON object only."""
+
+
+def factcheck(question: str, label: str, p: Proposal, max_claims: int) -> str:
+    return f"""Question the council is answering:
+{question}
+
+Proposal {label} (one of the leading options after voting):
+{_proposal_block(label, p)}
+
+Pick up to {max_claims} key factual claims in this proposal that matter most for the decision and are checkable
+in public sources. Verify each with web search. Claims based only on the user's private documents cannot be
+checked publicly — skip them or mark them "unclear" with a note.
+
+JSON format:
+{{"claims": [{{"claim": "the claim, short", "status": "confirmed|refuted|unclear",
+              "note": "what the sources say, one or two sentences", "sources": ["https://..."]}}],
+  "summary": "one sentence: how reliable the factual basis of this proposal is"}}"""
+
+
+def factcheck_block(results: dict[str, dict]) -> str:
+    """Итоги проверки фактов для председателя."""
+    if not results:
+        return ""
+    lines = []
+    for label, r in results.items():
+        lines.append(f"Proposal {label}: {r.get('summary', '')}")
+        for c in r.get("claims", []):
+            lines.append(f"  - [{c.get('status')}] {c.get('claim')} — {c.get('note', '')}")
+    return "\n".join(lines)
 
 
 def history_block(history: list[dict]) -> str:

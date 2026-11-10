@@ -77,6 +77,19 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
         out += ["### Особые мнения", "", *[f"- {x}" for x in vd["dissent"]], ""]
     if vd.get("risks"):
         out += ["### Риски", "", *[f"- {x}" for x in vd["risks"]], ""]
+    if v.fact_check:
+        out += ["## Проверка фактов", "", f"*{v.d.get('fact_checker', '')}, поиск в интернете — {v.fact_line}*", ""]
+        for label, r in v.fact_check.items():
+            out += [f"### Вариант {label}: {v.title(label)}", ""]
+            if r.get("summary"):
+                out += [r["summary"], ""]
+            for c in r.get("claims", []):
+                st = c.get("status", "unclear")
+                links = [u for u in map(v.safe_url, c.get("sources") or []) if u][:3]
+                out.append(f"- {v.FACT_ICON.get(st, '❔')} **{v.FACT_NAME.get(st, st)}:** {c.get('claim', '')}"
+                           + (f" — {c['note']}" if c.get("note") else "")
+                           + ("".join(f" [[{i + 1}]](<{u}>)" for i, u in enumerate(links))))
+            out.append("")
     if summary:
         out += ["---", "*Это краткая версия: только итоговое решение. Полный отчёт с вариантами всех моделей, "
                 "критикой и голосованием скачивается отдельно.*"]
@@ -92,6 +105,9 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
                    f"{'—' if avg is None else f'{avg:.1f}'} | {r.get('first_places', 0)}/{r.get('ballots', 0)} |")
     out += ["", "*Порядок: балл Борда; при равенстве — попарное сравнение (побед минус поражений), затем оценка критики.*"]
     out += [f"- {n}" for n in v.tie_notes]
+    if v.flag_notes:
+        out += ["", "> ⚠️ **Бюллетени против общего мнения** (голоса учтены):"] + [f"> - {n}" for n in v.flag_notes]
+        out += [f"> {v.robust_note}"]
     out.append("")
     if v.ballots:
         out += ["### Бюллетени", ""]

@@ -59,3 +59,18 @@ def test_plan_matches_real_calls_with_judge_chair():
     real = Counter((c["meta"]["member"], c["meta"]["stage"]) for c in client.calls)
     plan = Counter((name, stage) for name, items in plan_calls(cfg, "debate", 1, None, False).items() for stage, _ in items)
     assert real == plan
+
+
+def test_fact_check_in_plan_and_estimate():
+    from council.estimate import Price
+    cfg = make_cfg(chair_proposes=False, fact_check={"enabled": True, "top": 2})
+    client = MockClient(delay=0)
+    asyncio.run(Council(cfg, client, seed=1).run("Вопрос?"))
+    real = Counter((c["meta"]["member"], c["meta"]["stage"]) for c in client.calls)
+    plan = Counter((name, stage) for name, items in plan_calls(cfg, "debate", 1, None, False).items() for stage, _ in items)
+    assert real == plan and plan[("факт-чек", "factcheck")] == 2
+    pricing = {m.model: Price(1e-6, 2e-6) for m in cfg.members}
+    pricing["perplexity/sonar-pro"] = Price(3e-6, 15e-6, request=0.005)
+    est = estimate(cfg, pricing, mode="debate", rounds=1)
+    fc = next(m for m in est.members if m.name == "факт-чек")
+    assert fc.calls == 2 and fc.cost > 2 * 0.005

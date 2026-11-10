@@ -326,6 +326,34 @@ def _save(doc) -> bytes:
     return buf.getvalue()
 
 
+def _facts_docx(doc, v: View) -> None:
+    _heading(doc, "Проверка фактов", 1)
+    r = doc.add_paragraph().add_run(f"Модель с поиском в интернете ({v.d.get('fact_checker', '')}) проверила ключевые "
+                                    f"утверждения лидирующих вариантов. Итог: {v.fact_line}.")
+    r.font.size = Pt(9)
+    r.font.color.rgb = MUTED
+    for label, res in v.fact_check.items():
+        _heading(doc, f"Вариант {label}: {v.title(label)}", 3)
+        if res.get("summary"):
+            inline_markdown(doc.add_paragraph(), res["summary"])
+        for c in res.get("claims", []):
+            st = c.get("status", "unclear")
+            par = doc.add_paragraph()
+            par.paragraph_format.left_indent = Pt(14)
+            b = par.add_run(f"{v.FACT_ICON.get(st, '❔')} {v.FACT_NAME.get(st, st)}: ")
+            b.bold = True
+            if st == "refuted":
+                b.font.color.rgb = RGBColor(0xB0, 0x2A, 0x2A)
+            inline_markdown(par, c.get("claim", ""))
+            if c.get("note"):
+                par.add_run(" — " + c["note"]).font.color.rgb = MUTED
+            links = [u for u in map(v.safe_url, c.get("sources") or []) if u][:3]
+            if links:
+                lr = doc.add_paragraph().add_run("   " + " · ".join(links))
+                lr.font.size = Pt(8)
+                lr.font.color.rgb = MUTED
+
+
 def render_decision_docx(view: View) -> bytes:
     """Только решение совета: вопрос и итоговый ответ."""
     v = view
@@ -455,7 +483,7 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
         toc_title.bold = True
         toc_title.font.size = Pt(8)
         toc_title.font.color.rgb = MUTED
-        entries = ["Решение совета", "Голосование", "Варианты"] + [f"   Вариант {l}: {p.get('title', '')}"
+        entries = ["Решение совета"] + (["Проверка фактов"] if v.fact_check else []) + ["Голосование", "Варианты"] + [f"   Вариант {l}: {p.get('title', '')}"
                                                                 for l, p in v.proposals.items()]
         entries += (["Критика: средние оценки (1–10)"] if v.critiques else []) + ["Участники и расходы"]
         _toc_field(doc, entries)
@@ -483,6 +511,8 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
     if vd.get("risks"):
         _heading(doc, "Риски", 3)
         _bullets(doc, vd["risks"])
+    if v.fact_check:
+        _facts_docx(doc, v)
     if summary:
         note = doc.add_paragraph().add_run("Это краткая версия: только итоговое решение. Полный отчёт с вариантами "
                                            "всех моделей, критикой и голосованием скачивается отдельно.")
@@ -516,6 +546,12 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
         r = doc.add_paragraph().add_run("• " + tn)
         r.font.size = Pt(8.5)
         r.font.color.rgb = MUTED
+    if v.flag_notes:
+        r = doc.add_paragraph().add_run("⚠️ Бюллетени против общего мнения (голоса учтены):")
+        r.bold = True
+        r.font.color.rgb = RGBColor(0x7A, 0x4A, 0x00)
+        for fn in v.flag_notes + [v.robust_note]:
+            doc.add_paragraph().add_run("• " + fn).font.size = Pt(9)
     if v.ballots:
         _heading(doc, "Бюллетени", 3)
         for voter, b in v.ballots.items():

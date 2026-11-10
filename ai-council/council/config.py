@@ -30,6 +30,16 @@ class BrandingConfig(BaseModel):
     footer: str = ""  # доп. текст в колонтитуле, например «Конфиденциально»
 
 
+class FactCheckConfig(BaseModel):
+    """Проверка фактов лидеров голосования моделью с поиском в интернете (необязательно)."""
+
+    enabled: bool = False
+    model: str = "perplexity/sonar-pro"   # модель OpenRouter с поиском
+    top: int = Field(default=2, ge=1, le=5)          # сколько лидирующих вариантов проверять
+    max_claims: int = Field(default=5, ge=1, le=10)  # сколько ключевых утверждений на вариант
+    max_tokens: int = 3000
+
+
 class CouncilConfig(BaseModel):
     language: str = "Russian"
     mode: Mode = "debate"
@@ -51,6 +61,7 @@ class CouncilConfig(BaseModel):
     devil_advocate: str | None = None
     runs_dir: str = "runs"
     branding: BrandingConfig = Field(default_factory=BrandingConfig)
+    fact_check: FactCheckConfig = Field(default_factory=FactCheckConfig)
     transcribe_model: str = "google/gemini-2.5-flash"  # модель OpenRouter для расшифровки голосовых
     members: list[MemberConfig]
 
@@ -116,6 +127,7 @@ def with_overrides(
     devil_advocate: str | None = None,  # "" — убрать адвоката дьявола, None — оставить как есть
     budget: float | None = None,
     chair_proposes: bool | None = None,
+    fact_check: bool | None = None,
 ) -> CouncilConfig:
     """Возвращает копию конфига с выбранными участниками/ролями/бюджетом, проверяя результат."""
     from pydantic import ValidationError
@@ -140,6 +152,8 @@ def with_overrides(
         data["max_cost_usd"] = budget
     if chair_proposes is not None:
         data["chair_proposes"] = chair_proposes
+    if fact_check is not None:
+        data["fact_check"]["enabled"] = fact_check
     try:
         return CouncilConfig.model_validate(data)
     except ValidationError as e:
