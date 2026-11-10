@@ -269,7 +269,7 @@ def test_short_title_and_query_formatting():
     v = View(res.to_dict())
     html = render_html(v)
     assert "<h1>Помоги выбрать стек для магазина.</h1>" in html
-    assert 'class="query"' in html and "<li>бюджет <strong>1 млн</strong></li>" in html and "Спасибо!" in html
+    assert 'class="query md"' in html and "<li>бюджет <strong>1 млн</strong></li>" in html and "Спасибо!" in html
     md = render_md(v)
     assert md.startswith("# Помоги выбрать стек для магазина.") and "> - срок 3 месяца  " in md
 

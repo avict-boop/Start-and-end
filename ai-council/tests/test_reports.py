@@ -83,7 +83,7 @@ def test_summary_reports_contain_only_the_decision():
 def test_decision_reports_contain_only_the_answer():
     v = View(session("Итоговый ответ совета."))
     html = render_html(v, decision=True)
-    assert "Итоговый ответ совета." in html and "решение совета" in html
+    assert "Итоговый ответ совета." in html and "решение совета" in html.lower()
     for absent in ("Почему", "Особые мнения", "Риски", 'id="voting"', "Бюллетени", 'id="proposal-A"', "Стоимость"):
         assert absent not in html
     md = render_md(v, decision=True)

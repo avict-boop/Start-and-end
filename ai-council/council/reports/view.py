@@ -95,6 +95,45 @@ class View:
         return self.question.strip() != self.title_text
 
     @property
+    def question_rest(self) -> str:
+        """Запрос без первой фразы, которая уже стоит в заголовке (чтобы не повторять её под ним)."""
+        q = self.question.strip()
+        t = self.title_text.rstrip("…").strip()
+        if t and q.startswith(t):
+            return q[len(t):].lstrip(" \n.")
+        return q
+
+    @property
+    def question_is_prompt(self) -> bool:
+        """Запрос — длинная инструкция (роль, разделы, формат), а не короткий вопрос."""
+        q = self.question.strip()
+        return len(q) > 400 or len([x for x in q.splitlines() if x.strip()]) > 6
+
+    @property
+    def display_title(self) -> str:
+        """Заголовок отчёта: короткий вопрос как есть; для длинной инструкции — уточнённая постановка председателя.
+
+        Первая строка инструкции («Ты — эксперт по …») не говорит, о чём заседание, а постановка — говорит.
+        """
+        if self.question_is_prompt and self.refined:
+            return short_title(self.refined, 160)
+        return self.title_text
+
+    def question_excerpt(self, limit: int = 420) -> str:
+        """Начало запроса для первой страницы (целыми абзацами, не длиннее limit символов)."""
+        q = self.question.strip()
+        if len(q) <= limit:
+            return q
+        out = ""
+        for para in re.split(r"\n\s*\n", q):
+            if out and len(out) + len(para) > limit:
+                break
+            out += ("\n\n" if out else "") + para
+        if len(out) > limit * 1.3 or not out:
+            out = q[:limit].rsplit(" ", 1)[0]
+        return out.rstrip() + " …"
+
+    @property
     def refined(self) -> str:
         r = self.d.get("refined_question") or ""
         return r if r and r != self.question else ""
@@ -296,8 +335,10 @@ class View:
             return ("Вариантов меньше трёх — голосование почти ничего не решает: каждая пара сравнивалась "
                     f"{c['min']}–{c['max']} раз, по сути выбор делает председатель")
         rng = f"{c['min']}" if c["min"] == c["max"] else f"от {c['min']} до {c['max']}"
+        n = c["max"]
+        times = "раза" if c["min"] == c["max"] and n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else "раз"
         warn = " — мало данных, относитесь к порядку осторожно" if c["min"] < 2 else ""
-        return f"Каждая пара вариантов сравнивалась в бюллетенях {rng} раз{warn}"
+        return f"Каждая пара вариантов сравнивалась в бюллетенях {rng} {times}{warn}"
 
     @staticmethod
     def safe_url(u: str) -> str:
@@ -520,6 +561,135 @@ def short_title(text: str, limit: int = 110) -> str:
     return cut.rstrip(",;:—-– ") + "…"
 
 
+# ------------------------------------------------------------------ формулы LaTeX → читаемый текст
+
+_GREEK = {"alpha": "α", "beta": "β", "gamma": "γ", "delta": "δ", "epsilon": "ε", "varepsilon": "ε", "zeta": "ζ",
+          "eta": "η", "theta": "θ", "iota": "ι", "kappa": "κ", "lambda": "λ", "mu": "μ", "nu": "ν", "xi": "ξ",
+          "pi": "π", "rho": "ρ", "sigma": "σ", "tau": "τ", "upsilon": "υ", "phi": "φ", "varphi": "φ", "chi": "χ",
+          "psi": "ψ", "omega": "ω", "Gamma": "Γ", "Delta": "Δ", "Theta": "Θ", "Lambda": "Λ", "Xi": "Ξ", "Pi": "Π",
+          "Sigma": "Σ", "Phi": "Φ", "Psi": "Ψ", "Omega": "Ω"}
+_SYMBOLS = {"times": "×", "cdot": "·", "div": "÷", "pm": "±", "mp": "∓", "approx": "≈", "sim": "∼", "neq": "≠",
+            "ne": "≠", "le": "≤", "leq": "≤", "ge": "≥", "geq": "≥", "ll": "≪", "gg": "≫", "infty": "∞",
+            "sum": "∑", "prod": "∏", "int": "∫", "partial": "∂", "nabla": "∇", "in": "∈", "notin": "∉",
+            "subset": "⊂", "subseteq": "⊆", "cup": "∪", "cap": "∩", "forall": "∀", "exists": "∃", "to": "→",
+            "rightarrow": "→", "leftarrow": "←", "Rightarrow": "⇒", "Leftrightarrow": "⇔", "mapsto": "↦",
+            "ldots": "…", "dots": "…", "cdots": "⋯", "degree": "°", "circ": "∘", "propto": "∝", "equiv": "≡",
+            "log": "log", "ln": "ln", "exp": "exp", "min": "min", "max": "max", "lim": "lim", "sin": "sin",
+            "cos": "cos", "tan": "tan", "mid": "|", "lvert": "|", "rvert": "|", "langle": "⟨", "rangle": "⟩",
+            ",": " ", ";": " ", "quad": "  ", "qquad": "    ", "!": "", "%": "%", "$": "$", "{": "{", "}": "}"}
+
+
+def _brace(src: str, i: int) -> tuple[str, int]:
+    """Аргумент команды: {…} с учётом вложенности или один символ. Возвращает (текст, позиция после)."""
+    while i < len(src) and src[i] == " ":
+        i += 1
+    if i >= len(src):
+        return "", i
+    if src[i] != "{":
+        if src[i] == "\\":
+            m = re.match(r"\\([A-Za-z]+|.)", src[i:])
+            return m.group(0), i + len(m.group(0))
+        return src[i], i + 1
+    depth, j = 0, i
+    while j < len(src):
+        depth += {"{": 1, "}": -1}.get(src[j], 0)
+        if depth == 0:
+            return src[i + 1:j], j + 1
+        j += 1
+    return src[i + 1:], len(src)
+
+
+def latex_to_html(src: str) -> str:
+    """Упрощённая вёрстка формулы без внешних библиотек: греческие буквы и знаки — символами Unicode,
+    степени и индексы — <sup>/<sub>, дроби — a⁄b, корень — √(…). Читается на экране, в PDF и в Word."""
+    from html import escape
+    out: list[str] = []
+    i = 0
+    while i < len(src):
+        ch = src[i]
+        if ch == "\\":
+            m = re.match(r"\\([A-Za-z]+|.)", src[i:])
+            name = m.group(1)
+            i += len(m.group(0))
+            if name in ("frac", "dfrac", "tfrac"):
+                a, i = _brace(src, i)
+                b, i = _brace(src, i)
+                wrap = lambda x: f"({latex_to_html(x)})" if len(x.strip()) > 1 and not x.strip().isalnum() else latex_to_html(x)  # noqa: E731
+                out.append(f"{wrap(a)}⁄{wrap(b)}")
+            elif name == "sqrt":
+                a, i = _brace(src, i)
+                out.append(f"√({latex_to_html(a)})" if len(a) > 1 else f"√{latex_to_html(a)}")
+            elif name in ("text", "mathrm", "textrm", "operatorname", "mathbf", "textbf", "mathit", "mbox"):
+                a, i = _brace(src, i)
+                inner = latex_to_html(a) if name not in ("text", "textrm", "mbox") else escape(a)
+                out.append(f"<b>{inner}</b>" if name in ("mathbf", "textbf") else f'<span class="mt">{inner}</span>')
+            elif name in ("left", "right", "big", "Big", "bigg", "displaystyle", "limits", "nolimits"):
+                pass
+            elif name in _GREEK:
+                out.append(_GREEK[name])
+            elif name in _SYMBOLS:
+                out.append(_SYMBOLS[name])
+            else:
+                out.append(escape(name))
+        elif ch in "^_":
+            a, i = _brace(src, i + 1)
+            tag = "sup" if ch == "^" else "sub"
+            out.append(f"<{tag}>{latex_to_html(a)}</{tag}>")
+        elif ch in "{}":
+            i += 1
+        else:
+            out.append(escape(ch))
+            i += 1
+    return re.sub(r"\s{2,}", " ", "".join(out)).strip()
+
+
+_FENCE = re.compile(r"(^```.*?^```[^\n]*$)", re.S | re.M)
+_CODE_SPAN = re.compile(r"(`+)(.+?)\1", re.S)
+_MATH_BLOCK = re.compile(r"\$\$(.+?)\$\$|\\\[(.+?)\\\]", re.S)
+_MATH_INLINE = re.compile(r"\\\((.+?)\\\)|(?<![\\$\w])\$(?![\s$])([^$\n]{1,240}?)(?<![\s\\])\$(?![\w$])")
+_BARE_URL = re.compile(r"(?<![(<\[=\"'/\w])(https?://[^\s<>()\[\]\"']+[^\s<>()\[\]\"'.,;:!?»)])")
+
+
+def _looks_like_math(s: str) -> bool:
+    """Отличает формулу «$x^2$» от цен «$215 и $300»."""
+    return bool(re.search(r"[\\^_=]", s)) or bool(re.fullmatch(r"[A-Za-z]", s.strip()))
+
+
+def _protect(text: str) -> tuple[str, list[str]]:
+    """Формулы и голые ссылки до разбора Markdown: формулы — в метки (чтобы _ и * в них не стали курсивом),
+    ссылки — в <…> (автоссылка Markdown). Код (```…``` и `…`) не трогаем."""
+    store: list[str] = []
+
+    def keep(html: str, block: bool) -> str:
+        store.append(html)
+        return f"\n\n⟦M{len(store) - 1}⟧\n\n" if block else f"⟦m{len(store) - 1}⟧"
+
+    def prose(part: str) -> str:
+        pieces = _CODE_SPAN.split(part)
+        res = []
+        k = 0
+        while k < len(pieces):
+            seg = pieces[k]
+            seg = _MATH_BLOCK.sub(lambda m: keep(latex_to_html(m.group(1) or m.group(2)), True), seg)
+            seg = _MATH_INLINE.sub(lambda m: keep(latex_to_html(m.group(1) or m.group(2)), False)
+                                   if m.group(1) or _looks_like_math(m.group(2)) else m.group(0), seg)
+            seg = _BARE_URL.sub(r"<\1>", seg)
+            res.append(seg)
+            if k + 2 < len(pieces) + 1 and k + 1 < len(pieces):
+                res.append(pieces[k + 1] + pieces[k + 2] + pieces[k + 1])  # `код` как был
+            k += 3
+        return "".join(res)
+
+    parts = _FENCE.split(text)
+    return "".join(p if i % 2 else prose(p) for i, p in enumerate(parts)), store
+
+
+def _restore(html: str, store: list[str]) -> str:
+    html = re.sub(r"<p>⟦M(\d+)⟧</p>", lambda m: f'<div class="math-block">{store[int(m.group(1))]}</div>', html)
+    html = re.sub(r"⟦M(\d+)⟧", lambda m: f'<span class="math">{store[int(m.group(1))]}</span>', html)
+    return re.sub(r"⟦m(\d+)⟧", lambda m: f'<span class="math">{store[int(m.group(1))]}</span>', html)
+
+
 def md_to_html(text: str, *, breaks: bool = False) -> str:
     """Безопасно: сырой HTML из ответа модели не исполняется, а выводится как текст.
 
@@ -529,4 +699,5 @@ def md_to_html(text: str, *, breaks: bool = False) -> str:
     md = _markdown.Markdown(extensions=ext, output_format="html")
     md.preprocessors.deregister("html_block")
     md.inlinePatterns.deregister("html")
-    return _TABLE_HTML.sub(_wrap_table, md.convert(normalize_md(text)))
+    src, store = _protect(normalize_md(text))
+    return _TABLE_HTML.sub(_wrap_table, _restore(md.convert(src), store))

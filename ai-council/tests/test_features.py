@@ -158,22 +158,30 @@ def test_branding_and_toc(tmp_path):
     from council.reports.html import render_html
     from council.reports.view import View
     (tmp_path / "logo.png").write_bytes(b"")
-    Image.new("RGB", (200, 80), "green").save(tmp_path / "logo.png")
+    Image.new("RGB", (100, 80), "green").save(tmp_path / "logo.png")  # знак: название пишется рядом
     try:
         brand.set_brand(BrandingConfig(title="ООО «Ромашка»", logo="logo.png", color="#0a7d5a", footer="Конфиденциально"),
                         tmp_path)
         res = asyncio.run(Council(cfg3(), MockClient(delay=0)).run("Вопрос?", mode="quick", criteria=["x"]))
         v = View(res.to_dict())
         html = render_html(v)
-        assert "ООО «Ромашка» · отчёт о заседании" in html and 'class="logo" src="data:image/png' in html
+        assert '<span class="brand-name">ООО «Ромашка»</span>' in html and "Отчёт о заседании" in html
+        assert '<img src="data:image/png' in html  # квадратный логотип — рядом с названием
         assert "#0a7d5a" in html and "#5b5bd6" not in html and "target-counter(attr(href), page)" in html
         assert 'content: "ООО «Ромашка» · Конфиденциально"' in html and "Содержание" in html
         doc = Document(io.BytesIO(render_docx(v)))
         assert "ООО «Ромашка»" in doc.sections[0].header.paragraphs[0].text
+        # широкий логотип с надписью: название рядом не повторяется (иначе «ООО Ромашка ООО Ромашка»)
+        Image.new("RGB", (400, 80), "green").save(tmp_path / "logo.png")
+        brand.set_brand(BrandingConfig(title="ООО «Ромашка»", logo="logo.png"), tmp_path)
+        html = render_html(v)
+        assert 'class="wordmark"' in html and '<span class="brand-name">' not in html
         assert "Конфиденциально" in doc.sections[0].footer.paragraphs[0].text
         body = doc.element.body.xml
         assert 'TOC \\o "1-2"' in body and "Голосование" in body
-        assert doc.settings.element.xml.count("updateFields") == 1
+        # оглавление — поле Word TOC (номера страниц Word проставит по F9); без вопроса «обновить поля?» при открытии
+        body = doc.element.body.xml
+        assert 'TOC \\o "1-2"' in body and "updateFields" not in doc.settings.element.xml
         # битый путь к логотипу не ломает отчёты
         brand.set_brand(BrandingConfig(logo="нет-такого.png", color="zzz"), tmp_path)
         assert brand.current().logo_png == b"" and brand.current().color == brand.DEFAULT_COLOR
