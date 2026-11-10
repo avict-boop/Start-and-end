@@ -1079,6 +1079,7 @@ function render(s) {
   $("diagLink").href = `/api/sessions/${encodeURIComponent(s.id)}/diagnostics`;
 
   renderAttachments(s);
+  renderFraming(s);
   renderActivity(s);
 
   // расходы по моделям — в журнале
@@ -1095,6 +1096,24 @@ function render(s) {
   $("failSec").hidden = !s.failures.length;
   $("failures").innerHTML = s.failures.map((f) =>
     `<li><b>${esc(f.member)}</b> (${esc(STAGE_NAME[f.stage] || f.stage)}): ${esc(f.error)}</li>`).join("");
+}
+
+// «Как совет понял задачу»: уточнённый вопрос, критерии и обязательные требования (после этапа «Постановка»)
+function renderFraming(s) {
+  const reqs = s.requirements || [];
+  const refined = s.refined && s.refined.trim() !== (s.question || "").trim() ? s.refined : "";
+  const any = !!(s.criteria.length || reqs.length || refined);
+  $("frameSec").hidden = !any;
+  if (!any) return;
+  $("fRefined").hidden = !refined;
+  $("fRefined").innerHTML = refined ? `<span class="muted">Уточнённый вопрос:</span> ${esc(refined)}` : "";
+  $("fCritRow").hidden = !s.criteria.length;
+  $("fCriteria").innerHTML = s.criteria.map((c) => `<li>${esc(c)}</li>`).join("");
+  $("fReqRow").hidden = !reqs.length;
+  $("fReqs").innerHTML = reqs.map((r, i) => `<li><span class="rq">R${i + 1}</span><span>${esc(r)}</span></li>`).join("");
+  // пока идёт заседание — сразу под вопросом; когда есть решение — ниже решения и обоснования
+  const after = s.verdict ? $("whySec") : document.querySelector("#session .s-head");
+  if (after.nextElementSibling !== $("frameSec")) after.after($("frameSec"));
 }
 
 function renderAttachments(s) {
