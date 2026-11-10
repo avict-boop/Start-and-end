@@ -687,6 +687,9 @@ function apply(s, ev) {
       s.leaderWithout = ev.leader_without_flagged || null;
       if (ev.rows && ev.rows[0]) logAdd(s, `Голосование: лидирует вариант ${ev.rows[0].label}`);
       break;
+    case "warning":
+      logAdd(s, `⚠️ ${ev.member} (${STAGE_NAME[ev.stage] || ev.stage}): ${ev.text}`, "k-warn");
+      break;
     case "factcheck":
       s.facts = ev.results || {};
       s.factModel = ev.model || "";

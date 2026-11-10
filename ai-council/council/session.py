@@ -15,6 +15,7 @@ from . import prompts
 from .client import Completion, LLMClient, ProviderError
 from .config import CouncilConfig, MemberConfig, Mode
 from .attachments import Attachment, documents_block, image_parts, images_note
+from .filerefs import FIX_MESSAGE, refs_in
 from .schemas import Ballot, CritiqueSet, FactCheck, Framing, ImageNotes, Proposal, Revision, Verdict
 from .voting import (
     FLAG_NAME,
@@ -45,6 +46,10 @@ class BudgetExceeded(CouncilError):
 
 class InvalidResponse(CouncilError):
     pass
+
+
+class FileRefError(ValueError):
+    """Ответ ссылается на файл, которого не существует, вместо самого содержимого."""
 
 
 @dataclass
@@ -263,6 +268,27 @@ class Council:
                 obj = schema.model_validate(extract_json(comp.text))
                 if check:
                     obj = check(obj)
+                refs = refs_in(obj.model_dump()) if stage in self.FILE_STAGES else []
+                if refs and attempt < self.cfg.json_retries:
+                    # модель «положила» результат в несуществующий файл — просим вставить содержимое в ответ
+                    raise FileRefError(FIX_MESSAGE.format(refs="; ".join(refs)))
+                if refs:  # попытки кончились — принимаем, но отмечаем: часть содержимого может отсутствовать
+                    self.stats[name].failures.append(
+                        f"{stage}: ответ ссылается на файл, которого нет (содержимое могло потеряться): {'; '.join(refs)}")
+                    self._emit("warning", stage=stage, member=name,
+                               text=f"ответ ссылается на несуществующий файл: {'; '.join(refs)}")
+            except FileRefError as e:
+                error = str(e)
+                messages += [
+                    {"role": "assistant", "content": comp.text},
+                    {"role": "user", "content": prompts.fix_json(error)},
+                ]
+                self._call(name, stage, "retry", started,
+                           detail="ответ ссылается на файл вместо содержимого — прошу вставить всё в ответ")
+                entry["error"] = error
+                entry["finish_reason"] = comp.finish_reason
+                self.transcript.append(entry)
+                continue
             except ValueError as e:  # pydantic.ValidationError тоже ValueError
                 error = str(e).splitlines()[0][:500] if str(e) else repr(e)
                 if comp.finish_reason in ("length", "max_tokens", "MAX_TOKENS"):
@@ -292,6 +318,7 @@ class Council:
         raise InvalidResponse(f"{member.name}: некорректный ответ после {self.cfg.json_retries + 1} попыток: {error}")
 
     ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}
+    FILE_STAGES = {"proposal", "revision", "verdict"}  # здесь модели пишут содержательный ответ
 
     def can_see(self, member: MemberConfig) -> bool:
         return self.vision.get(member.model) is not False

@@ -102,6 +102,8 @@ def _on_event(event: str, **d) -> None:
         console.print(f"  [green]✓[/] {d['member']}")
     elif event == "member_failed":
         console.print(f"  [red]✗ {d['member']}[/] ({d['stage']}): {d['error'][:200]}")
+    elif event == "warning":
+        console.print(f"  [yellow]⚠ {d['member']}[/] ({d['stage']}): {d['text'][:200]}")
     elif event == "framing":
         console.print(f"[bold]Вопрос:[/] {d['refined_question']}")
         console.print(f"[bold]Критерии:[/] {', '.join(d['criteria'])}")

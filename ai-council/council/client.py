@@ -15,6 +15,23 @@ RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 ProgressFn = Callable[[dict[str, Any]], None]
 
 
+def _as_text(content: Any) -> str:
+    """Текст ответа. Некоторые провайдеры присылают content списком частей ([{"type": "text", "text": …}, …])."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        out = []
+        for part in content:
+            if isinstance(part, str):
+                out.append(part)
+            elif isinstance(part, dict) and isinstance(part.get("text"), str):
+                out.append(part["text"])
+        return "".join(out)
+    return str(content)
+
+
 class _Retryable(Exception):
     """Временная ошибка: стоит повторить запрос."""
 
@@ -197,7 +214,7 @@ class OpenRouterClient:
             raise _Retryable("пустой список choices")
         choice = choices[0]
         return {
-            "text": (choice.get("message") or {}).get("content") or "",
+            "text": _as_text((choice.get("message") or {}).get("content")),
             "finish": choice.get("finish_reason") or choice.get("native_finish_reason"),
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
@@ -236,7 +253,7 @@ class OpenRouterClient:
                 usage = chunk["usage"]
             for choice in chunk.get("choices") or []:
                 delta = choice.get("delta") or {}
-                piece = delta.get("content") or ""
+                piece = _as_text(delta.get("content"))
                 thought = delta.get("reasoning") or ""
                 if piece:
                     text.append(piece)

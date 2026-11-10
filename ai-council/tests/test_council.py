@@ -399,3 +399,60 @@ def test_prompts_include_facts_and_ballot_notes():
     assert "[refuted] Х" in v and "Do not repeat refuted claims" in v and "Ballot check: ballots diverging" in v
     fc = prompts.factcheck("Q", "A", props["A"], 3)
     assert "up to 3 key factual claims" in fc and '"status": "confirmed|refuted|unclear"' in fc
+
+
+# ---------------------------------------------------------------- ответы «в файле»
+
+
+class FileAnswerClient(MockClient):
+    """Модель m/b сначала «кладёт» предложение в несуществующий файл; times — сколько раз подряд."""
+
+    def __init__(self, times=1, **kw):
+        super().__init__(**kw)
+        self.times = times
+        self.sent = 0
+
+    async def complete(self, model, messages, **kw):
+        meta = kw.get("meta") or {}
+        if model == "m/b" and meta.get("stage") == "proposal" and self.sent < self.times:
+            self.sent += 1
+            self.calls.append({"model": model, "meta": meta})
+            text = json.dumps({"title": "Исследование рынка", "summary": "Я подготовил подробное исследование и "
+                               "сохранил его в файл: [скачать отчёт](sandbox:/mnt/data/research.docx)",
+                               "reasoning": "", "pros": [], "risks": [], "confidence": 0.8}, ensure_ascii=False)
+            return Completion(text=text, prompt_tokens=10, completion_tokens=10, cost=0.0001, model=model)
+        return await super().complete(model, messages, **kw)
+
+
+def test_file_reference_is_sent_back_for_full_content():
+    client = FileAnswerClient(times=1, delay=0)
+    res = run(Council(make_cfg(), client, seed=1).run("Вопрос?"))
+    label = next(l for l, a in res.authors.items() if a == "b")
+    assert "sandbox:" not in res.initial_proposals[label].summary  # повторный ответ принят, ссылка ушла
+    tries = [e for e in res.transcript if e["member"] == "b" and e["stage"] == "proposal"]
+    assert len(tries) == 2 and "does not exist" in tries[0]["error"]
+    assert not res.stats["b"].failures
+
+
+def test_file_reference_kept_with_warning_after_retries():
+    client = FileAnswerClient(times=10, delay=0)
+    events = []
+    res = run(Council(make_cfg(), client, seed=1, on_event=lambda e, **d: events.append((e, d))).run("Вопрос?"))
+    assert "b" in res.authors.values()  # участник не выбывает, но помечен
+    assert any("ссылается на файл" in f for f in res.stats["b"].failures)
+    assert any(e == "warning" and d["member"] == "b" for e, d in events)
+
+
+def test_file_ref_detection():
+    from council.filerefs import find_file_refs
+    assert find_file_refs("Итог: [скачать](sandbox:/mnt/data/report.docx)")
+    assert find_file_refs("I've saved the full report as report.xlsx")
+    assert not find_file_refs("Как видно из приложенного вами файла, выручка растёт.")
+    assert not find_file_refs("Прилагаю таблицу с расчётами:\n| a | b |")
+    assert not find_file_refs("Источник: [Росстат](https://rosstat.gov.ru/doc.pdf)")
+
+
+def test_content_parts_are_joined():
+    from council.client import _as_text
+    assert _as_text([{"type": "text", "text": "Привет, "}, {"type": "image_url"}, "мир"]) == "Привет, мир"
+    assert _as_text(None) == "" and _as_text("x") == "x"

@@ -17,6 +17,7 @@ Rules:
 - Be concrete and practical. Back claims with reasoning; name trade-offs and risks.
 - Critique honestly: no flattery, no false modesty. Judge ideas, not authors (proposals are anonymous).
 - Write all human-readable text in {language}.
+- You have no tools, code execution or file system: you cannot create, save or attach files. Put the full content (text, tables, data, code) directly into the JSON fields; never refer the user to a file, attachment or download.
 - Reply with ONE valid JSON object only. No markdown fences, no text before or after it."""
 
 DEVIL = """
@@ -64,7 +65,7 @@ SCALE = """Scoring scale (use the whole range; most real answers are not 9-10):
 - 5-6: acceptable, but with notable weaknesses;
 - 7-8: good, only minor issues;
 - 9-10: excellent, hard to improve (rare).
-Judge substance, not length or style: a longer or more polished answer is not better by itself, and missing a requirement of the request is a weakness."""
+Judge substance, not length or style: a longer or more polished answer is not better by itself, and missing a requirement of the request is a weakness. A proposal that points to a file, attachment or download instead of giving the content is missing that content."""
 
 
 def _proposal_block(label: str, p: Proposal) -> str:
