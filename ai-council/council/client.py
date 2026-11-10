@@ -35,6 +35,39 @@ def _as_text(content: Any) -> str:
 class _Retryable(Exception):
     """Временная ошибка: стоит повторить запрос."""
 
+    def __init__(self, message: str, *, retry_after: float | None = None, credits: bool = False) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+        self.credits = credits  # OpenRouter зарезервировал баланс под другие идущие запросы
+
+
+CREDIT_RETRIES = 6          # сколько раз ждать освобождения резерва баланса (попытками не считается)
+CREDIT_WAIT_MAX = 90.0      # не ждать дольше этого за один раз, даже если OpenRouter просит больше
+NARROW_SLOTS = 2            # сколько запросов одновременно после первой нехватки резерва
+
+
+def _credit_error(code: int, body: str, model: str) -> Exception:
+    """HTTP 402 от OpenRouter: временная нехватка резерва (повторить позже) или настоящая нехватка денег."""
+    try:
+        err = (json.loads(body) or {}).get("error") or {}
+    except ValueError:
+        err = {}
+    meta = err.get("metadata") or {}
+    reason = str(meta.get("reason") or "")
+    msg = str(err.get("message") or body)
+    if "in_flight" in reason or "in-flight" in msg.lower() or "in flight" in msg.lower():
+        retry_after = None
+        hdrs = meta.get("headers") or {}
+        try:
+            retry_after = float(hdrs.get("Retry-After") or hdrs.get("retry-after") or 0) or None
+        except (TypeError, ValueError):
+            retry_after = None
+        return _Retryable("OpenRouter временно зарезервировал баланс под другие идущие запросы — жду их завершения "
+                          "(на балансе мало средств для стольких запросов сразу)", retry_after=retry_after, credits=True)
+    return ProviderError(f"{model}: на балансе OpenRouter недостаточно средств для этого запроса (HTTP 402). "
+                         "Пополните баланс: https://openrouter.ai/settings/credits — или уменьшите число участников "
+                         "и лимит длины ответа.")
+
 
 def _http_reason(code: int, body: str) -> str:
     human = {429: "провайдер ограничил частоту запросов", 408: "истекло время ожидания",
@@ -97,6 +130,7 @@ class OpenRouterClient:
         self.max_tokens_cap = max_tokens_cap
         self.stream = stream
         self.timeout = timeout
+        self._narrow: asyncio.Semaphore | None = None  # ограничение после нехватки резерва баланса
         self._http = httpx.AsyncClient(
             transport=transport,
             base_url=base_url,
@@ -140,17 +174,34 @@ class OpenRouterClient:
         spent = Completion(text="")  # расходы всех попыток, включая неудачные
         last_error = "неизвестная ошибка"
         wait = 0.0
-        for attempt in range(1, self.max_retries + 2):
-            if attempt > 1:  # о каждом повторе сообщаем, даже если ждать не нужно
+        attempt = 0
+        credit_waits = 0
+        while attempt < self.max_retries + 1:
+            attempt += 1
+            if attempt > 1 or credit_waits:  # о каждом повторе сообщаем, даже если ждать не нужно
                 report({"phase": "retry", "attempt": attempt, "wait": round(wait, 1), "detail": last_error})
                 if wait:
                     await asyncio.sleep(wait)
             wait = self.retry_base_delay * (min(2**attempt, 30) + random.random())
             report({"phase": "sent", "attempt": attempt, "max_tokens": payload["max_tokens"]})
             try:
-                res = await self._attempt(payload, report)
+                if self._narrow is not None:
+                    async with self._narrow:  # после нехватки резерва — меньше запросов одновременно
+                        res = await self._attempt(payload, report)
+                else:
+                    res = await self._attempt(payload, report)
             except _Retryable as e:
                 last_error = str(e)
+                if e.credits and credit_waits < CREDIT_RETRIES:
+                    # Резерв баланса освободится, когда закончатся идущие запросы: ждём и пробуем снова,
+                    # не тратя обычные попытки, и дальше шлём меньше запросов одновременно.
+                    credit_waits += 1
+                    attempt -= 1
+                    if self._narrow is None:
+                        self._narrow = asyncio.Semaphore(NARROW_SLOTS)
+                    base = e.retry_after if e.retry_after else 20.0
+                    wait = min(base, CREDIT_WAIT_MAX) * self.retry_base_delay + random.random() * 5 * self.retry_base_delay
+                    last_error = f"{e} — повтор через {wait:.0f} с"
                 continue
             except ProviderError as e:
                 e.spent = spent
@@ -192,6 +243,15 @@ class OpenRouterClient:
                 if resp.status_code in RETRY_STATUSES:
                     body = (await resp.aread()).decode("utf-8", "replace")
                     raise _Retryable(_http_reason(resp.status_code, body))
+                if resp.status_code == 402:
+                    body = (await resp.aread()).decode("utf-8", "replace")
+                    err = _credit_error(402, body, model)
+                    if isinstance(err, _Retryable) and err.retry_after is None and resp.headers.get("retry-after"):
+                        try:
+                            err.retry_after = float(resp.headers["retry-after"])
+                        except ValueError:
+                            pass
+                    raise err
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode("utf-8", "replace")
                     raise ProviderError(f"{model}: HTTP {resp.status_code}: {body[:500]}")
@@ -281,7 +341,20 @@ class OpenRouterClient:
         msg = err.get("message") if isinstance(err, dict) else str(err)
         if code in RETRY_STATUSES:
             raise _Retryable(_http_reason(code, msg or ""))
+        if code == 402:
+            raise _credit_error(402, json.dumps({"error": err}), model)
         raise ProviderError(f"{model}: ошибка провайдера: {msg or err}")
+
+    async def balance(self) -> float | None:
+        """Остаток на балансе OpenRouter в $ (None — не удалось узнать)."""
+        try:
+            resp = await self._http.get("/credits")
+            if resp.status_code != 200:
+                return None
+            d = resp.json().get("data") or {}
+            return round(float(d.get("total_credits") or 0) - float(d.get("total_usage") or 0), 4)
+        except (httpx.HTTPError, ValueError, TypeError):
+            return None
 
     async def list_models(self) -> list[dict[str, Any]]:
         resp = await self._http.get("/models")

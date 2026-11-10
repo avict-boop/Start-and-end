@@ -319,8 +319,14 @@ function renderEstimate(e) {
     html += `<div class="big">≈ $${e.low.toFixed(3)} – $${e.high.toFixed(3)}</div>`;
     html += `<div class="muted">${e.calls} вызовов · лимит $${e.budget}</div>`;
     if (e.high > e.budget) html += `<div class="warnbox">Верхняя оценка выше лимита — заседание может остановиться по бюджету.</div>`;
+    if (e.balance != null) {
+      html += `<div class="muted">Баланс OpenRouter: $${e.balance.toFixed(2)}</div>`;
+      if (e.balance < e.high) html += `<div class="warnbox">На балансе меньше верхней оценки — пополните баланс, иначе заседание может прерваться.</div>`;
+      else if (e.balance < e.high * 4) html += `<div class="warnbox">Баланс небольшой: OpenRouter заранее резервирует средства под все одновременные запросы, поэтому часть запросов будет ждать — заседание пройдёт, но медленнее. Пополнение баланса это снимет.</div>`;
+    }
   } else {
     html += `<div class="big">${e.calls} вызовов</div><div class="muted">${$("mock").checked ? "Демо-режим: бесплатно." : "Цены неизвестны."}</div>`;
+    if (e.balance != null) html += `<div class="muted">Баланс OpenRouter: $${e.balance.toFixed(2)}</div>`;
   }
   if (e.warning) html += `<div class="warnbox">${esc(e.warning)}</div>`;
   const unknown = Object.entries(e.unknown || {});

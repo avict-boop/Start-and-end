@@ -163,3 +163,46 @@ def test_streaming_empty_answer_bumps_limit():
     comp = asyncio.run(c.complete("m", [], temperature=0, max_tokens=4000, on_progress=events.append))
     assert [b["max_tokens"] for b in bodies] == [4000, 8000] and comp.cost == pytest.approx(0.03)
     assert any(e["phase"] == "retry" and "8000" in e["detail"] for e in events)
+
+
+INFLIGHT = {"error": {"message": "This request would exceed your available credits given your current in-flight requests.",
+                      "code": 402, "metadata": {"reason": "in_flight_budget_exhausted",
+                                                "headers": {"Retry-After": "120"}}}}
+
+
+def test_in_flight_credit_limit_waits_and_retries_without_using_attempts():
+    calls = []
+    events = []
+
+    def handler(req):
+        calls.append(1)
+        return httpx.Response(402, json=INFLIGHT) if len(calls) <= 4 else httpx.Response(200, json=ok_body("ok"))
+
+    c = make(handler, retries=1)  # обычных попыток всего 2 — а ожиданий резерва больше
+    comp = asyncio.run(c.complete("m", [], temperature=0, max_tokens=1, on_progress=events.append))
+    assert comp.text == "ok" and len(calls) == 5
+    assert c._narrow is not None  # дальше — меньше запросов одновременно
+    retries = [e for e in events if e.get("phase") == "retry"]
+    assert retries and "зарезервировал баланс" in retries[0]["detail"]
+
+
+def test_in_flight_gives_up_after_limit():
+    c = make(lambda req: httpx.Response(402, json=INFLIGHT), retries=0)
+    with pytest.raises(ProviderError, match="зарезервировал баланс"):
+        asyncio.run(c.complete("m", [], temperature=0, max_tokens=1))
+
+
+def test_real_insufficient_credits_is_clear():
+    body = {"error": {"message": "Insufficient credits", "code": 402}}
+    c = make(lambda req: httpx.Response(402, json=body))
+    with pytest.raises(ProviderError, match="недостаточно средств"):
+        asyncio.run(c.complete("m", [], temperature=0, max_tokens=1))
+
+
+def test_balance():
+    def handler(req):
+        assert req.url.path.endswith("/credits")
+        return httpx.Response(200, json={"data": {"total_credits": 20, "total_usage": 7.5}})
+
+    assert asyncio.run(make(handler).balance()) == 12.5
+    assert asyncio.run(make(lambda req: httpx.Response(500)).balance()) is None

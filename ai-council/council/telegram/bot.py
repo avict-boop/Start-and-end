@@ -781,6 +781,19 @@ class CouncilBot:
             line = f"<b>Стоимость:</b> демо-режим, бесплатно ({est.calls} вызовов)"
         elif pricing:
             line = f"<b>Стоимость:</b> ≈ ${est.low:.3f} – ${est.high:.3f} ({est.calls} вызовов, лимит ${cfg.max_cost_usd:g})"
+            key = os.environ.get("OPENROUTER_API_KEY")
+            if key:
+                bc = OpenRouterClient(key, timeout=10)
+                try:
+                    bal = await bc.balance()
+                finally:
+                    await bc.aclose()
+                if bal is not None:
+                    line += f"\n<b>Баланс OpenRouter:</b> ${bal:.2f}"
+                    if bal < est.high:
+                        problem = problem or "На балансе OpenRouter меньше верхней оценки — пополните баланс, иначе заседание может прерваться."
+                    elif bal < est.high * 4:
+                        line += " <i>(небольшой — часть запросов будет ждать резерва, заседание пройдёт медленнее)</i>"
         else:
             line = f"<b>Стоимость:</b> не удалось оценить ({est.calls} вызовов, лимит ${cfg.max_cost_usd:g})"
         return line, problem

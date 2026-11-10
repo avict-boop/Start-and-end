@@ -407,7 +407,16 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             note = (f"Модели без зрения ({', '.join(blind)}) получат описание картинок, "
                     f"которое заранее сделает одна из «зрячих» моделей.")
             warning = f"{warning} {note}" if warning else note
+        balance = None
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not req.mock and key:
+            bc = OpenRouterClient(key, timeout=15)
+            try:
+                balance = await bc.balance()
+            finally:
+                await bc.aclose()
         return {
+            "balance": balance,
             "members": [dataclasses.asdict(m) for m in est.members],
             "calls": est.calls,
             "low": est.low if pricing else None,
