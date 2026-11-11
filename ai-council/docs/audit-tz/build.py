@@ -1,7 +1,7 @@
 """Пересобирает вложения пакета аудита из документации и кода: python docs/audit-tz/build.py
 
 01 и 02 — из docs/logic.md (разделы 1–7 и 8–16 с картой кода) и config.yaml; 03 — дословные запросы к моделям
-из council/prompts.py, council/research.py и council/advisor.py. 00-tz.md и 04 пишутся вручную.
+из council/prompts.py, council/research.py и council/advisor.py. 00-tz.md и 04 пишутся вручную; к 04 скрипт дописывает код проверок ответов.
 Лимит программы на вложения: 60 000 символов на файл, 150 000 на все — скрипт это проверяет.
 """
 from __future__ import annotations
@@ -15,8 +15,10 @@ OUT = Path(__file__).resolve().parent
 PER_FILE, TOTAL = 60_000, 150_000
 
 RESEARCH_PROMPTS = ["fill_lenses", "research_head", "framing", "_claims_rule", "CLAIM_JSON", "proposal", "critique",
-                    "ARBITRATION_SYSTEM", "arbitration", "digest", "revision", "vote", "verdict", "check_length",
-                    "check_verdict"]
+                    "ARBITRATION_SYSTEM", "arbitration", "digest", "revision", "vote", "verdict"]
+# проверки ответов программой — приложением к 04 (в 03 не помещаются по лимиту 60 000 на файл)
+CHECKS = ["_numbers", "_known_problem", "_check_card", "check_length", "check_verdict"]
+MARK = "<!-- ниже — код проверок, его дописывает build.py -->"
 ADVISOR_PROMPTS = ["MODE_ROLES", "dossier_prompt", "advise_prompt"]
 
 
@@ -53,6 +55,12 @@ def main() -> None:
         "подбор состава, хранение, интерфейсы, статистика, развёртывание, известные ограничения, карта кода. "
         "В конце — config.yaml целиком (все параметры с комментариями).\n\n"
         + "".join(h + b for h, b in rest) + "\n## Приложение. config.yaml\n\n```yaml\n" + cfg + "```\n", encoding="utf-8")
+    obs = OUT / "04-nablyudeniya-i-ogranicheniya.md"
+    text = obs.read_text(encoding="utf-8").split(MARK)[0].rstrip()
+    checks = pick((ROOT / "council/research.py").read_text(encoding="utf-8"), CHECKS)
+    obs.write_text(text + "\n\n" + MARK + "\n\n## Приложение. Как программа проверяет ответы (код из council/research.py)\n\n"
+                   "Длина варианта исследования и итог исследования: что попадает в «известно», карточка решения.\n\n"
+                   "```python\n" + checks + "\n```\n", encoding="utf-8")
     prompts = (ROOT / "council/prompts.py").read_text(encoding="utf-8")
     research = pick((ROOT / "council/research.py").read_text(encoding="utf-8"), RESEARCH_PROMPTS)
     advisor = pick((ROOT / "council/advisor.py").read_text(encoding="utf-8"), ADVISOR_PROMPTS)

@@ -789,60 +789,6 @@ JSON format:
  "what_would_change": ["..."], "next_questions": ["..."], "dissent": ["..."], "risks": ["..."], "deviation": "",
  "ideas": [{{"id": "I1", "decision": "included|rejected", "reason": "..."}}]}}"""
 
-
-def check_length(p: Proposal, max_words: int, factor: float) -> Proposal:
-    """Вариант намного длиннее заданного — вернуть автору на сокращение (ошибка уходит модели)."""
-    n = len(str(p.summary or "").split())
-    if n > max_words * factor:
-        raise ValueError(f'"summary" is {n} words, but the limit is about {max_words} words. Rewrite it to about '
-                         f"{max_words} words: keep every claim, number, source and recommendation, drop repetition, "
-                         "generic text and long tables; reply with the full JSON again")
-    return p
-
-
-def check_verdict(v: ResearchVerdict, *, ledger: dict[str, Any] | None, n_subq: int, strict: bool,
-                  mark: bool = False, require_claims: bool = True, numbers_check: bool = True,
-                  docs_text: str = "") -> ResearchVerdict:
-    """«Известно» — только с опорой на подтверждённые утверждения реестра или на цитату из документов пользователя.
-    Каждый пункт должен назвать опорные утверждения (claim_ids, require_claims), источники — из их подтверждений,
-    в формулировке — без чисел, которых в проверенном нет (numbers_check). Для данных из документов («DOC») —
-    дословная цитата, которая есть в тексте вложений. Что не прошло — в «неизвестно» с причиной; в тексте итога
-    это видно сразу (mark), карточка решения — только из прошедшего."""
-    ok_ids = confirmed_ids(ledger)
-    all_ids = {e["id"] for e in (ledger or {}).get("evidence", [])}
-    claim_by = {c["id"].upper(): c for c in (ledger or {}).get("claims", [])}
-    docs = _plain(docs_text)
-    bad: list[tuple[KnownItem, str]] = []
-    known: list[KnownItem] = []
-    unknown = list(v.unknown)
-    for k in v.known:
-        why = _known_problem(k, ok_ids=ok_ids, claim_by=claim_by, require_claims=require_claims,
-                             numbers_check=numbers_check, docs=docs)
-        if why:
-            bad.append((k, why))
-        else:
-            verified = [claim_by[c]["text"] for c in k.claim_ids if c in claim_by and claim_by[c].get("text")]
-            known.append(k.model_copy(update={"verified": verified}))
-    contested = [c.model_copy(update={"evidence_ids": [i for i in c.evidence_ids if i in all_ids]}) for c in v.contested]
-    have = {c.subquestion_id for c in v.coverage_audit}
-    missing = [f"Q{i}" for i in range(1, n_subq + 1) if f"Q{i}" not in have]
-    if strict and (bad or missing):
-        parts = []
-        if bad:
-            parts.append('"known" may contain ONLY items resting on CONFIRMED ledger claims (claim_ids + their E-ids, '
-                         'no new numbers) or on a verbatim user-document quote ("DOC"); move these to "contested" or '
-                         '"unknown": ' + "; ".join(f'"{k.statement[:80]}" ({why})' for k, why in bad[:5]))
-        if missing:
-            parts.append(f'"coverage_audit" must have one entry per subquestion; missing: {", ".join(missing)}')
-        raise ValueError(" ".join(parts))
-    unknown += [UnknownItem(gap=k.statement, reason="not_checked", how_to_check=f"не подтверждено: {why}")
-                for k, why in bad]
-    audit = list(v.coverage_audit) + [CoverageItem(subquestion_id=q, status="unknown", note="председатель не указал")
-                                      for q in missing]
-    answer = _mark_answer(v.final_answer, bad, all_ids, mark)
-    return v.model_copy(update={"known": known, "unknown": unknown, "contested": contested, "coverage_audit": audit,
-                                "final_answer": answer, "decision_card": _check_card(v.decision_card, known, bad)})
-
 ==================== council/advisor.py — «Подобрать состав» (только запросы)
 
 MODE_ROLES = {
