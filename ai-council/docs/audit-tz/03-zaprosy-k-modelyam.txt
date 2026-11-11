@@ -1,0 +1,908 @@
+Дословные запросы к моделям (код Python с шаблонами). Модели отвечают JSON по схемам.
+
+==================== council/prompts.py — обсуждение, быстрый ответ, выбор из вариантов (целиком)
+
+"""Шаблоны промптов для каждой роли и этапа.
+
+Промпты на английском (модели следуют им точнее), а весь человекочитаемый
+текст в ответах модели пишут на языке из конфига.
+"""
+from __future__ import annotations
+
+import json
+
+from .schemas import Proposal
+
+SYSTEM = """You are "{name}", a member of an expert council made up of AI models from different labs.
+The council's goal is to find the best possible answer to the user's question through independent proposals, honest critique, revision and voting.
+
+Rules:
+- Think independently. Do not defer to others just because they agree with each other.
+- Be concrete and practical. Back claims with reasoning; name trade-offs and risks.
+- Critique honestly: no flattery, no false modesty. Judge ideas, not authors (proposals are anonymous).
+- Write all human-readable text in {language}.
+- You have no tools, code execution or file system: you cannot create, save or attach files. Put the full content (text, tables, data, code) directly into the JSON fields; never refer the user to a file, attachment or download.
+- Reply with ONE valid JSON object only. No markdown fences, no text before or after it."""
+
+DEVIL = """
+Special role: you are the council's devil's advocate. Look for non-obvious alternatives, hidden assumptions and weak points that others miss. Stay constructive: the goal is a better final answer, not contrarianism."""
+
+CHAIR = """
+Special role: you chair the council. You must be neutral and fair toward all proposals, including any that may be your own."""
+
+CHAIR_JUDGE = """
+Special role: you chair the council. You do not submit a proposal of your own: your job is to frame the task, judge fairly and write the final decision. Stay neutral toward all proposals."""
+
+
+def system(name: str, language: str, *, devil: bool = False, chair: bool = False, judge_only: bool = False) -> str:
+    text = SYSTEM.format(name=name, language=language)
+    if devil:
+        text += DEVIL
+    if chair:
+        text += CHAIR_JUDGE if judge_only else CHAIR
+    return text
+
+
+def _criteria(criteria: list[str]) -> str:
+    return "\n".join(f"- {c}" for c in criteria)
+
+
+def _context(context: str | None) -> str:
+    return f"\nAdditional context from the user:\n{context}\n" if context else ""
+
+
+def _original(question: str, original: str | None) -> str:
+    """Исходный запрос дословно: в нём могут быть требования к формату и структуре ответа,
+    которые теряются в уточнённой формулировке."""
+    if not original or original.strip() == question.strip():
+        return ""
+    return ("\nThe user's original request, verbatim (it may contain requirements for the structure, sections and "
+            f"format of the answer — they apply to your answer):\n<<<\n{original}\n>>>\n")
+
+
+def requirements_block(req: list[str] | None) -> str:
+    if not req:
+        return ""
+    items = "\n".join(f"R{i}. {r}" for i, r in enumerate(req, 1))
+    return ("\nHard requirements of the user's request (they are NOT criteria and cannot be traded off: violating any "
+            f"of them is a serious flaw, not compensated by quality elsewhere):\n{items}\n")
+
+
+def head(question: str, original: str | None, req: list[str] | None = None) -> str:
+    """Начало запроса, одинаковое на этапах предложений, критики, доработки, голосования и итога.
+    Одинаковое начало провайдеры кэшируют, и повторное чтение вопроса стоит дешевле."""
+    return f"Question for the council:\n{question}\n{_original(question, original)}{requirements_block(req)}"
+
+
+def compact_rule(words: int) -> str:
+    return (f"COMPACT MODE: give the substance compactly — the \"summary\" at most about {words} words. Do NOT apply the "
+            "structure, sections, tables or report format required by the user's request: the chair will write the "
+            "final answer in that format from the proposals. Include every key point, fact, number and recommendation "
+            "the final answer will need; drop introductions, repetition and decoration.")
+
+
+REQ_CHECK = ("\nCheck every proposal against the hard requirements R1, R2, …: list each violated one in "
+             "\"weaknesses\" as \"VIOLATES Rn: …\". In compact mode only content requirements apply (format is the chair's job).\n")
+REQ_VOTE = ("\nA proposal that violates a hard requirement ranks below every proposal that satisfies all of them, "
+            "whatever its other qualities (in compact mode — content requirements only).")
+
+COMPACT_JUDGE = ("Proposals are compact on purpose (the chair writes the final formatted answer): judge their substance, "
+                 "not missing formatting, sections or length.")
+
+
+FORMAT_RULE = ("If the user's request specifies a structure, sections, a table or another format for the answer, "
+               "follow it exactly and cover every requested item.")
+
+KEEP_RULE = """"keep": 0-3 specific ideas, facts, steps or warnings from this proposal that the council's final answer
+should keep EVEN IF this proposal does not win — something the other proposals lack. Be concrete and self-contained
+(the chair must understand it without rereading the proposal); no general praise. Leave it empty if there is nothing
+unique worth keeping.
+"""
+
+SCALE = """Scoring scale (use the whole range; most real answers are not 9-10):
+- 1-2: wrong, irrelevant or unusable for this criterion;
+- 3-4: serious flaws or important gaps;
+- 5-6: acceptable, but with notable weaknesses;
+- 7-8: good, only minor issues;
+- 9-10: excellent, hard to improve (rare).
+Judge substance, not length or style: a longer or more polished answer is not better by itself, and missing a requirement of the request is a weakness. A proposal that points to a file, attachment or download instead of giving the content is missing that content."""
+
+
+def _proposal_block(label: str, p: Proposal) -> str:
+    lines = [f"### Proposal {label}: {p.title}", p.summary]
+    if p.reasoning:
+        lines.append(f"Reasoning: {p.reasoning}")
+    if p.pros:
+        lines.append("Pros: " + "; ".join(p.pros))
+    if p.risks:
+        lines.append("Risks: " + "; ".join(p.risks))
+    return "\n".join(lines)
+
+
+def proposals_block(proposals: dict[str, Proposal], with_changes: bool = False) -> str:
+    if not with_changes:
+        return "\n\n".join(_proposal_block(label, p) for label, p in proposals.items())
+    out = []
+    for label, p in proposals.items():
+        block = _proposal_block(label, p)
+        changes = getattr(p, "changes", "") or ""
+        not_acc = getattr(p, "not_accepted", None) or []
+        if changes:
+            block += f"\nChanges after critique: {changes}"
+        if not_acc:
+            block += "\nCritique not accepted by the author: " + "; ".join(not_acc)
+        out.append(block)
+    return "\n\n".join(out)
+
+
+def framing(question: str, context: str | None) -> str:
+    return f"""Before the council starts, prepare the task.
+
+User question:
+{question}
+{_context(context)}
+1. Restate the question precisely and neutrally (keep the user's intent; do not answer it).
+2. Define 3-5 short evaluation criteria that matter most for choosing the best answer (e.g. effectiveness, cost, risk, feasibility). Each criterion is 1-4 words.
+3. List the HARD REQUIREMENTS the user stated explicitly: required structure, sections, tables, length, language,
+   constraints, things that must or must not be included. Copy them faithfully, one per item, do not soften or
+   generalise them, do not invent new ones (at most 10; an empty list if the request has none). They are checked
+   separately from the criteria.
+
+JSON format:
+{{"refined_question": "...", "criteria": ["...", "..."], "requirements": ["...", "..."]}}"""
+
+
+WEB_NOTE = ("\n\nYou have web search in this step: use it for current facts, prices, dates and news, and cite the URLs "
+            "you actually used next to the claims they support. Do not cite pages you did not open.")
+
+
+def proposal(question: str, criteria: list[str], context: str | None, original: str | None = None,
+             compact: int = 0, req: list[str] | None = None) -> str:
+    """compact — число слов в режиме «Компактные варианты» (0 — обычный режим)."""
+    rule = compact_rule(compact) if compact else FORMAT_RULE
+    return f"""{head(question, original, req)}{_context(context)}
+The answers will be judged by these criteria:
+{_criteria(criteria)}
+
+Propose YOUR best answer/option. Other members answer independently; you will not see them yet.
+{rule} The "summary" field holds the answer itself.
+
+JSON format:
+{{"title": "short name of your option",
+  "summary": "the option itself, complete and concrete (can be several paragraphs)",
+  "reasoning": "why this is the best choice",
+  "pros": ["..."],
+  "risks": ["..."],
+  "confidence": 0.0-1.0}}"""
+
+
+def critique(question: str, criteria: list[str], proposals: dict[str, Proposal], original: str | None = None,
+             compact: bool = False, req: list[str] | None = None) -> str:
+    labels = ", ".join(proposals)
+    example_scores = ", ".join(f'"{c}": 1-10' for c in criteria)
+    note = f"\n{COMPACT_JUDGE}\n" if compact else ""
+    return f"""{head(question, original, req)}
+Review each of these anonymous proposals:
+
+{proposals_block(proposals)}
+
+Score every proposal on every criterion from 1 to 10:
+{_criteria(criteria)}
+
+{SCALE}
+{note}{REQ_CHECK if req else ""}
+You must review exactly these labels: {labels}. Use the criteria names exactly as written.
+{KEEP_RULE}
+JSON format:
+{{"reviews": [
+  {{"label": "A", "scores": {{{example_scores}}},
+    "strengths": ["..."], "weaknesses": ["..."], "keep": ["..."]}}
+]}}"""
+
+
+def revision(
+    question: str,
+    criteria: list[str],
+    own_label: str,
+    own: Proposal,
+    feedback: list[dict],
+    others: dict[str, Proposal],
+    original: str | None = None,
+    compact: int = 0,
+    req: list[str] | None = None,
+) -> str:
+    fb = json.dumps(feedback, ensure_ascii=False, indent=1) if feedback else "(no feedback received)"
+    others_full = "\n\n".join(_proposal_block(l, p) for l, p in others.items())  # целиком, без обрезки
+    rule = compact_rule(compact) if compact else FORMAT_RULE
+    return f"""{head(question, original, req)}
+Criteria:
+{_criteria(criteria)}
+
+Your current proposal (label {own_label}):
+{_proposal_block(own_label, own)}
+
+Anonymous feedback other members gave on your proposal:
+{fb}
+
+Other proposals, in full (anonymous):
+
+{others_full}
+
+Do this in order:
+1. Compare honestly: where is each other proposal stronger than yours, and where is yours stronger? Be specific.
+2. Revise: fix the real weaknesses named by critics or revealed by the comparison, keep what is strong, and take
+   specific ideas from other proposals when they make yours better (say which ideas and from which label).
+   List the criticism you do not accept and why: disagreement stated openly is more useful than silent agreement.
+3. Keep your independence: change your core approach only if a specific argument, fact or piece of evidence shows
+   it is wrong or clearly inferior — name it. That others agree with each other is not a reason by itself, and do
+   not change things just to please critics. If another proposal is clearly better overall, you may rebuild yours
+   on it — then say so.
+{rule}
+
+JSON format:
+{{"title": "...", "summary": "the full revised answer", "reasoning": "...", "pros": ["..."], "risks": ["..."],
+  "confidence": 0.0-1.0,
+  "comparison": "where other proposals are stronger than yours and where yours is stronger",
+  "borrowed": ["idea taken from another proposal (label)"],
+  "not_accepted": ["critique you did NOT accept, and why (keep real disagreements visible)"],
+  "position": "kept | improved | switched",
+  "changes": "what you changed and why; if position changed, the specific argument that convinced you"}}
+"position": kept — same approach, only small fixes; improved — same core approach, substantially strengthened;
+switched — core approach replaced (for example, rebuilt on another proposal)."""
+
+
+def vote(question: str, criteria: list[str], proposals: dict[str, Proposal], original: str | None = None,
+         compact: bool = False, req: list[str] | None = None) -> str:
+    labels = ", ".join(proposals)
+    note = f"\n{COMPACT_JUDGE}" if compact else ""
+    return f"""{head(question, original, req)}
+Criteria:
+{_criteria(criteria)}
+
+Final proposals:
+
+{proposals_block(proposals)}
+
+Rank ALL of these proposals from best to worst. Include every label exactly once: {labels}.
+Judge substance against the criteria and the request, not length or style.{note}{REQ_VOTE if req else ""}
+
+JSON format:
+{{"ranking": ["best label", "...", "worst label"], "rationale": "why the top choice wins"}}"""
+
+
+def verdict(
+    question: str,
+    criteria: list[str],
+    proposals: dict[str, Proposal],
+    tally_text: str,
+    critique_notes: str,
+    original: str | None = None,
+    agreement: str = "",
+    facts: str = "",
+    ballot_notes: str = "",
+    leader: str = "",
+    follow_vote: bool = False,
+    compact: bool = False,
+    req: list[str] | None = None,
+    co_leaders: list[str] | None = None,
+    ideas: str = "",
+) -> str:
+    labels = ", ".join(proposals)
+    if follow_vote and leader:
+        winner_rule = (
+            f'- "winner": the council\'s decision is the voting leader, proposal {leader}. Keep it as the winner.\n'
+            f'  You may name a different winner ({labels}) ONLY for one of these reasons, and then fill "deviation":\n'
+            f'    fact: the fact-check refuted claims that are central to {leader};\n'
+            f'    risk: {leader} carries a serious risk named in the critique that the others avoid;\n'
+            f'    process: {leader} does not answer the question or ignores explicit requirements of the request.\n'
+            '  "deviation" format: "<fact|risk|process>: specific explanation with references". Taste, style or\n'
+            '  "slightly better" is not a reason. If you keep the leader, leave "deviation" empty.')
+    else:
+        winner_rule = (f'- "winner": the label of the best proposal ({labels}). The vote is strong evidence; if you pick\n'
+                       '  differently, justify it in "why" and fill "deviation" with the reason.')
+    agree = f"\nCouncil agreement on the ranking: {agreement}\n" if agreement else ""
+    if ballot_notes:
+        agree += f"\nBallot check: {ballot_notes}\n"
+    if facts:
+        agree += ("\nIndependent web fact-check of the leading proposals:\n" + facts + "\n"
+                  "Do not repeat refuted claims in final_answer (correct them using the fact-check); present unclear "
+                  "ones as uncertain. A proposal resting on refuted facts is a weaker candidate.\n")
+    if co_leaders and len(co_leaders) > 1:
+        agree += (f"\nTie for first place: {', '.join(co_leaders)} are equal on every voting measure (only lot separates "
+                  "them). You may name any of them as the winner without a deviation reason — explain the choice in why.\n")
+    if compact:
+        agree += ("\nThe proposals were written compactly on purpose, without the requested format. Your final_answer "
+                  "is the full deliverable: expand the winning proposal (with the best ideas of others) into the complete "
+                  "answer in exactly the structure and format the user requested.\n")
+    return f"""{head(question, original, req)}
+Criteria:
+{_criteria(criteria)}
+
+Final proposals (after revision; "Changes after critique" shows what each author fixed):
+
+{proposals_block(proposals, with_changes=True)}
+
+Voting results, in final order (schulze wins = how many rivals the proposal beats by the Schulze method, which decides the order; borda = Borda score 0..1, 1 is the maximum, first tie-break; pairwise = wins minus losses in head-to-head comparisons; critique = average critique score 1..10 given to the version BEFORE revision, for information only; first-place votes):
+{tally_text}
+{agree}
+Key critique points:
+{critique_notes or "(no critique round)"}
+{_ideas_block(ideas)}
+Write the council's final verdict.
+{winner_rule}
+- "final_answer": the complete, ready-to-use final answer for the user, based on the winner and improved with the best ideas from other proposals (markdown allowed). {FORMAT_RULE} Do not drop requested sections even if the proposals skipped them — write them yourself.
+- If you mention voting numbers anywhere, copy them exactly as given above; do not estimate or round them differently.
+- The critique points below the voting refer to versions BEFORE revision. A weakness or risk counts only if it is still
+  present in the final text — check "Changes after critique" and quote the final text when you rely on a risk.
+- Do not introduce new numbers, facts, names or sources that appear neither in the proposals nor in the fact-check.
+  If you must add one, mark it in final_answer as "(добавлено председателем)".
+- If hard requirements R1, R2, … are listed, final_answer must satisfy every one of them — check them one by one.
+- If agreement is low, say in "why" that the council was divided and what the main split is.
+- "why": why this option won.
+- "dissent": notable minority opinions or strong alternatives worth knowing.
+- "risks": main risks and how to mitigate them.
+
+JSON format:
+{{"winner": "A", "final_answer": "...", "why": "...", "dissent": ["..."], "risks": ["..."], "deviation": ""{', "ideas": [{"id": "I1", "decision": "included", "reason": "..."}]' if ideas else ""}}}"""
+
+
+def _ideas_block(ideas: str) -> str:
+    """Идеи, которые критики советовали сохранить: председатель решает по каждой."""
+    if not ideas:
+        return ""
+    return f"""
+Ideas worth keeping from the other proposals (critics flagged them; they refer to versions BEFORE revision):
+{ideas}
+
+This is research, not only a vote: valuable findings of proposals that did not win must not be lost silently.
+Decide on EVERY idea above, in "ideas" (one entry per id):
+- "included": the idea is used in final_answer — integrate it where it belongs (not as a separate appended list);
+  "reason": where and how it was used. If the winner already contains it, say so.
+- "rejected": not used; "reason": the specific reason (contradicts the chosen approach, refuted by the fact-check,
+  out of scope, violates a requirement, not supported…). "Not important" without an argument is not a reason.
+"""
+
+
+FACTCHECK_SYSTEM = """You are an independent fact-checker for an expert council of AI models. Use web search.
+Check factual claims only (numbers, dates, names, laws, prices, technical facts, studies) — not opinions or recommendations.
+Be strict: "confirmed" only if reliable sources support the claim; "refuted" if reliable sources contradict it;
+otherwise "unclear". Write human-readable text in {language}. Reply with ONE valid JSON object only."""
+
+
+def factcheck(question: str, label: str, p: Proposal, max_claims: int) -> str:
+    return f"""Question the council is answering:
+{question}
+
+Proposal {label} (one of the leading options after voting):
+{_proposal_block(label, p)}
+
+Pick up to {max_claims} key factual claims in this proposal that matter most for the decision and are checkable
+in public sources. Verify each with web search. Claims based only on the user's private documents cannot be
+checked publicly — mark them "user_doc" (taken from the user's own data, not checkable by search).
+
+JSON format:
+{{"claims": [{{"claim": "the claim, short", "status": "confirmed|refuted|unclear|user_doc",
+              "note": "what the sources say, one or two sentences", "sources": ["https://..."]}}],
+  "summary": "one sentence: how reliable the factual basis of this proposal is"}}"""
+
+
+def factcheck_block(results: dict[str, dict]) -> str:
+    """Итоги проверки фактов для председателя."""
+    if not results:
+        return ""
+    lines = []
+    for label, r in results.items():
+        lines.append(f"Proposal {label}: {r.get('summary', '')}")
+        for c in r.get("claims", []):
+            lines.append(f"  - [{c.get('status')}] {c.get('claim')} — {c.get('note', '')}")
+            urls = [u for u in (c.get("sources") or []) if isinstance(u, str) and u.startswith("http")][:3]
+            if urls:  # источники доходят до председателя: в итоге можно сослаться на найденное
+                lines.append("    sources: " + " ; ".join(urls))
+    return "\n".join(lines)
+
+
+def history_block(history: list[dict]) -> str:
+    """Контекст уточняющего вопроса: что совет уже обсуждал и решил (от старых к новым)."""
+    if not history:
+        return ""
+    parts = ["This is a FOLLOW-UP question. Earlier the council already discussed this topic "
+             "(oldest first). Build on these conclusions; revise them if the new question requires it:"]
+    for i, h in enumerate(history, 1):
+        ev = f"\n{h['evidence']}" if h.get("evidence") else ""  # исследование: факты с источниками и пробелы
+        parts.append(f"\n--- Earlier session {i} ---\nQuestion: {h.get('question', '')}\n"
+                     f"Council decision: {h.get('answer', '')}{ev}\n--- End of session {i} ---")
+    return "\n".join(parts)
+
+
+def describe_images(question: str, names: list[str]) -> str:
+    listed = "\n".join(f"- {n}" for n in names)
+    return f"""The user attached images to a question for the council. Some council members cannot see images,
+so they will rely ONLY on your description. Describe every image exhaustively and objectively:
+transcribe all visible text verbatim, all numbers, table contents (as rows), chart axes and values,
+diagram elements and their connections, important visual details. Do not answer the question itself.
+
+User question (for context): {question}
+
+Images, in the order they are attached:
+{listed}
+
+JSON format:
+{{"images": [{{"name": "exact image name", "description": "detailed description"}}]}}"""
+
+
+def continue_answer() -> str:
+    return ("Your reply was cut off by the length limit. Continue EXACTLY from the last character you wrote: "
+            "do not repeat anything, do not restart the JSON and do not add any comments — just the rest of the text, "
+            "so that the previous part plus this continuation form one valid JSON object.")
+
+
+def shorter_answer() -> str:
+    return ("Your previous reply was too long and was cut off several times. Write the answer again as ONE valid "
+            "JSON object, more compact: keep every required section and the key content, but shorten wording, "
+            "examples and repetition.")
+
+
+def fix_json(error: str) -> str:
+    return f"""Your previous reply could not be accepted: {error}
+Reply again with ONE valid JSON object in the required format, and nothing else."""
+
+
+==================== council/research.py — режим «Исследование» (только запросы и проверки ответа)
+
+def fill_lenses(lenses: list[str], authors: int) -> list[str]:
+    """Углов зрения не меньше, чем авторов: если председатель придумал меньше, добавляем стандартные."""
+    out = [l for l in lenses if l.strip()]
+    for key, text in DEFAULT_LENSES:
+        if len(out) >= authors:
+            break
+        if not any(key in l.lower() for l in out):
+            out.append(text)
+    for _, text in DEFAULT_LENSES:  # всё равно меньше авторов — повторяем стандартные
+        if len(out) >= authors:
+            break
+        if text not in out:
+            out.append(text)
+    return out
+
+
+def research_head(question: str, original: str | None, req: list[str] | None, scope: str, as_of: str,
+                  subquestions: list[str]) -> str:
+    """Общее начало всех запросов исследования: одинаковое у всех — его кэширует провайдер."""
+    return (head(question, original, req)
+            + f"\nResearch scope{f' (as of {as_of})' if as_of else ''}: {scope or 'as stated in the question'}\n"
+            + f"Subquestions the research must cover:\n{subq_block(subquestions)}\n")
+
+
+def framing(question: str, context: str | None, members: int) -> str:
+    lenses = max(2, members)
+    return f"""Before the council starts, prepare a RESEARCH task (not a choice between options).
+
+User question:
+{question}
+{_context(context)}
+1. Restate the research question precisely and neutrally (keep the user's intent; do not answer it).
+2. Define 3-5 short evaluation criteria (1-4 words each). For research the defaults are: coverage completeness,
+   quality of evidence, calibration of uncertainty, practical value — adapt them to the question if needed.
+3. List the HARD REQUIREMENTS the user stated explicitly (structure, sections, length, language, constraints),
+   faithfully, one per item, without inventing new ones (at most 10; an empty list if none).
+4. "as_of": the date or period the facts must be current for (e.g. "2026-11" or "2023-2025").
+   "scope": geography, period, units, definitions and what is out of scope, in one or two sentences.
+5. "subquestions": 3-5 subquestions that together cover the research question (a checklist, not separate tasks).
+6. "lenses": {lenses} different angles for independent authors, adapted to this topic, e.g. first-hand data and
+   market facts; technology and constraints; economics and calculations; methodology skeptic / pre-mortem.
+
+JSON format:
+{{"refined_question": "...", "criteria": ["..."], "requirements": ["..."], "as_of": "...", "scope": "...",
+  "subquestions": ["...", "..."], "lenses": ["...", "..."]}}"""
+
+
+def _claims_rule(max_claims: int) -> str:
+    return f"""Epistemic discipline:
+- Tag facts from attached files as [DOC: file, place]. Tag your own estimates or calculations as [CALC] and show
+  inputs and formula. Tag facts, numbers or dates recalled from training as [MEM].
+- A URL recalled from memory is only a lead for later search ("source_leads"), never a verification. NEVER invent
+  URLs, quotations, dates or numbers: an honest [MEM] is better than a confident guess.
+- State period, geography and units for every number. Separate facts, estimates and recommendations.
+- If a subquestion cannot be answered, say so in "unknowns" instead of filling the gap. For every major conclusion
+  state what evidence would change it.
+List up to {max_claims} decision-critical, checkable atomic claims in "claims": POSITIVE statements that public
+sources (registries of FDA/EMA/PMDA, official sites, publications) can confirm or refute — not absence claims like
+"X is not registered anywhere". Mark fast-changing ones (prices, market shares, regulation, versions) as "changes_fast"."""
+
+
+CLAIM_JSON = ('{"text": "one atomic checkable statement", "basis": "user_doc|calc|memory|search_reported", '
+              '"scope": "period, geography, units", "volatility": "stable|changes_fast|unknown", '
+              '"source_leads": ["..."], "why_it_matters": "..."}')
+
+
+def proposal(rhead: str, criteria: list[str], context: str | None, lens: str, max_words: int, max_claims: int,
+             web: bool = False) -> str:
+    access = ("Web search IS enabled for you in this step: use it for fresh numbers and primary sources, and tag "
+              "what you found as [SRC: url]; put such claims in \"claims\" with basis \"search_reported\"."
+              if web else "You have no web access in this step.")
+    lens_txt = f"\nDevote at least 40% of your analytical depth to your assigned lens (a starting emphasis, not a limit):\n>>> {lens} <<<\n" if lens else ""
+    return f"""{rhead}{_context(context)}
+Evaluation criteria:
+{_criteria(criteria)}
+
+Work independently; you have not seen other answers. {access}
+Cover ALL subquestions in about {max_words} words at most: dense substance, no generic introductions.{lens_txt}
+{_claims_rule(max_claims)}
+{FORMAT_RULE} The "summary" field holds the research answer itself.
+
+JSON format:
+{{"title": "short descriptive angle",
+ "summary": "structured Markdown covering Q1..Qk with inline tags [DOC: ...], [CALC], [MEM]",
+ "reasoning": "core logic and assumptions",
+ "claims": [{CLAIM_JSON}],
+ "pros": ["..."], "risks": ["..."],
+ "coverage": [{{"subquestion_id": "Q1", "status": "covered|partial|unknown", "note": "..."}}],
+ "unknowns": ["what is not known and why it matters"],
+ "what_would_change": ["evidence that would change the main conclusions"],
+ "confidence": 0.0-1.0}}"""
+
+
+def critique(rhead: str, criteria: list[str], proposals: dict[str, Proposal], req: list[str] | None) -> str:
+    labels = ", ".join(proposals)
+    example_scores = ", ".join(f'"{c}": 1-10' for c in criteria)
+    blocks = "\n\n".join(proposal_block(l, p) for l, p in proposals.items())
+    return f"""{rhead}
+Review each of these anonymous research proposals:
+
+{blocks}
+
+Score every proposal on every criterion from 1 to 10:
+{_criteria(criteria)}
+
+{SCALE}
+For research, a confident [MEM] number presented as fact, an invented-looking source or an uncovered subquestion is a
+weakness; an honest "unknown" is not.
+{REQ_CHECK if req else ""}
+You must review exactly these labels: {labels}. Use the criteria names exactly as written.
+{KEEP_RULE}
+"disputed_claims": 0-4 claims per proposal that most need checking: contradictions between proposals, central [MEM]
+numbers, doubtful sources. Use the claim ids shown above (e.g. "B-C2") and give the reason.
+"missing_subquestions": subquestions or important aspects this proposal did not cover (ids like "Q2" or text).
+
+JSON format:
+{{"reviews": [
+  {{"label": "A", "scores": {{{example_scores}}},
+    "strengths": ["..."], "weaknesses": ["..."], "keep": ["..."],
+    "disputed_claims": [{{"claim_id": "A-C1", "reason": "..."}}], "missing_subquestions": ["Q3"]}}
+]}}"""
+
+
+ARBITRATION_SYSTEM = """You are an independent evidence investigator for an expert research council of AI models.
+Web search is enabled for this request by the calling program; use it. If you cannot actually search, mark every
+item "search_unavailable" — never pretend to have searched. Write human-readable text in {language}.
+Reply with ONE valid JSON object only."""
+
+
+def arbitration(question: str, as_of: str, scope: str, mission: str, claims_batch: str, max_evidence: int) -> str:
+    return f"""Question (as of {as_of or 'today'}): {question}
+Required scope: {scope or 'as stated in the question'}
+Assigned mission: {mission}
+
+Claims selected from anonymous proposals (contradictions, key numbers, fast-changing or memory-only claims). IDs are
+fixed — use them exactly:
+{claims_batch}
+
+Investigate EVERY claim. Look for evidence both for and against. Prefer primary sources for numbers, dates, laws and
+technical facts; check dates, geography, units and definitions. Where estimates differ, find the reason. Two articles
+restating one underlying report count as ONE source (mark the later one "secondary"). Record only sources your search
+actually returned; never invent a URL, date or quotation. If you saw only a snippet or a search summary, say so in
+"material_seen". A related page is not a confirmation. Absence of a found source is not a refutation.
+Statuses: confirmed (a source directly supports EVERY part of the claim in its stated scope — each number, date,
+age, dose, name and owner; if only some parts are supported, use unclear and list in "notes" which parts are
+confirmed and which are not); refuted (a reliable source directly
+contradicts it); contested_in_sources (reputable sources conflict; report both); unclear (no reliable evidence found);
+user_doc (checkable only from the user's own documents); search_unavailable.
+Return at most {max_evidence} sources in total.
+
+JSON format:
+{{"checked_claims": [{{"claim_id": "A-C1", "status": "confirmed|refuted|contested_in_sources|unclear|user_doc|search_unavailable",
+   "note": "what the sources state, with exact figures, scope and caveats",
+   "sources": [{{"url": "https://...", "title": "...", "publisher": "...", "date": "YYYY-MM-DD or empty",
+                "source_type": "primary|secondary|unknown", "material_seen": "page|snippet|search_answer",
+                "relation": "supports|contradicts|context"}}]}}],
+ "gaps": [{{"question": "...", "searched_for": "...", "why_unresolved": "..."}}]}}"""
+
+
+def digest(label: str, p: Proposal) -> str:
+    """Выжимка чужого варианта для доработки: тезисы и утверждения, без полного текста."""
+    lines = [f"### Proposal {label}: {p.title}"]
+    claims = getattr(p, "claims", None) or []
+    if claims:
+        lines += [f"- {c.id} [{c.basis}] {c.text}" for c in claims]
+    if p.pros:
+        lines.append("Strengths claimed by the author: " + "; ".join(p.pros[:5]))
+    unknowns = getattr(p, "unknowns", None) or []
+    if unknowns:
+        lines.append("Unknowns: " + "; ".join(unknowns[:5]))
+    return "\n".join(lines)
+
+
+def revision(rhead: str, criteria: list[str], own_label: str, own: Proposal, feedback: list[dict],
+             others: dict[str, Proposal], ledger: str, lens: str, max_words: int, max_claims: int,
+             full_others: bool) -> str:
+    fb = json.dumps(feedback, ensure_ascii=False, indent=1) if feedback else "(no feedback received)"
+    if full_others:
+        others_txt = "Other proposals, in full (anonymous):\n\n" + "\n\n".join(proposal_block(l, p) for l, p in others.items())
+    else:
+        others_txt = ("Other proposals, as digests (claims and strengths only — keep your own line of reasoning):\n\n"
+                      + "\n\n".join(digest(l, p) for l, p in others.items()))
+    lens_txt = f"\nYour lens remains: {lens}\n" if lens else ""
+    return f"""{rhead}
+Criteria:
+{_criteria(criteria)}
+
+Your current research proposal (label {own_label}):
+{proposal_block(own_label, own)}
+
+Anonymous feedback other members gave on your proposal:
+{fb}
+
+Evidence ledger built by an independent web search after the critique (statuses come ONLY from sources):
+{ledger or "(no evidence ledger: search was not run)"}
+
+{others_txt}
+{lens_txt}
+Do this in order:
+1. Fix every claim of yours the ledger marks refuted; use confirmed evidence and cite it as [E1], [E2]…
+2. Address the real weaknesses and missing subquestions named by critics; deepen your lens.
+3. Change your core approach only for a specific evidence id or argument — name it. Agreement of others is not a
+   reason by itself. List criticism you do not accept in "not_accepted".
+4. Any claim you ADD or CHANGE that is not covered by the ledger goes to "new_after_ledger" (by its text).
+About {max_words} words at most. {_claims_rule(max_claims)}
+
+JSON format:
+{{"title": "...", "summary": "the full revised research answer with [E#]/[DOC]/[CALC]/[MEM] tags",
+ "reasoning": "...", "claims": [{CLAIM_JSON}], "pros": ["..."], "risks": ["..."],
+ "coverage": [{{"subquestion_id": "Q1", "status": "covered|partial|unknown", "note": "..."}}],
+ "unknowns": ["..."], "what_would_change": ["..."], "confidence": 0.0-1.0,
+ "comparison": "where other proposals are stronger and where yours is", "borrowed": ["idea (label)"],
+ "not_accepted": ["critique not accepted and why"], "position": "kept | improved | switched",
+ "changes": "what you changed and why", "new_after_ledger": ["claim text"]}}"""
+
+
+def vote(rhead: str, criteria: list[str], proposals: dict[str, Proposal], subq: list[str], req: list[str] | None,
+         section_vote: bool) -> str:
+    labels = ", ".join(proposals)
+    blocks = "\n\n".join(proposal_block(l, p) for l, p in proposals.items())
+    qids = ", ".join(f"Q{i}" for i in range(1, len(subq) + 1))
+    sec = (f'\nAlso pick, for each subquestion ({qids}), which proposal covers it best with evidence — this chooses the '
+           'backbone of that section of the final report, not the truth of facts: "best_by_subquestion".') if section_vote else ""
+    sec_json = ', "best_by_subquestion": {"Q1": "B", "Q2": "A"}' if section_vote else ""
+    return f"""{rhead}
+Criteria:
+{_criteria(criteria)}
+
+Final research proposals (anonymous):
+
+{blocks}
+
+Rank ALL of these proposals from best to worst as research: coverage, quality of evidence, honest uncertainty,
+practical value — not length or style. Include every label exactly once: {labels}.{REQ_VOTE if req else ""}{sec}
+
+JSON format:
+{{"ranking": ["best label", "...", "worst label"], "rationale": "why the top choice wins"{sec_json}}}"""
+
+
+def verdict(rhead: str, criteria: list[str], proposals_txt: str, ledger: str, section_tally: str, overall_tally: str,
+            critique_notes: str, ideas: str, leader: str, labels: list[str], agreement: str, ballot_notes: str,
+            req: list[str] | None, co_leaders: list[str] | None, subq: list[str]) -> str:
+    qids = ", ".join(f"Q{i}" for i in range(1, len(subq) + 1))
+    tie = (f"\nTie for first place overall: {', '.join(co_leaders)} — you may name any of them as \"winner\".\n"
+           if co_leaders and len(co_leaders) > 1 else "")
+    return f"""{rhead}
+Criteria:
+{_criteria(criteria)}
+
+Final proposals (after revision; "Changes after critique" shows what each author fixed):
+{proposals_txt}
+
+Evidence ledger (global ids E1..En with URLs; a claim's status comes ONLY from evidence, never from how many members agree):
+{ledger or "(no ledger: evidence search was not run — then nothing can be 'known' except user-document data)"}
+
+Voting — best backbone per subquestion (preference for a backbone text only, NOT evidence of truth):
+{section_tally or "(no section vote)"}
+Overall ranking (diagnostic): {overall_tally or "(no vote)"}
+{f"Council agreement on the ranking: {agreement}" if agreement else ""}
+{f"Ballot check: {ballot_notes}" if ballot_notes else ""}{tie}
+Critique gaps (they refer to versions BEFORE revision):
+{critique_notes or "(none)"}
+{_ideas_block(ideas)}
+Write a RESEARCH SYNTHESIS, not a defence of one winner.
+- Build "final_answer" over {qids} using each subquestion's backbone leader; integrate verified findings and kept ideas
+  of all proposals. "winner": the overall backbone label ({', '.join(labels)}); the overall voting leader is {leader or "—"}.
+  If you choose another winner or override a section leader, fill "deviation" as "<fact|risk|process>: reason".
+- "known": ONLY claims with status confirmed in the ledger (cite the E-ids) or direct user-document data (evidence id
+  "DOC"; it is user data, not independent verification). Model agreement and [MEM] claims NEVER qualify as known.
+  Claims added after the ledger (new_after_ledger) cannot be known.
+- "contested": conflicting sources or genuine methodological splits; give both positions, E-ids, why they differ
+  (definitions, dates, methods, sources, values) and what would resolve it.
+- "unknown": memory-only claims, unresolved gaps, data not found; a subquestion without an answer goes here with the reason.
+- "coverage_audit": one entry per subquestion ({qids}) — covered, partial or unknown, and where in the answer.
+- Never repeat refuted claims as true. Do not introduce facts, numbers or sources absent from the proposals, documents
+  and ledger; if essential, mark "(добавлено председателем)".
+- For recommendations state assumptions, risks and what would change them. End with the highest-value next research
+  steps in "next_questions". Keep the report concise (about 6-12 pages); do not reproduce the transcript.
+- If hard requirements R1, R2, … are listed, "final_answer" must satisfy every one of them. {FORMAT_RULE}
+- Decide on EVERY idea worth keeping listed above, in "ideas".
+
+JSON format:
+{{"winner": "{labels[0] if labels else 'A'}", "section_backbone": {{"Q1": "B"}},
+ "final_answer": "concise structured Markdown with [E1]/[DOC]/[CALC]/[MEM] tags and a Sources list with URLs",
+ "why": "how the synthesis was built", "known": [{{"statement": "...", "evidence_ids": ["E1"], "scope": "...", "volatility": "stable|changes_fast|unknown"}}],
+ "contested": [{{"issue": "...", "positions": ["..."], "evidence_ids": ["E2"], "why_they_differ": "...", "what_would_resolve": "..."}}],
+ "unknown": [{{"gap": "...", "reason": "unverified_memory|no_public_data|not_checked", "how_to_check": "..."}}],
+ "coverage_audit": [{{"subquestion_id": "Q1", "status": "covered|partial|unknown", "note": "where"}}],
+ "what_would_change": ["..."], "next_questions": ["..."], "dissent": ["..."], "risks": ["..."], "deviation": "",
+ "ideas": [{{"id": "I1", "decision": "included|rejected", "reason": "..."}}]}}"""
+
+
+def check_length(p: Proposal, max_words: int, factor: float) -> Proposal:
+    """Вариант намного длиннее заданного — вернуть автору на сокращение (ошибка уходит модели)."""
+    n = len(str(p.summary or "").split())
+    if n > max_words * factor:
+        raise ValueError(f'"summary" is {n} words, but the limit is about {max_words} words. Rewrite it to about '
+                         f"{max_words} words: keep every claim, number, source and recommendation, drop repetition, "
+                         "generic text and long tables; reply with the full JSON again")
+    return p
+
+
+def check_verdict(v: ResearchVerdict, *, ledger: dict[str, Any] | None, n_subq: int, strict: bool) -> ResearchVerdict:
+    """«Известно» — только с опорой на подтверждённые источники реестра или документы пользователя.
+    Ошибка — ответ возвращается председателю; на последней попытке неподкреплённое переносится в «неизвестно»."""
+    ok_ids = confirmed_ids(ledger)
+    all_ids = {e["id"] for e in (ledger or {}).get("evidence", [])}
+    bad, known = [], []
+    unknown = list(v.unknown)
+    for k in v.known:
+        ids = [i for i in k.evidence_ids if i]
+        if "DOC" in ids or (ids and all(i in ok_ids for i in ids)):
+            known.append(k)
+        else:
+            bad.append(k)
+    contested = [c.model_copy(update={"evidence_ids": [i for i in c.evidence_ids if i in all_ids]}) for c in v.contested]
+    have = {c.subquestion_id for c in v.coverage_audit}
+    missing = [f"Q{i}" for i in range(1, n_subq + 1) if f"Q{i}" not in have]
+    if strict and (bad or missing):
+        parts = []
+        if bad:
+            parts.append('"known" may contain ONLY claims backed by CONFIRMED ledger evidence ids or user documents '
+                         '("DOC"); move these to "contested" or "unknown": '
+                         + "; ".join(f'"{k.statement[:80]}" (ids: {", ".join(k.evidence_ids) or "none"})' for k in bad[:5]))
+        if missing:
+            parts.append(f'"coverage_audit" must have one entry per subquestion; missing: {", ".join(missing)}')
+        raise ValueError(" ".join(parts))
+    unknown += [UnknownItem(gap=k.statement, reason="not_checked",
+                            how_to_check="нет подтверждения в реестре источников") for k in bad]
+    audit = list(v.coverage_audit) + [CoverageItem(subquestion_id=q, status="unknown", note="председатель не указал")
+                                      for q in missing]
+    return v.model_copy(update={"known": known, "unknown": unknown, "contested": contested, "coverage_audit": audit})
+
+==================== council/advisor.py — «Подобрать состав» (только запросы)
+
+MODE_ROLES = {
+    "debate": ("Подробное обсуждение: каждый пишет полный вариант, критикует чужие, дорабатывает свой, голосует; "
+               "председатель ставит задачу и пишет итог. Ценно разнообразие подходов (разные разработчики) и "
+               "сильные рассуждения у всех; председателю нужен большой предел ответа и точное следование формату."),
+    "quick": ("Быстрый ответ: варианты и голосование, без критики и доработки. Подходят быстрые недорогие модели; "
+              "председатель — надёжная модель с хорошим следованием инструкциям."),
+    "evaluate": ("Выбор из вариантов пользователя: модели только критикуют и голосуют. Важны внимательность, "
+                 "калибровка оценок, рассуждения; длинный ответ не нужен (кроме председателя)."),
+    "research": ("Исследование: подвопросы и углы зрения, варианты с проверяемыми утверждениями, арбитраж утверждений "
+                 "поиском (отдельная модель с поиском), доработка, синтез «известно / спорно / неизвестно». Авторам "
+                 "нужны длинный контекст, аккуратность с фактами и соблюдение длины; председателю — очень большой "
+                 "предел ответа (длинный синтез с таблицами), рассуждения и строгий JSON. Модели, склонные сильно "
+                 "превышать длину или обрывать JSON, хуже подходят."),
+}
+
+
+def dossier_prompt(ids: list[str], today: str) -> str:
+    listed = "\n".join(f"- {i}" for i in ids)
+    return f"""Today is {today}. Search the web for CURRENT information about each of these AI models (OpenRouter ids):
+{listed}
+
+Use official model cards and release notes, independent benchmark leaderboards and evaluations, and credible reviews.
+For each model report, briefly and concretely:
+- strengths: what it is notably good at (deep reasoning, long-form analysis and research, writing, coding, math,
+  following complex instructions and strict JSON, long context use, multilingual / Russian quality, speed, price);
+- weaknesses and known_issues: e.g. truncated or overlong answers, ignoring length limits, broken JSON, hallucinated
+  sources, refusals, slow or unstable providers;
+- best_for: which roles in a multi-model "AI council" it suits (chair who writes a long final synthesis, participant
+  writing a full proposal, devil's advocate, fast cheap participant, critic/judge) and for which modes (debate,
+  quick answer, research with evidence, judging user options);
+- benchmarks: only figures you found in a source, with the benchmark name.
+If you found little about a model, say so in weaknesses ("little independent information") — do not guess.
+Put the URLs you actually used into "sources".
+
+JSON format:
+{{"models": [{{"id": "provider/model", "strengths": ["..."], "weaknesses": ["..."], "known_issues": ["..."],
+  "best_for": ["..."], "benchmarks": ["..."], "sources": ["https://..."]}}]}}"""
+
+
+def advise_prompt(*, question: str, mode: str, attachments: list[dict[str, Any]], followup: bool, budget: float,
+                  current: dict[str, Any], cands: list[dict[str, Any]], history: dict[str, dict[str, Any]],
+                  dossiers: dict[str, dict[str, Any]], language: str, research_words: int, search_model: str,
+                  research_now: dict[str, Any] | None = None) -> str:
+    rows = []
+    for c in cands:
+        r = {k: v for k, v in c.items() if k != "description"}
+        r["developer_says"] = c.get("description", "")[:300]
+        h = history.get(c["id"])
+        if h:
+            r["your_history"] = h
+        d = dossiers.get(c["id"])
+        if d:
+            r["reviews"] = {k: d.get(k) for k in ("strengths", "weaknesses", "known_issues", "best_for", "benchmarks")
+                            if d.get(k)}
+        rows.append(r)
+    modes = "\n".join(f"- {k}: {v}" for k, v in MODE_ROLES.items())
+    atts = "; ".join(f"{a.get('name', '')} ({a.get('kind', '')}, ~{a.get('chars', 0)} chars)" for a in attachments) or "none"
+    q = question if len(question) <= 7000 else question[:7000] + " …[truncated]"
+    return f"""You advise a user of an "AI council" app: several AI models answer one question, critique each other and vote;
+a chair frames the task and writes the final answer. Recommend the best lineup and mode for THIS question.
+
+User's question:
+<<<
+{q}
+>>>
+Attachments: {atts}. Follow-up to an earlier session: {"yes" if followup else "no"}. Budget limit: ${budget:g}.
+Mode chosen by the user now: {mode}. Current lineup: {json.dumps(current, ensure_ascii=False)}.
+
+Council modes and what each role needs:
+{modes}
+Research mode details: proposal length target {research_words} words; claims are checked by a separate search model
+({search_model}) in the arbitration step, so web search for authors is optional (useful for fresh numbers).
+
+Research settings you can tune for THIS question (current values: {json.dumps(research_now or {}, ensure_ascii=False)}):
+- arbitration_claims (3-20): how many key claims of all proposals the search model checks. More = more confirmed facts
+  in "known", cost about $0.02-0.05 per 5 claims. Raise for questions with many entities, numbers, dates, regulations.
+- missions (1-2): 2 = one search to confirm and one to refute each batch (stricter), 1 = cheaper.
+- fresh_scouts (0-2): authors who search the web already while writing proposals — for current prices, markets,
+  regulations, recent releases; proposals may become more similar. 0 for timeless or reasoning-only questions.
+- max_words (300-5000): target proposal length. Proposals are material for the chair, who writes the full report;
+  raise to 2000-2500 only for catalogue-like tasks with big tables; lower (700-1000) for narrow questions.
+- shorten_long (true/false): send far-too-long proposals back once to be shortened (some models ignore length).
+- max_claims (3-15): claims per proposal.
+- lenses (true/false): a distinct angle for every author (market, technology, economics, sceptic) — off only when the
+  question has one narrow angle.
+- section_vote (true/false): vote for the best proposal per subquestion — useful for multi-part questions.
+- revision_digest (true/false): authors revise from digests of other proposals (cheaper) instead of full texts.
+Suggest ONLY settings that should differ from the current values for this question, each with a short reason.
+Mind the budget.
+
+Web search for participants: any participant can get web search in the proposal and revision steps (about $0.02 per
+request extra). Recommend it ("web_search": true) only where the question needs CURRENT facts (prices, markets, news,
+recent releases, regulations) — at most two participants, so the others stay independent. Models with built-in search
+(perplexity/…) are not good council participants: they suit fact-checking, which the app already does separately.
+
+Candidate models (choose ONLY from these ids). Fields: catalog facts (context, max_out = answer limit in tokens,
+reasoning, image, price per 1M tokens, light = lightweight version), developer_says, your_history (the user's own
+sessions: wins, average critic score, failures), reviews (web research about the model, may be partial):
+{json.dumps(rows, ensure_ascii=False)}
+
+Rules:
+1. First analyse the task: type, expected size of the work and of the final answer, special needs.
+2. Pick the mode that fits (the user can keep theirs) and explain why in one sentence.
+3. Pick 4-6 models: exactly one "chair", optionally one "devil" (devil's advocate), the rest "member". Prefer
+   different developers for diversity of views; prefer the stronger sibling (e.g. pro instead of flash) when the task
+   is large or needs deep reasoning; prefer cheap and fast ones only for simple or quick tasks. Respect the budget.
+   The chair must have a large answer limit (max_out) and strong reasoning; check context against attachments.
+4. For EVERY pick and avoid give a concrete reason tied to this question and mode, and list its basis:
+   "catalog" (facts above), "history" (user's sessions), "reviews" (the reviews field), "knowledge" (your own general
+   knowledge — use it only when the data above says nothing, it may be outdated). Do not invent benchmark numbers.
+5. "avoid": models from the current lineup or the candidates that fit this task worse, with the reason.
+6. If the mode is research, put tuned settings into "research_settings" and a reason per setting into
+   "research_why" (same keys). Leave both empty for other modes or when the current values fit.
+7. "caveats": what you are unsure about (little data on a model, no history yet, etc.).
+Write all texts in {language}. Reply with ONE JSON object:
+{{"task": {{"kind": "...", "summary": "...", "size": "small|medium|large", "needs": ["..."]}},
+ "mode": "debate|quick|evaluate|research", "mode_why": "...",
+ "picks": [{{"model": "provider/model", "role": "chair|member|devil", "web_search": false, "why": "...",
+            "basis": ["catalog", "history"]}}],
+ "avoid": [{{"model": "provider/model", "why": "...", "basis": ["reviews"]}}],
+ "research_settings": {{"arbitration_claims": 20}}, "research_why": {{"arbitration_claims": "..."}},
+ "caveats": ["..."]}}"""
