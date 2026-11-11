@@ -346,6 +346,10 @@ def analyse(question: str, attachments: list[dict[str, Any]]) -> TaskAnalysis:
                                                                    else "нужен обоснованный ответ."))
 
 
+def _sentence(t: str) -> str:
+    return (t[:1].upper() + t[1:]).rstrip(".") + "."
+
+
 def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[str, Any]],
                 history: dict[str, dict[str, Any]], attachments: list[dict[str, Any]]) -> Advice:
     """Подбор по правилам — только факты каталога и ваша история (без ключа, в демо, при сбое советника)."""
@@ -381,18 +385,16 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
         used.add(prov)
         why = []
         if best["id"] != m.model and m.model in by_id:
-            why.append(f"вместо {m.model}: " + ("старшая модель — задача большая" if by_id[m.model]["light"] and not best["light"]
-                                                 else "лучше подходит по рассуждениям и пределу ответа"))
-        if best["reasoning"]:
-            why.append("рассуждает")
+            why.append(f"вместо {m.model.split('/')[-1]}: " + ("старшая модель — задача большая"
+                       if by_id[m.model]["light"] and not best["light"] else "лучше по рассуждениям и пределу ответа"))
         if best["light"] and (big or rec_mode == "research"):
             why.append("облегчённая — старшей модели у этого разработчика в каталоге нет")
-        if best["max_out"]:
-            why.append(f"ответ до {best['max_out'] // 1000} тыс. токенов")
+        if best["id"] == m.model:
+            why.append("модель из ваших настроек подходит для этой задачи")
         h = history.get(best["id"])
         if h and h.get("proposals"):
             why.append(f"в ваших заседаниях побеждал {h['wins']} из {h['proposals']}")
-        picks.append(Pick(model=best["id"], role="member", why="; ".join(why) or "лучшая по каталогу у этого разработчика",
+        picks.append(Pick(model=best["id"], role="member", why=_sentence("; ".join(why)) if why else "",
                           basis=["catalog"] + (["history"] if h else [])))
     if picks:
         cur = next((m.model for m in cfg.members if m.name == cfg.chair), "")
@@ -401,15 +403,17 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
             (by_id[mine.model]["max_out"] or 32000) >= 32000
         chair = mine if ok else max(picks, key=lambda p: (by_id[p.model]["reasoning"], by_id[p.model]["max_out"] or 0,
                                                           -by_id[p.model]["light"]))
-        lead = ("председатель, как в настройках: рассуждает, предел ответа достаточный; " if chair is mine
-                else "председатель: больше всех предел ответа, рассуждает; ")
-        picks = [p.model_copy(update={"role": "chair", "why": lead + p.why})
+        lead = ("Председатель, как в настройках: рассуждает, хватает предела ответа для итога. " if chair is mine
+                else "Председатель: самый большой предел ответа и рассуждает — нужно для длинного итога. ")
+        picks = [p.model_copy(update={"role": "chair", "why": (lead + p.why).strip()})
                  if p is chair else p for p in picks]
     if "свежие данные из интернета" in task.needs and rec_mode != "research":
         for p in picks:
             if p.role == "member":
                 picks = [x.model_copy(update={"web_search": True}) if x is p else x for x in picks]
                 break
+    picks = [p if p.why or p.role == "chair" else p.model_copy(update={"why": "Лучшая по каталогу у этого разработчика."})
+             for p in picks]
     caveats = ["Подбор по правилам: только каталог OpenRouter и ваша история, без анализа вопроса моделью и без обзоров."]
     missing = [m.name for m in cfg.members if m.enabled and not any(provider(c["id"]) == provider(m.model) for c in cands)]
     if missing:

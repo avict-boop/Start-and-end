@@ -2282,40 +2282,50 @@ async function runAdvice(refresh) {
 
 function renderAdvice(r) {
   const a = r.advice, t = a.task || {}, f = r.facts || {}, ds = r.dossiers || {};
-  const k = (n) => (n == null ? "—" : n >= 1000 ? `${Math.round(n / 1000)} тыс.` : String(n));
+  const k = (n) => (n == null ? "" : n >= 1000 ? `${Math.round(n / 1000)} тыс.` : String(n));
   const basis = (b) => (b || []).map((x) => `<span class="basis b-${esc(x)}" title="${esc(BASIS_HINT[x] || "")}">${esc(BASIS_TEXT[x] || x)}</span>`).join("");
-  const src = r.source === "advisor" ? `советник ${esc(r.advisor_model || "")}` : "по правилам (каталог и история)";
-  const modeLine = a.mode && a.mode !== mode
-    ? `<p class="adv-mode"><b>Режим: ${esc(MODE_NAME[a.mode] || a.mode)}</b> <span class="badge warn">сейчас: ${esc(MODE_NAME[mode] || mode)}</span><br><span class="muted">${esc(a.mode_why || "")}</span></p>`
-    : `<p class="adv-mode"><b>Режим: ${esc(MODE_NAME[a.mode || mode] || mode)}</b> <span class="muted">— ${esc(a.mode_why || "подходит")}</span></p>`;
+  const src = r.source === "advisor" ? `советник: ${esc((r.advisor_model || "").split("/").pop())}` : "подбор по правилам";
+  const cost = [src, r.cost ? `$${r.cost.toFixed(3)}` : "", r.dossiers_built ? `обзоров собрано ${r.dossiers_built}` : "",
+    r.dossiers_cached ? `из памяти ${r.dossiers_cached}` : ""].filter(Boolean).join(" · ");
+  const newMode = a.mode && a.mode !== mode;
   const picks = (a.picks || []).map((p) => {
     const [cls, role] = ROLE_BADGE[p.role] || ROLE_BADGE.member;
-    const x = f[p.model] || {};
-    const d = ds[p.model];
-    const meta = [x.reasoning ? "рассуждает" : "", x.context ? `контекст ${k(x.context)}` : "", x.max_out ? `ответ до ${k(x.max_out)}` : "",
-      x.price_out ? `$${x.price_in} / $${x.price_out} за 1M` : ""].filter(Boolean).join(" · ");
-    const rev = d && ((d.known_issues || []).length || (d.strengths || []).length) ? `<details class="adv-rev"><summary>Что пишут о модели</summary>
-      ${(d.strengths || []).length ? `<p><b>Сильные стороны:</b> ${d.strengths.map(esc).join("; ")}</p>` : ""}
-      ${(d.weaknesses || []).concat(d.known_issues || []).length ? `<p><b>Слабые стороны и проблемы:</b> ${(d.weaknesses || []).concat(d.known_issues || []).map(esc).join("; ")}</p>` : ""}
-      ${(d.sources || []).length ? `<p class="small">${d.sources.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\/(www\.)?/, "").slice(0, 48))}</a>`).join(" · ")}</p>` : '<p class="muted small">без ссылок от поиска — проверьте сами</p>'}</details>` : "";
-    return `<li><div class="adv-head"><span class="badge ${cls}">${role}</span> <b>${esc(p.model)}</b>${p.web_search ? ' <span class="badge plain">🌐 с поиском</span>' : ""}
-      <button type="button" class="link small" data-card="${esc(p.model)}">О модели…</button></div>
-      <div class="muted small">${esc(meta)}</div><p>${esc(p.why)}</p><div class="adv-basis">${basis(p.basis)}</div>${rev}</li>`;
+    const x = f[p.model] || {}, d = ds[p.model];
+    const [prov, ...rest] = p.model.split("/");
+    const meta = [x.reasoning ? "рассуждает" : "без рассуждений", x.context ? `контекст ${k(x.context)}` : "",
+      x.max_out ? `ответ до ${k(x.max_out)}` : "", x.price_out ? `$${x.price_in} / $${x.price_out} за 1M` : ""].filter(Boolean).join(" · ");
+    const issues = d ? (d.weaknesses || []).concat(d.known_issues || []) : [];
+    const rev = d && ((d.strengths || []).length || issues.length) ? `<details class="adv-rev"><summary>Что пишут о модели</summary>
+      ${(d.strengths || []).length ? `<p><b>Сильные стороны.</b> ${d.strengths.map(esc).join("; ")}</p>` : ""}
+      ${issues.length ? `<p><b>Слабые стороны.</b> ${issues.map(esc).join("; ")}</p>` : ""}
+      ${(d.sources || []).length ? `<p class="small">${d.sources.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\/(www\.)?/, "").split("/")[0])}</a>`).join(" · ")}</p>` : '<p class="muted small">ссылок от поиска нет — проверьте сами</p>'}</details>` : "";
+    return `<li class="adv-pick r-${esc(p.role)}">
+      <div class="adv-role"><span class="role-tag ${cls}">${role}</span>${p.web_search ? '<span class="role-tag web" title="ищет в интернете при написании варианта">🌐 поиск</span>' : ""}</div>
+      <div class="adv-main">
+        <div class="adv-name"><b>${esc(rest.join("/") || p.model)}</b> <span class="muted small">${esc(prov)}</span>
+          <button type="button" class="link small adv-card" data-card="${esc(p.model)}">О модели</button></div>
+        <div class="adv-meta">${esc(meta)}</div>
+        <p class="adv-why">${esc(p.why)} ${basis(p.basis)}</p>${rev}
+      </div></li>`;
   }).join("");
   const avoid = (a.avoid || []).length ? `<h4>Хуже подходят для этого вопроса</h4><ul class="adv-avoid">${a.avoid.map((x) =>
-    `<li><b>${esc(x.model)}</b> — ${esc(x.why)} ${basis(x.basis)}</li>`).join("")}</ul>` : "";
+    `<li><b>${esc(x.model.split("/").pop())}</b> — ${esc(x.why)} ${basis(x.basis)}</li>`).join("")}</ul>` : "";
   $("adviceBox").innerHTML = `
-    <div class="adv-top"><h3>Рекомендация</h3><span class="muted small">${src}${r.cost ? ` · $${r.cost.toFixed(3)}` : ""}${r.dossiers_built ? ` · обзоров собрано: ${r.dossiers_built}` : ""}${r.dossiers_cached ? `, из памяти: ${r.dossiers_cached}` : ""}</span></div>
-    <p class="adv-task"><b>${esc(t.kind || "Задача")}</b>${t.size ? ` · ${esc(SIZE_TEXT[t.size] || t.size)}` : ""}${(t.needs || []).map((n) => ` <span class="badge plain">${esc(n)}</span>`).join("")}<br><span class="muted">${esc(t.summary || "")}</span></p>
-    ${modeLine}
-    ${a.research_words ? `<p class="muted small">Длина варианта исследования: советую ${a.research_words} слов.</p>` : ""}
+    <div class="adv-top"><h3>✨ Рекомендация</h3><span class="muted small">${cost}</span></div>
+    <dl class="adv-sum">
+      <dt>Задача</dt><dd><b>${esc(t.kind || "—")}</b>${t.size ? ` · ${esc(SIZE_TEXT[t.size] || t.size)}` : ""}${(t.needs || []).map((n) => ` <span class="need">${esc(n)}</span>`).join("")}
+        ${t.summary ? `<div class="muted small">${esc(t.summary)}</div>` : ""}</dd>
+      <dt>Режим</dt><dd><b>${esc(MODE_NAME[a.mode || mode] || mode)}</b>${newMode ? ` <span class="muted small">(сейчас выбран «${esc(MODE_NAME[mode] || mode)}»)</span>` : ""}
+        ${a.mode_why ? `<div class="muted small">${esc(a.mode_why)}</div>` : ""}</dd>
+      ${a.research_words ? `<dt>Длина варианта</dt><dd>${a.research_words} слов</dd>` : ""}
+    </dl>
     <h4>Состав</h4><ol class="adv-picks">${picks}</ol>
     ${avoid}
-    ${(a.caveats || []).length ? `<ul class="adv-caveats muted small">${a.caveats.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
-    <div class="adv-actions"><button type="button" id="adviceApply">Применить</button>
-      <button type="button" class="secondary" id="adviceClose">Закрыть</button>
+    ${(a.caveats || []).length ? `<ul class="adv-caveats">${a.caveats.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
+    <div class="adv-actions"><button type="button" class="btn primary" id="adviceApply">Применить к этому вопросу</button>
+      <button type="button" class="btn" id="adviceClose">Закрыть</button>
       ${r.source === "advisor" ? '<button type="button" class="link small" id="adviceRefresh">Обновить обзоры моделей</button>' : ""}</div>
-    <p class="muted small">Применяется только к этому вопросу; постоянный состав — «Настройки → Модели».</p>`;
+    <p class="muted small adv-foot">Настройки программы не меняются; постоянный состав — «Настройки → Модели».</p>`;
   $("adviceApply").addEventListener("click", () => applyAdvice(r));
   $("adviceClose").addEventListener("click", () => { $("adviceBox").hidden = true; });
   const rf = document.getElementById("adviceRefresh");
