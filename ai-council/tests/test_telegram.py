@@ -665,3 +665,23 @@ def test_bot_reports_sessions_interrupted_by_restart(env):
     asyncio.run(scenario())
     assert any("🏆 <b>Решение:" in t for t in fake.texts())
     assert sum("прервано перезапуском" in t for t in fake.texts()) == 1
+
+
+def test_research_mode_in_bot(env):
+    bot, fake, tmp = env
+
+    async def scenario():
+        await bot.handle_update(msg("Стоит ли открывать кофейню у вуза?"))
+        card_id = bot.pending[CHAT].card_id
+        await bot.handle_update(press("view:opts", card_id))
+        assert "mode:research" in buttons(fake.last("editMessageText"))
+        await bot.handle_update(press("mode:research", card_id))
+        assert bot.settings[CHAT].mode == "research"
+        await bot.handle_update(press("go", card_id))
+        await finish(bot)
+
+    asyncio.run(scenario())
+    result = next(t for t in fake.texts() if "🏆 <b>Решение:" in t or "🔬" in t)
+    assert "🔬 известно" in result and "проверено" in result
+    data = json.loads(next((tmp / "runs").glob("2*.json")).read_text())
+    assert data["mode"] == "research" and data["research"]["ledger"]["claims"]

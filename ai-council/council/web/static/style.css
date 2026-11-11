@@ -706,3 +706,22 @@ a.brand:hover .brand-name { color: var(--accent); }
 .paused-list li { margin: .2rem 0; }
 .redo { margin-top: .8rem; }
 .redo p { margin: 0 0 .5rem; }
+
+/* итог исследования */
+.research { margin-top: 1.1rem; }
+.research h3 { margin: .2rem 0 .3rem; }
+.research h4 { margin: .9rem 0 .35rem; font-size: 1rem; }
+.kcu { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .7rem; }
+.kcu-col { border-radius: 10px; padding: .6rem .75rem; background: var(--surface-2); border-top: 3px solid var(--muted); overflow-wrap: anywhere; }
+.kcu-col.ok { border-top-color: var(--ok); } .kcu-col.warn { border-top-color: var(--warn); } .kcu-col.bad { border-top-color: var(--bad); }
+.kcu-col h4 { margin-top: 0; }
+.kcu-col ul, .research ul.subq, .research ul.claims { padding-left: 1.1rem; margin: .2rem 0; }
+.kcu-col li, .research .claims li { margin: .3rem 0; }
+.research ul.subq { list-style: none; padding-left: 0; }
+.research ul.subq li { margin: .3rem 0; }
+.research details.sources { margin-top: .9rem; }
+.research details.sources summary { cursor: pointer; font-weight: 600; }
+.research ol.srcs { padding-left: 1.2rem; overflow-wrap: anywhere; }
+@media (max-width: 760px) { .kcu { grid-template-columns: 1fr; } }
+.research .rq { font-size: .75rem; font-weight: 800; padding: .1rem .45rem; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line-strong); }
+.research .lbl { display: inline-grid; width: auto; height: auto; padding: 0 .35rem; font-size: .75rem; border-radius: 6px; }

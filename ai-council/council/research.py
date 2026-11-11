@@ -774,7 +774,7 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
     key_to_id = {k: e["id"] for k, e in evid.items()}
     claims = []
     for cid, c in by_id.items():
-        claims.append({**c, "status": merge_status(statuses[cid]), "notes": notes[cid][:3],
+        claims.append({**c, "status": merge_status(statuses[cid]), "notes": list(dict.fromkeys(notes[cid]))[:3],
                        "evidence": [key_to_id[k] for k in claim_ev[cid]]})
     for e in evid.values():
         e["claims"] = [x for x in e["claims"]]

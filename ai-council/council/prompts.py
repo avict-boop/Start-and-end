@@ -400,8 +400,9 @@ def history_block(history: list[dict]) -> str:
     parts = ["This is a FOLLOW-UP question. Earlier the council already discussed this topic "
              "(oldest first). Build on these conclusions; revise them if the new question requires it:"]
     for i, h in enumerate(history, 1):
+        ev = f"\n{h['evidence']}" if h.get("evidence") else ""  # исследование: факты с источниками и пробелы
         parts.append(f"\n--- Earlier session {i} ---\nQuestion: {h.get('question', '')}\n"
-                     f"Council decision: {h.get('answer', '')}\n--- End of session {i} ---")
+                     f"Council decision: {h.get('answer', '')}{ev}\n--- End of session {i} ---")
     return "\n".join(parts)
 
 

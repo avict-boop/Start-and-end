@@ -13,7 +13,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .attachments import MAX_FILES, AttachmentError, assign_files, human_size, limit_total, load_attachment, merge
-from .client import OpenRouterClient
+from .client import OpenRouterClient, ProviderError
 from .config import load_config as _load_config
 from .config import load_dotenv
 from .estimate import estimate, parse_pricing, unknown_models, vision_map
@@ -489,6 +489,36 @@ def _stats_cmd(args) -> int:
     return 0
 
 
+async def _search_test(args) -> int:
+    """Один короткий запрос с поиском: работает ли поиск, сколько стоит, возвращает ли ссылки и даты."""
+    key = os.environ.get("OPENROUTER_API_KEY")
+    if not key:
+        console.print("[red]Нет OPENROUTER_API_KEY[/]")
+        return 2
+    cfg = load_config(args.config)
+    model = args.model or cfg.fact_check.model
+    client = OpenRouterClient(key, timeout=cfg.timeout_s, max_retries=1)
+    question = ("Find the current official price per 1M input tokens of one popular LLM API and cite the source. "
+                'Reply as JSON: {"answer": "...", "sources": [{"url": "...", "date": "..."}]}')
+    try:
+        comp = await client.complete(model, [{"role": "user", "content": question}], temperature=0.1, max_tokens=800,
+                                     web_search=True)
+    except ProviderError as e:
+        console.print(f"[red]Поиск не сработал:[/] {e}")
+        return 1
+    finally:
+        await client.aclose()
+    console.print(f"Модель: [bold]{comp.model or model}[/]  ·  стоимость запроса: [bold]${comp.cost:.4f}[/]  ·  "
+                  f"токены {comp.prompt_tokens}/{comp.completion_tokens}")
+    console.print(f"Ссылок вернул сам поиск: [bold]{len(comp.citations)}[/]" +
+                  ("" if comp.citations else "  [yellow](список ссылок поиск не вернул — в арбитраже ссылки будут "
+                                             "приниматься только по ответу модели)[/]"))
+    for u in comp.citations[:8]:
+        console.print(f"  · {u}")
+    console.print("[dim]Ответ модели:[/] " + comp.text[:600])
+    return 0
+
+
 def _archive_cmd(args) -> int:
     from .archive import Archive, available_formats
     from .reports.pdf import PDF_AVAILABLE, PDF_ERROR
@@ -538,7 +568,7 @@ def main(argv: list[str] | None = None) -> int:
 
     a = sub.add_parser("ask", help="провести заседание совета")
     a.add_argument("question", help='вопрос (или "-" чтобы прочитать из stdin)')
-    a.add_argument("--mode", choices=["quick", "debate", "evaluate"], help="режим (по умолчанию из конфига)")
+    a.add_argument("--mode", choices=["quick", "debate", "evaluate", "research"], help="режим (по умолчанию из конфига)")
     a.add_argument("--rounds", type=int, help="число раундов критики/доработки в режиме debate")
     a.add_argument("--criteria", help='свои критерии через запятую, напр. "цена,скорость,риск"')
     a.add_argument("--option", action="append", help="готовый вариант для оценки (можно несколько раз)")
@@ -584,6 +614,10 @@ def main(argv: list[str] | None = None) -> int:
     rp.add_argument("--force", action="store_true", help="пересобрать все отчёты заново")
     rp.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
 
+    st = sub.add_parser("search-test", help="проверить поиск в интернете: один дешёвый запрос, цена и найденные ссылки")
+    st.add_argument("--model", help="модель (по умолчанию — модель проверки фактов из config.yaml)")
+    st.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
+
     t = sub.add_parser("telegram", help="запустить Telegram-бота")
     t.add_argument("--config", default=str(PROJECT_DIR / "config.yaml"))
 
@@ -596,6 +630,8 @@ def main(argv: list[str] | None = None) -> int:
         return _stats_cmd(args)
     if args.cmd == "web":
         return _web(args)
+    if args.cmd == "search-test":
+        return asyncio.run(_search_test(args))
     try:
         return asyncio.run(_ask(args) if args.cmd == "ask" else _models(args))
     except KeyboardInterrupt:

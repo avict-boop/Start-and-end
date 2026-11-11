@@ -758,6 +758,7 @@ case "\${1:-help}" in
   reports) shift; docker compose run --rm bot python -m council reports "\$@" ;;
   stats)   docker compose run --rm bot python -m council stats ;;
   models)  shift; docker compose run --rm bot python -m council models "\$@" ;;
+  search-test) shift; docker compose run --rm bot python -m council search-test "\$@" ;;
   config)  "\${EDITOR:-nano}" config.yaml && echo "Сохранено: изменения подхватятся со следующего заседания." ;;
   password)
     read -r -s -p "Новый пароль веб-интерфейса (от 10 символов): " p1 && echo

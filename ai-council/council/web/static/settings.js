@@ -4,7 +4,7 @@
 const SET = { data: null, orig: "", tab: "members", writable: true, logo: "", models: null, upgrades: null,
   sys: null, check: null, poll: null, restarting: false };
 const EFFORTS = [["", "как в общих"], ["none", "не задавать"], ["low", "низкая"], ["medium", "средняя"], ["high", "высокая"]];
-const MODES = [["debate", "Подробное обсуждение"], ["quick", "Быстрый ответ"]];
+const MODES = [["debate", "Подробное обсуждение"], ["research", "Исследование"], ["quick", "Быстрый ответ"]];
 
 function setDirty() {
   const dirty = JSON.stringify(SET.data) !== SET.orig;
@@ -131,6 +131,22 @@ function renderSettings() {
         <label class="field"><span>Сколько лидеров проверять</span><input type="number" id="fTop" min="1" max="5" value="${fc.top}" ${ro}></label>
         <label class="field"><span>Утверждений на вариант</span><input type="number" id="fClaims" min="1" max="10" value="${fc.max_claims}" ${ro}></label>
       </div>
+      <div class="row2" style="margin-top:.4rem"><button type="button" class="secondary" id="searchTest">Проверить поиск</button>
+        <span class="muted small" id="searchTestOut">Один короткий запрос к модели с поиском (обычно меньше цента): работает ли поиск, сколько стоит и возвращает ли он ссылки.</span></div>
+      <h2 style="margin-top:1.2rem">Режим «Исследование»</h2>
+      <p class="muted small">Каждую часть можно выключить, чтобы на пилоте сравнить, что помогает.</p>
+      ${[["rLenses", "lenses", "Углы зрения авторов", "у каждого автора своя линза: рынок, технология, экономика, скептик"],
+         ["rArb", "arbitration", "Арбитраж доказательств", "после критики модель с поиском проверяет утверждения всех вариантов"],
+         ["rDigest", "revision_digest", "Доработка по выжимкам", "авторы видят реестр источников и тезисы чужих вариантов, а не их полные тексты"],
+         ["rSection", "section_vote", "Голосование по подвопросам", "участники выбирают лучший вариант для каждого подвопроса"]].map(([id, k, t, h]) =>
+        `<label class="switch"><input type="checkbox" id="${id}" data-r="${k}" ${d.research[k] ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>${t}</b><small>${h}</small></span></label>`).join("")}
+      <div class="row2" style="margin-top:.6rem">
+        <label class="field"><span>Поисковых заданий (подтвердить / опровергнуть)</span><input type="number" id="rMissions" data-rn="missions" min="1" max="2" value="${d.research.missions}" ${ro}></label>
+        <label class="field"><span>Утверждений на проверку</span><input type="number" id="rClaims" data-rn="arbitration_claims" min="3" max="20" value="${d.research.arbitration_claims}" ${ro}></label>
+        <label class="field"><span>Авторов с поиском уже в предложениях</span><input type="number" id="rScouts" data-rn="fresh_scouts" min="0" max="2" value="${d.research.fresh_scouts}" ${ro}>
+          <div class="muted small">0 — независимо и дешевле; 1–2 — для свежих цифр (цены, рынки), но варианты могут стать похожими</div></label>
+        <label class="field"><span>Длина варианта, слов</span><input type="number" id="rWords" data-rn="max_words" min="300" max="5000" step="100" value="${d.research.max_words}" ${ro}></label>
+      </div>
       <h2 style="margin-top:1.2rem">Голосовые сообщения</h2>
       <label class="field"><span>Модель для расшифровки речи <em>(должна понимать звук — 🎤 в подсказке)</em></span>
         <input type="text" id="tModel" list="modelList" value="${esc(d.transcribe_model)}" ${ro}>
@@ -209,6 +225,18 @@ function bindSettings() {
   bindVal("fTop", (t) => { d.fact_check.top = num(t.value); });
   bindVal("fClaims", (t) => { d.fact_check.max_claims = num(t.value); });
   bindVal("tModel", (t) => { d.transcribe_model = t.value.trim(); });
+  for (const el of $("setBody").querySelectorAll("[data-r]")) el.addEventListener("change", () => { d.research[el.dataset.r] = el.checked; setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-rn]")) el.addEventListener("input", () => { d.research[el.dataset.rn] = num(el.value); setDirty(); });
+  on("searchTest", "click", async () => {
+    const out = $("searchTestOut");
+    out.textContent = "Проверяю…";
+    try {
+      const r = await api("/api/search-test", { method: "POST", body: { model: d.fact_check.model } });
+      out.innerHTML = `<b>${r.ok ? "Поиск работает" : "Поиск не сработал"}</b> · ${esc(r.model || "")} · $${Number(r.cost || 0).toFixed(4)} · ссылок от поиска: ${r.citations.length}`
+        + (r.citations.length ? "" : " (поиск не вернул список ссылок — в арбитраже ссылки будут приниматься по ответу модели)")
+        + (r.error ? `<div class="error">${esc(r.error)}</div>` : "");
+    } catch (e) { out.textContent = e.message; }
+  });
   bindVal("bTitle", (t) => { d.branding.title = t.value; });
   bindVal("bFooter", (t) => { d.branding.footer = t.value; });
   bindVal("bColor", (t) => { d.branding.color = t.value.trim(); });

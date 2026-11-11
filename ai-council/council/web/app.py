@@ -64,7 +64,9 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
          "parent": ({"id": d["followup_of"], "title": (d.get("thread") or [{}])[-1].get("title", "")}
                     if d.get("followup_of") else None)},
         {"type": "framing", "refined_question": d.get("refined_question", d["question"]), "criteria": d["criteria"],
-         "requirements": d.get("requirements") or []},
+         "requirements": d.get("requirements") or [], **{k: (d.get("research") or {}).get(k)
+                                                         for k in ("scope", "as_of", "subquestions", "lenses")
+                                                         if (d.get("research") or {}).get(k)}},
     ]
     if d.get("attachments"):
         ev.insert(1, {"type": "attachments", "items": d["attachments"], "blind": []})
@@ -78,6 +80,10 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
         ev.append({"type": "stage", "stage": "critique", "title": "Критика"})
         ev += [{"type": "member_done", "stage": "critique", "member": m, "result": cs}
                for m, cs in d["critiques"].items()]
+    led = (d.get("research") or {}).get("ledger")
+    if led:
+        ev.append({"type": "stage", "stage": "arbitration", "title": "Арбитраж доказательств"})
+        ev.append({"type": "ledger", "ledger": led})
     revised = {l: p for l, p in d["proposals"].items() if p != d["initial_proposals"].get(l)}
     if revised:
         ev.append({"type": "stage", "stage": "revision", "title": "Доработка"})
@@ -89,7 +95,7 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
     ev.append({"type": "tally", "rows": d["tally"], "authors": d["authors"], "agreement": agree,
                "ballot_flags": d.get("ballot_flags") or {}, "leader_without_flagged": d.get("leader_without_flagged"),
                "co_leaders": d.get("co_leaders") or [], "decisive": d.get("decisive") or {},
-               "coverage": d.get("coverage")})
+               "coverage": d.get("coverage"), "sections": (d.get("research") or {}).get("sections") or {}})
     if d.get("fact_check"):
         ev.append({"type": "stage", "stage": "factcheck", "title": "Проверка фактов"})
         ev.append({"type": "factcheck", "results": d["fact_check"], "model": d.get("fact_checker", "")})
@@ -136,6 +142,10 @@ class RunRequest(BaseModel):
 
 class BudgetRequest(BaseModel):
     budget: float = Field(gt=0, le=1000)
+
+
+class SearchTest(BaseModel):
+    model: str | None = None
 
 
 class ResumeRequest(BaseModel):
@@ -675,6 +685,28 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         cp.update(resumes=int(cp.spec.get("resumes") or 0) + 1)
         launch(cp, client)
         return {"id": sid}
+
+    @app.post("/api/search-test")
+    async def search_test(body: SearchTest | None = None) -> dict[str, Any]:
+        """Один короткий запрос с поиском: работает ли поиск, цена, вернул ли он ссылки."""
+        cfg = base_config()
+        model = (body.model if body and body.model else "") or cfg.fact_check.model
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            raise HTTPException(400, "нет OPENROUTER_API_KEY")
+        client = OpenRouterClient(key, timeout=cfg.timeout_s, max_retries=1)
+        q = ("Find the current official price per 1M input tokens of one popular LLM API and cite the source. "
+             'Reply as JSON: {"answer": "...", "sources": [{"url": "...", "date": "..."}]}')
+        try:
+            comp = await client.complete(model, [{"role": "user", "content": q}], temperature=0.1, max_tokens=800,
+                                         web_search=True)
+        except ProviderError as e:
+            return {"ok": False, "model": model, "cost": float(getattr(e.spent, "cost", 0) or 0), "citations": [],
+                    "error": str(e)[:400]}
+        finally:
+            await client.aclose()
+        return {"ok": True, "model": comp.model or model, "cost": comp.cost, "citations": comp.citations[:10],
+                "answer": comp.text[:600]}
 
     @app.post("/api/sessions/{sid}/redo")
     async def redo(sid: str, body: ResumeRequest | None = None) -> dict[str, Any]:

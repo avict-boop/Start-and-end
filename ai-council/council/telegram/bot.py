@@ -36,9 +36,11 @@ log = logging.getLogger("council.telegram")
 from ..diagnostics import bundle, save_events, save_failed, setup_logging, stamp  # noqa: E402
 
 STAGES = [("framing", "Постановка"), ("proposal", "Предложения"), ("critique", "Критика"),
-          ("revision", "Доработка"), ("vote", "Голосование"), ("factcheck", "Факты"), ("verdict", "Вердикт")]
-MODE_NAME = {"debate": "Дебаты", "quick": "Быстро", "evaluate": "Оценка вариантов"}
-MODE_FULL = {"debate": "Подробное обсуждение", "quick": "Быстрый ответ", "evaluate": "Выбор из ваших вариантов"}
+          ("arbitration", "Арбитраж доказательств"), ("revision", "Доработка"), ("vote", "Голосование"),
+          ("factcheck", "Факты"), ("verdict", "Вердикт")]
+MODE_NAME = {"debate": "Дебаты", "quick": "Быстро", "evaluate": "Оценка вариантов", "research": "Исследование"}
+MODE_FULL = {"debate": "Подробное обсуждение", "quick": "Быстрый ответ", "evaluate": "Выбор из ваших вариантов",
+             "research": "Исследование: подвопросы, проверка фактов поиском, «известно / спорно / неизвестно»"}
 STAGE_HINT = {
     "framing": "председатель уточняет вопрос и критерии",
     "proposal": "каждая модель вслепую предлагает решение",
@@ -194,6 +196,9 @@ class Progress:
 
     def skipped(self) -> set[str]:
         skip = {"quick": {"critique", "revision"}, "evaluate": {"proposal", "revision"}}.get(self.mode, set())
+        if self.mode == "research":
+            return skip | {"factcheck"}  # в исследовании вместо проверки лидеров — арбитраж доказательств
+        skip = skip | {"arbitration"}
         return skip if self.fact_check else skip | {"factcheck"}
 
     def render(self, *, final: str | None = None) -> str:
@@ -767,8 +772,9 @@ class CouncilBot:
         on = lambda flag: "✅" if flag else "▫️"  # noqa: E731
         kb: list[list[dict]] = []
         if with_mode:
-            kb.append([self._btn(("● " if s.mode == m else "") + {"debate": "Подробно", "quick": "Быстро"}[m], f"{prefix}mode:{m}")
-                       for m in ("debate", "quick")])
+            kb.append([self._btn(("● " if s.mode == m else "") + {"debate": "Подробно", "research": "Исследование",
+                                                                   "quick": "Быстро"}[m], f"{prefix}mode:{m}")
+                       for m in ("debate", "research", "quick")])
             if s.mode == "debate":
                 kb.append([self._btn(("● " if s.rounds == r else "") + f"{r} раунд" + ("а" if r > 1 else ""), f"{prefix}rounds:{r}")
                            for r in (1, 2, 3)])
@@ -876,7 +882,7 @@ class CouncilBot:
 
     def _apply_setting(self, s: ChatSettings, kind: str, value: str) -> None:
         """Общая логика переключателей для карточки вопроса и для /settings."""
-        if kind == "mode" and value in ("debate", "quick"):
+        if kind == "mode" and value in ("debate", "quick", "research"):
             s.mode = value
         elif kind == "rounds" and value.isdigit():
             s.rounds = max(1, min(5, int(value)))
@@ -1293,6 +1299,8 @@ class CouncilBot:
             lines.append(f"🔎 Факты: {esc(v.fact_line)}")
         if v.ideas_line:
             lines.append(f"🧩 Из других вариантов: {esc(v.ideas_line)}")
+        if v.is_research:
+            lines.append(f"🔬 {esc(v.kcu_line)}" + (f"\n🔎 {esc(v.ledger_line)}" if v.ledger_line else ""))
         if v.deviation_line:
             lines.append(f"⚖️ {esc(v.deviation_line[:400])}")
         if v.tie_line:
@@ -1311,6 +1319,20 @@ class CouncilBot:
             parts += ["", "<b>Особые мнения:</b>"] + [f"• {md_to_tg(x)}" for x in vd["dissent"]]
         if vd.get("risks"):
             parts += ["", "<b>Риски:</b>"] + [f"• {md_to_tg(x)}" for x in vd["risks"]]
+        if v.is_research:
+            by = v.evidence_by_id
+
+            def refs(ids: list[str]) -> str:
+                return " ".join(f'<a href="{esc(by[i]["url"])}">[{esc(i)}]</a>' if i in by else ("[DOC]" if i == "DOC" else "")
+                                for i in ids or [])
+            parts += ["", "🔬 <b>Известно</b> (подтверждено источниками):"]
+            parts += [f"✓ {md_to_tg(k.get('statement', ''))} {refs(k.get('evidence_ids'))}" for k in v.known] or ["— нет"]
+            if v.contested:
+                parts += ["", "<b>Спорно:</b>"] + [f"⇄ {md_to_tg(c.get('issue', ''))} {refs(c.get('evidence_ids'))}" for c in v.contested]
+            if v.unknown:
+                parts += ["", "<b>Неизвестно:</b>"] + [f"? {md_to_tg(u.get('gap', ''))}" for u in v.unknown]
+            if v.verdict.get("next_questions"):
+                parts += ["", "<b>Что исследовать дальше:</b>"] + [f"• {md_to_tg(x)}" for x in v.verdict["next_questions"]]
         if v.ideas:
             parts += ["", "🧩 <b>Что взято из других вариантов:</b>"]
             for i in v.ideas:

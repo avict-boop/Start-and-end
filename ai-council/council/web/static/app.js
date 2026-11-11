@@ -12,8 +12,9 @@ const STAGES = [
   ["vote", "Голосование"],
   ["verdict", "Вердикт"],
 ];
+const ARB_STAGE = ["arbitration", "Арбитраж доказательств"];
 const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения",
-  factcheck: "Проверка фактов" };
+  factcheck: "Проверка фактов", arbitration: "Арбитраж доказательств" };
 // что происходит на этапе — простыми словами
 const STAGE_HINT = {
   framing: "председатель уточняет вопрос и критерии",
@@ -22,14 +23,16 @@ const STAGE_HINT = {
   revision: "авторы улучшают решения с учётом критики",
   vote: "модели ранжируют чужие решения",
   factcheck: "модель с поиском проверяет факты лидеров",
+  arbitration: "поиск проверяет утверждения всех вариантов: подтверждения и опровержения",
   verdict: "председатель пишет итоговое решение",
 };
 const MODE_HINT = {
   debate: "Подробное обсуждение: решения, критика, доработка, голосование.",
   quick: "Быстрый ответ: решения и голосование, без критики.",
   evaluate: "Выбор из ваших вариантов: совет их обсуждает и выбирает лучший.",
+  research: "Исследование: подвопросы и углы зрения, проверка утверждений всех вариантов поиском, итог «известно / спорно / неизвестно» с источниками.",
 };
-const MODE_NAME = { debate: "Подробное обсуждение", quick: "Быстрый ответ", evaluate: "Выбор из вариантов" };
+const MODE_NAME = { debate: "Подробное обсуждение", quick: "Быстрый ответ", evaluate: "Выбор из вариантов", research: "Исследование" };
 
 /* ------------------------------------------------------------ мелкие помощники интерфейса */
 
@@ -367,7 +370,7 @@ $("repeatBtn").addEventListener("click", async () => {
   catch (e) { toast(e.message); return; }
   const r = data.request || {};
   $("question").value = r.question || "";
-  setMode(["debate", "quick", "evaluate"].includes(r.mode) ? r.mode : "debate");
+  setMode(["debate", "quick", "evaluate", "research"].includes(r.mode) ? r.mode : "debate");
   if (r.rounds) $("rounds").value = r.rounds;
   $("criteria").value = (r.criteria || []).join(", ");
   $("options").value = (r.options || []).join("\n---\n");
@@ -999,6 +1002,8 @@ function apply(s, ev) {
     }
     case "framing":
       s.refined = ev.refined_question; s.criteria = ev.criteria; s.requirements = ev.requirements || [];
+      s.scope = [ev.scope, ev.as_of ? `актуально на ${ev.as_of}` : ""].filter(Boolean).join(" · ");
+      s.subq = ev.subquestions || []; s.lenses = ev.lenses || [];
       logAdd(s, `Критерии: ${(ev.criteria || []).join(", ")}`);
       if (s.stage === "framing") s.work = {};
       s.doneStages.add("framing");
@@ -1025,11 +1030,17 @@ function apply(s, ev) {
       s.coLeaders = ev.co_leaders || [];
       s.decisive = ev.decisive || {};
       s.coverage = ev.coverage || null;
+      s.sections = ev.sections || {};
       s.leaderWithout = ev.leader_without_flagged || null;
       if (ev.rows && ev.rows[0]) logAdd(s, `Голосование: лидирует вариант ${ev.rows[0].label}`);
       break;
     case "warning":
       logAdd(s, `⚠️ ${ev.member} (${STAGE_NAME[ev.stage] || ev.stage}): ${ev.text}`, "k-warn");
+      break;
+    case "ledger":
+      s.ledger = ev.ledger || null;
+      if (s.stage === "arbitration") s.work = {};
+      logAdd(s, `Арбитраж доказательств: проверено ${(s.ledger && s.ledger.claims || []).length} утверждений, источников ${(s.ledger && s.ledger.evidence || []).length}`, "k-ok");
       break;
     case "factcheck":
       s.facts = ev.results || {};
@@ -1079,6 +1090,7 @@ function scoreColor(v) {
 function stagePlan(s) {
   const skip = new Set(s.mode === "quick" ? ["critique", "revision"] : s.mode === "evaluate" ? ["proposal", "revision"] : []);
   const plan = STAGES.filter(([k]) => !skip.has(k));
+  if (s.mode === "research") plan.splice(plan.findIndex(([k]) => k === "revision"), 0, ARB_STAGE);
   if (s.stageTitle.factcheck || s.facts || s.factPlanned) plan.splice(plan.length - 1, 0, ["factcheck", STAGE_NAME.factcheck]);
   return plan;
 }
@@ -1195,16 +1207,63 @@ async function raiseBudget() {
   } catch (e) { toast(e.message); }
 }
 
+// итог исследования: известно / спорно / неизвестно, подвопросы с каркасом, источники
+const CLAIM_BADGE = { confirmed: ["ok", "подтверждено"], refuted: ["bad", "опровергнуто"], contested_in_sources: ["warn", "спорно в источниках"],
+  unclear: ["plain", "не удалось проверить"], user_doc: ["plain", "из документов"], search_unavailable: ["plain", "поиск недоступен"], not_checked: ["plain", "не проверялось"] };
+const COVER_WORD = { covered: "раскрыт", partial: "частично", unknown: "без ответа" };
+const GAP_WORD = { unverified_memory: "только по памяти моделей", no_public_data: "нет открытых данных", not_checked: "не проверено" };
+function renderResearch(s) {
+  const v = s.verdict || {};
+  const box = $("vResearch");
+  const isR = s.mode === "research" && (v.known || v.contested || v.unknown);
+  box.hidden = !isR;
+  if (!isR) { box.innerHTML = ""; return; }
+  const ev = Object.fromEntries(((s.ledger && s.ledger.evidence) || []).map((e) => [e.id, e]));
+  const refs = (ids) => (ids || []).map((i) => i === "DOC" ? '<span class="lbl">DOC</span>'
+    : ev[i] ? `<a href="${esc(ev[i].url)}" target="_blank" rel="noopener" title="${esc(ev[i].title || ev[i].url)}">[${esc(i)}]</a>` : "").join(" ");
+  let h = `<h3>Что известно, что спорно, чего не знает никто</h3><p class="muted small">«Известно» — только то, что подтвердили найденные источники или ваши документы; согласие моделей сюда не попадает.</p>`;
+  h += `<div class="kcu"><div class="kcu-col ok"><h4>Известно</h4>${(v.known || []).length ? `<ul>${v.known.map((k) => `<li>${inline(k.statement)} ${refs(k.evidence_ids)}${k.volatility === "changes_fast" ? ' <span class="muted small">· быстро меняется</span>' : ""}</li>`).join("")}</ul>` : '<p class="muted small">Подтверждённых источниками утверждений нет.</p>'}</div>`;
+  h += `<div class="kcu-col warn"><h4>Спорно</h4>${(v.contested || []).length ? `<ul>${v.contested.map((c) => `<li><b>${inline(c.issue)}</b>${(c.positions || []).length ? `<div class="small">${c.positions.map(inline).join(" · ")}</div>` : ""}${c.why_they_differ ? `<div class="muted small">почему: ${inline(c.why_they_differ)}</div>` : ""} ${refs(c.evidence_ids)}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div>`;
+  h += `<div class="kcu-col bad"><h4>Неизвестно</h4>${(v.unknown || []).length ? `<ul>${v.unknown.map((u) => `<li>${inline(u.gap)}${u.reason ? ` <span class="muted small">· ${esc(GAP_WORD[u.reason] || u.reason)}</span>` : ""}${u.how_to_check ? `<div class="muted small">как узнать: ${inline(u.how_to_check)}</div>` : ""}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div></div>`;
+  const subq = s.subq || [];
+  if (subq.length) {
+    const audit = Object.fromEntries((v.coverage_audit || []).map((c) => [c.subquestion_id, c]));
+    const bb = v.section_backbone || {};
+    h += `<h4>Подвопросы</h4><ul class="subq">${subq.map((q, i) => {
+      const id = `Q${i + 1}`, a = audit[id] || {}, sec = (s.sections || {})[id] || {};
+      const lead = bb[id] || sec.leader;
+      return `<li><span class="rq">${id}</span> ${esc(q)} <span class="muted small">· ${esc(COVER_WORD[a.status] || a.status || "—")}${lead ? ` · каркас — вариант ${esc(lead)}` : ""}</span></li>`;
+    }).join("")}</ul>`;
+  }
+  if ((v.next_questions || []).length) h += `<h4>Что исследовать дальше</h4><ul>${v.next_questions.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`;
+  const claims = (s.ledger && s.ledger.claims) || [];
+  if (claims.length) {
+    h += `<details class="sources"><summary>Проверка утверждений и источники (${claims.length} утв., ${Object.keys(ev).length} источн.)</summary><ul class="claims">${claims.map((c) => {
+      const [k, t] = CLAIM_BADGE[c.status] || CLAIM_BADGE.not_checked;
+      return `<li><span class="badge ${k}">${t}</span> <span class="lbl">${esc(c.id)}</span> ${inline(c.text)} ${refs(c.evidence)}${(c.notes || []).length ? `<div class="muted small">${c.notes.map(inline).join(" · ")}</div>` : ""}</li>`;
+    }).join("")}</ul><ol class="srcs">${Object.values(ev).map((e) => `<li><b>${esc(e.id)}</b> <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title || e.url)}</a> <span class="muted small">${esc([e.publisher, e.date].filter(Boolean).join(", "))}${e.search_returned === false ? " · нет в результатах поиска" : ""}</span></li>`).join("")}</ol></details>`;
+  }
+  box.innerHTML = h;
+}
+
 function renderFraming(s) {
   const reqs = s.requirements || [];
   const refined = s.refined && s.refined.trim() !== (s.question || "").trim() ? s.refined : "";
-  const any = !!(s.criteria.length || reqs.length || refined);
+  const any = !!(s.criteria.length || reqs.length || refined || (s.subq || []).length);
   $("frameSec").hidden = !any;
   if (!any) return;
   $("fRefined").hidden = !refined;
   $("fRefined").innerHTML = refined ? `<span class="muted">Уточнённый вопрос:</span> ${esc(refined)}` : "";
   $("fCritRow").hidden = !s.criteria.length;
   $("fCriteria").innerHTML = s.criteria.map((c) => `<li>${esc(c)}</li>`).join("");
+  $("fScopeRow").hidden = !s.scope;
+  $("fScope").textContent = s.scope || "";
+  const subq = s.subq || [];
+  $("fSubqRow").hidden = !subq.length;
+  $("fSubq").innerHTML = subq.map((q, i) => `<li><span class="rq">Q${i + 1}</span><span>${esc(q)}</span></li>`).join("");
+  const lenses = s.lenses || [];
+  $("fLensRow").hidden = !lenses.length;
+  $("fLenses").innerHTML = lenses.map((l) => `<li>${esc(l)}</li>`).join("");
   $("fReqRow").hidden = !reqs.length;
   $("fReqs").innerHTML = reqs.map((r, i) => `<li><span class="rq">R${i + 1}</span><span>${esc(r)}</span></li>`).join("");
   // пока идёт заседание — сразу под вопросом; когда есть решение — ниже решения и обоснования
@@ -1400,10 +1459,14 @@ function renderVerdict(s) {
   $("whySec").hidden = !v;
   if (!v) return;
   const p = s.proposals[v.winner];
-  $("vTitle").textContent = p && p.title ? p.title : `Вариант ${v.winner}`;
+  $("vTitle").textContent = s.mode === "research" ? "Итог исследования" : (p && p.title ? p.title : `Вариант ${v.winner}`);
   const row = s.tally && s.tally.find((r) => r.label === v.winner);
   const firsts = row && row.ballots ? `${row.first_places} из ${row.ballots} ${plural(row.ballots, "голоса", "голосов", "голосов")} за первое место` : "";
-  $("vSub").textContent = [`Вариант ${v.winner}`, s.authors[v.winner] != null ? (authorOf(s, v.winner) === "автор скрыт" ? "автор скрыт" : `предложил ${authorOf(s, v.winner)}`) : "ваш вариант", firsts].filter(Boolean).join(" · ");
+  if (s.mode === "research") {
+    const L = s.ledger && s.ledger.claims ? s.ledger.claims.length : 0;
+    $("vSub").textContent = [`синтез по ${(s.subq || []).length || "—"} подвопросам`, `общий каркас — вариант ${v.winner}`,
+      L ? `проверено утверждений: ${L}` : "поиск не проводился"].join(" · ");
+  } else $("vSub").textContent = [`Вариант ${v.winner}`, s.authors[v.winner] != null ? (authorOf(s, v.winner) === "автор скрыт" ? "автор скрыт" : `предложил ${authorOf(s, v.winner)}`) : "ваш вариант", firsts].filter(Boolean).join(" · ");
 
   const lead = s.tally && s.tally[0] && s.tally[0].label;
   const tie = (s.coLeaders || []).length > 1;
@@ -1423,6 +1486,7 @@ function renderVerdict(s) {
   $("vAgreeWarn").hidden = !warns.length;
   $("vAgreeWarn").innerHTML = warns.map(esc).join("<br>");
   $("vAnswer").innerHTML = md(v.final_answer);
+  renderResearch(s);
 
   $("vFacts").hidden = !s.facts || !Object.keys(s.facts).length;
   $("vFacts").innerHTML = s.facts ? factsHtml(s) : "";

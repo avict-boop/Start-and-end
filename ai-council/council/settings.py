@@ -15,12 +15,12 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
-from .config import BrandingConfig, CouncilConfig, FactCheckConfig, MemberConfig
+from .config import BrandingConfig, CouncilConfig, FactCheckConfig, MemberConfig, ResearchConfig
 
 TOP_KEYS = ("language", "mode", "debate_rounds", "min_quorum", "max_cost_usd", "temperature", "max_tokens",
             "reasoning_effort", "chair", "chair_proposes", "chair_follows_vote", "devil_advocate", "transcribe_model",
             "compact_proposals", "compact_words")
-SECTIONS = {"branding": BrandingConfig, "fact_check": FactCheckConfig}
+SECTIONS = {"branding": BrandingConfig, "fact_check": FactCheckConfig, "research": ResearchConfig}
 MEMBER_KEYS = ("name", "model", "enabled", "reasoning_effort", "temperature", "max_tokens")
 MAX_BACKUPS = 20
 

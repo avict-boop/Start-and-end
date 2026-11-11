@@ -327,8 +327,17 @@ class Archive:
         answer = (d.get("verdict") or {}).get("final_answer", "")
         if len(answer) > self.MAX_ANSWER_CHARS:
             answer = answer[:self.MAX_ANSWER_CHARS] + "…"
-        thread = list(d.get("thread") or []) + [{"id": parent, "title": v.title_text, "question": v.question,
-                                                  "answer": answer, "winner": v.title(v.winner)}]
+        item = {"id": parent, "title": v.title_text, "question": v.question, "answer": answer,
+                "winner": v.title(v.winner)}
+        if v.is_research:  # исследование: подтверждённые факты с источниками и открытые вопросы — с датой поиска
+            by = v.evidence_by_id
+            known = [f"- {k.get('statement', '')} ({', '.join(by[i]['url'] for i in k.get('evidence_ids') or [] if i in by)})"
+                     for k in v.known][:8]
+            unknown = [f"- {u.get('gap', '')}" for u in v.unknown][:6]
+            ev = "\n".join((["Confirmed by sources (search date " + v.date + "):"] + known if known else [])
+                           + (["Still unknown:"] + unknown if unknown else []))
+            item["evidence"] = ev[:1500]
+        thread = list(d.get("thread") or []) + [item]
         atts = load_from_dir(self.files_dir(parent), d.get("attachments") or [])
         return thread[-self.MAX_THREAD:], atts
 
