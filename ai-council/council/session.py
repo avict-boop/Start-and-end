@@ -1030,19 +1030,21 @@ class Council:
         follow = self.cfg.chair_follows_vote
 
         def check_verdict(v: R.ResearchVerdict) -> R.ResearchVerdict:
+            # В исследовании «winner» — лишь общий каркас для диагностики (итог собирается по подвопросам),
+            # поэтому за него ответ не отклоняется: неверная метка — лидер голосования, иной выбор — с пометкой.
+            checks[0] += 1
+            strict = checks[0] <= self.cfg.json_retries
             w = normalize_label(v.winner) if v.winner else leader
             if w not in valid:
-                raise ValueError(f"winner must be one of the labels {valid}, got '{v.winner}'")
+                w = leader
             deviation = v.deviation.strip()
             if w == leader or (len(tied) > 1 and w in tied):
                 deviation = ""
             elif follow and not re.match(r"^\W*(fact|risk|process)\b", deviation, re.I):
-                raise ValueError(f"the overall backbone (winner) must be the voting leader {leader} unless 'deviation' "
-                                 "starts with fact, risk or process and explains why")
+                deviation = f"process: председатель взял за общий каркас вариант {w}, а не лидера голосования {leader}" + (
+                    f" ({deviation})" if deviation else "")
             if _letters(v.final_answer) < 3 or _is_placeholder(v.final_answer):
                 raise ValueError('"final_answer" is empty or a placeholder ("...") — write the research synthesis')
-            checks[0] += 1
-            strict = checks[0] <= self.cfg.json_retries
             v = R.check_verdict(v, ledger=ledger, n_subq=len(subq), strict=strict)
             decided = normalize_ideas(v.ideas, idea_ids, strict=strict)
             return v.model_copy(update={"winner": w, "deviation": deviation, "ideas": decided})
@@ -1098,12 +1100,15 @@ class Council:
         self._emit("stage", stage="arbitration",
                    title=f"Арбитраж доказательств: {len(selected)} утверждений, поиск {fc.model}",
                    claims=[c["id"] for c in selected], model=fc.model)
-        batch = R.claims_batch(selected)
-        jobs = [self._ask(checker, "arbitration", R.arbitration(question, as_of, scope, R.MISSIONS[i], batch,
-                                                                 rc.max_evidence),
-                          R.EvidenceResult, meta={"mission": i + 1, "claims": [c["id"] for c in selected], "research": True},
+        size = R.ARBITRATION_BATCH
+        chunks = [selected[k:k + size] for k in range(0, len(selected), size)]
+        per_chunk = max(5, rc.max_evidence // max(1, len(chunks)))
+        plan = [(i, chunk) for chunk in chunks for i in range(rc.missions)]
+        jobs = [self._ask(checker, "arbitration", R.arbitration(question, as_of, scope, R.MISSIONS[i],
+                                                                 R.claims_batch(chunk), per_chunk),
+                          R.EvidenceResult, meta={"mission": i + 1, "claims": [c["id"] for c in chunk], "research": True},
                           web_search=True)
-                for i in range(rc.missions)]
+                for i, chunk in plan]
         results = await asyncio.gather(*jobs, return_exceptions=True)
         ok = []
         for i, res in enumerate(results, 1):

@@ -324,7 +324,10 @@ class UnknownItem(BaseModel):
 
 
 class ResearchVerdict(Verdict):
-    """Этап 6: синтез исследования."""
+    """Этап 6: синтез исследования. «winner» необязателен: итог собирается по подвопросам."""
+
+    winner: str = ""
+    why: str = ""
 
     section_backbone: dict[str, str] = Field(default_factory=dict)
     known: list[KnownItem] = Field(default_factory=list)
@@ -408,8 +411,9 @@ def _claims_rule(max_claims: int) -> str:
 - State period, geography and units for every number. Separate facts, estimates and recommendations.
 - If a subquestion cannot be answered, say so in "unknowns" instead of filling the gap. For every major conclusion
   state what evidence would change it.
-List up to {max_claims} decision-critical, checkable atomic claims in "claims"; mark fast-changing ones (prices,
-market shares, regulation, versions) as "changes_fast"."""
+List up to {max_claims} decision-critical, checkable atomic claims in "claims": POSITIVE statements that public
+sources (registries of FDA/EMA/PMDA, official sites, publications) can confirm or refute — not absence claims like
+"X is not registered anywhere". Mark fast-changing ones (prices, market shares, regulation, versions) as "changes_fast"."""
 
 
 CLAIM_JSON = ('{"text": "one atomic checkable statement", "basis": "user_doc|calc|memory|search_reported", '
@@ -690,6 +694,11 @@ def number_claims(label: str, p: ResearchProposal, start: int = 1) -> ResearchPr
     return p.model_copy(update={"claims": claims})
 
 
+NEGATIVE_RE = re.compile(r"\b(ни один|ни одна|не зарегистрир|не имеет|нет\s+(?:ни|в|на|зарегистр)|отсутству|"
+                         r"не представлен|никто|no\s+\w+\s+(?:is|has)|not\s+registered|none\s+of)", re.I)
+ARBITRATION_BATCH = 5  # утверждений в одном поисковом запросе: на 10 сразу поиск находит слишком мало источников
+
+
 def select_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, Any], limit: int) -> list[dict[str, Any]]:
     """Что проверять поиском: спорное по мнению критиков, быстро меняющееся, числа «из памяти»; минимум по одному
     утверждению от каждого автора, затем самые важные."""
@@ -712,6 +721,8 @@ def select_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, A
             s += 2.0 if c.basis == "memory" and re.search(r"\d", c.text) else 0.0
             s += 1.0 if c.basis == "search_reported" else 0.0
             s += 0.5 / (i + 1)  # автор ставит важное выше
+            if NEGATIVE_RE.search(c.text):
+                s -= 4.0  # «нет / не зарегистрирован / ни один» поиском не доказать: проверяем, только если места хватит
             scored.append((s, label, {"id": c.id, "label": label, "text": c.text, "scope": c.scope,
                                       "basis": c.basis, "volatility": c.volatility,
                                       "disputed": disputed.get(c.id.upper(), 0),

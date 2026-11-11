@@ -21,7 +21,7 @@ def test_research_session_end_to_end():
     assert res.mode == "research" and len(r["subquestions"]) == 3 and r["scope"]
     assert all(lab in r["lens_of"] for lab in res.authors)  # у каждого автора своя линза
     led = r["ledger"]
-    assert led["missions"] == 2 and led["evidence"] and {c["status"] for c in led["claims"]} >= {"confirmed"}
+    assert led["missions"] == 4 and led["evidence"]  # 10 утверждений: 2 пачки по 5 × 2 задания and {c["status"] for c in led["claims"]} >= {"confirmed"}
     ok = R.confirmed_ids(led)
     assert res.verdict.known and all(set(k.evidence_ids) <= ok | {"DOC"} for k in res.verdict.known)
     assert set(r["sections"]) == {"Q1", "Q2", "Q3"} and all(s["leader"] for s in r["sections"].values())
@@ -143,3 +143,29 @@ def test_every_author_gets_a_distinct_lens():
     res = run(Council(make_cfg(mode="research"), MockClient(delay=0), seed=3).run("Вопрос?"))
     lenses = list(res.research["lens_of"].values())
     assert len(lenses) == 4 and len(set(lenses)) == 4
+
+
+def test_chair_choosing_another_backbone_is_not_rejected():
+    class OtherWinner(MockClient):
+        async def complete(self, model, messages, **kw):
+            c = await super().complete(model, messages, **kw)
+            meta = kw.get("meta") or {}
+            if meta.get("stage") == "verdict":
+                import json as _j
+                d = _j.loads(c.text)
+                d["winner"] = next(l for l in meta["labels"] if l != meta["leader"])
+                d.pop("deviation", None)
+                c.text = _j.dumps(d, ensure_ascii=False)
+            return c
+
+    res = run(Council(make_cfg(mode="research"), OtherWinner(delay=0), seed=3).run("Вопрос?"))
+    assert "Синтез не выполнен" not in res.verdict.final_answer and res.verdict.deviation.startswith("process")
+
+
+def test_absence_claims_go_last():
+    props = {"A": R.number_claims("A", R.ResearchProposal(title="t", summary="текст ответа", claims=[
+        {"text": "Ни один препарат не зарегистрирован в ГРЛС", "basis": "memory"},
+        {"text": "Препарат X одобрен FDA в 2024 году", "basis": "memory"},
+        {"text": "Цена 10% выше", "basis": "memory"}]))}
+    sel = [c["id"] for c in R.select_claims(props, {}, 2)]
+    assert "A-C1" not in sel

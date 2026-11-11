@@ -349,6 +349,10 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
         out.append(f"| {name}{f' ({note})' if note else ''} | {s.get('calls', 0)} | {s.get('prompt_tokens', 0)} / {s.get('completion_tokens', 0)} "
                    f"| ${float(s.get('cost', 0)):.4f} |")
     out.append(f"| **Итого** | | | **${v.cost:.4f}** |")
+    fails = v.failures()
+    if fails:
+        out += ["", "### Сбои", "", "| Участник | Этап | Что случилось |", "|---|---|---|"]
+        out += [f"| {n} | {st} | {_cell(err)} |" for n, st, err in fails]
     if v.cache_line:
         out += ["", f"*{v.cache_line}.*"]
     fails = v.failures()

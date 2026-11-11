@@ -125,7 +125,8 @@ def plan_calls(
     plan[cfg.chair].append(("verdict", n))
     if mode == "research":  # вместо проверки лидеров — арбитраж доказательств по утверждениям всех вариантов
         if cfg.research.arbitration:
-            plan[FACT_CHECKER] = [("arbitration", cfg.research.arbitration_claims)] * cfg.research.missions
+            chunks = -(-cfg.research.arbitration_claims // 5)  # пачки по 5 утверждений (research.ARBITRATION_BATCH)
+            plan[FACT_CHECKER] = [("arbitration", 5)] * (cfg.research.missions * chunks)
     elif cfg.fact_check.enabled:
         plan[FACT_CHECKER] = [("factcheck", 1)] * min(cfg.fact_check.top, n)
     return plan
