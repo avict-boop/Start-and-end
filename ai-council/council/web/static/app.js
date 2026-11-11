@@ -1035,7 +1035,7 @@ function apply(s, ev) {
       if (ev.rows && ev.rows[0]) logAdd(s, `Голосование: лидирует вариант ${ev.rows[0].label}`);
       break;
     case "warning":
-      logAdd(s, `⚠️ ${ev.member} (${STAGE_NAME[ev.stage] || ev.stage}): ${ev.text}`, "k-warn");
+      logAdd(s, `⚠️ ${ev.member}${ev.stage ? ` (${STAGE_NAME[ev.stage] || ev.stage})` : ""}: ${ev.text}`, "k-warn");
       break;
     case "ledger":
       s.ledger = ev.ledger || null;

@@ -345,7 +345,8 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
     out += ["## Участники и расходы", "", "| Участник | Обращений | Токены (вход / выход) | Стоимость |", "|---|---|---|---|"]
     for name, s in v.stats.items():
         s = s or {}
-        out.append(f"| {name} | {s.get('calls', 0)} | {s.get('prompt_tokens', 0)} / {s.get('completion_tokens', 0)} "
+        note = v.think_note(s)
+        out.append(f"| {name}{f' ({note})' if note else ''} | {s.get('calls', 0)} | {s.get('prompt_tokens', 0)} / {s.get('completion_tokens', 0)} "
                    f"| ${float(s.get('cost', 0)):.4f} |")
     out.append(f"| **Итого** | | | **${v.cost:.4f}** |")
     if v.cache_line:

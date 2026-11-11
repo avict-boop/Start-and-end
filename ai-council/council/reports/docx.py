@@ -1237,7 +1237,8 @@ class _Report:
             _cell_text(t.cell(0, j), hd, align=WD_ALIGN_PARAGRAPH.RIGHT if j else None)
         for i, (name, s) in enumerate(v.stats.items(), 1):
             s = s or {}
-            for j, val in enumerate((name, str(s.get("calls", 0)),
+            note = v.think_note(s)
+            for j, val in enumerate((f"{name} ({note})" if note else name, str(s.get("calls", 0)),
                                      f"{int(s.get('prompt_tokens', 0)):,} / {int(s.get('completion_tokens', 0)):,}".replace(",", " "),
                                      f"${float(s.get('cost', 0)):.4f}")):
                 _cell_text(t.cell(i, j), val, align=WD_ALIGN_PARAGRAPH.RIGHT if j else None)

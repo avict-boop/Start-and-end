@@ -756,7 +756,10 @@ def _members(v: View) -> str:
     rows = []
     for name, s in v.stats.items():
         s = s or {}
-        rows.append(f'<tr><td>{_e(name)}</td><td class="num">{s.get("calls", 0)}</td>'
+        rt = int(s.get("reasoning_tokens") or 0)
+        think = (f'<div class="muted small">рассуждения: {rt:,}</div>' if rt else "") + (
+            '<div class="muted small">рассуждения выключены</div>' if s.get("reasoning_off") else "")
+        rows.append(f'<tr><td>{_e(name)}{think}</td><td class="num">{s.get("calls", 0)}</td>'
                     f'<td class="num">{int(s.get("prompt_tokens", 0)):,} / {int(s.get("completion_tokens", 0)):,}</td>'
                     f'<td class="num">${float(s.get("cost", 0)):.4f}</td></tr>'.replace(",", " "))
     parts = ['<section id="members"><h2>Участники и расходы</h2><table><thead><tr><th>Участник</th><th class="num">Обращений</th>'

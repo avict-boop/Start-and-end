@@ -109,6 +109,15 @@ def _key_error(code: int, body: str, model: str) -> Exception | None:
     return None
 
 
+def _reasoning(usage: dict[str, Any]) -> int:
+    """Сколько выходных токенов ушло на скрытые рассуждения (OpenRouter: completion_tokens_details)."""
+    d = usage.get("completion_tokens_details") or {}
+    try:
+        return int(d.get("reasoning_tokens") or usage.get("reasoning_tokens") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _citations(top: dict[str, Any], message: dict[str, Any]) -> list[str]:
     """Ссылки, которые вернул поиск: «citations» (Perplexity) и «annotations» с url_citation (поиск OpenRouter)."""
     out: list[str] = []
@@ -159,6 +168,8 @@ class Completion:
     max_tokens: int = 0  # с каким лимитом получен ответ (после возможных увеличений)
     cached_tokens: int = 0  # сколько входных токенов прочитано из кэша провайдера (дешевле)
     citations: list[str] = field(default_factory=list)  # ссылки, которые реально вернул поиск (не из текста модели)
+    reasoning_tokens: int = 0     # из выходных токенов — скрытые рассуждения модели (если провайдер сообщает)
+    reasoning_off: bool = False   # рассуждения пришлось выключить: модель тратила на них весь лимит
 
 
 class LLMClient(Protocol):
@@ -296,6 +307,7 @@ class OpenRouterClient:
             spent.completion_tokens += res["completion_tokens"]
             spent.cost += res["cost"]
             spent.citations = list(dict.fromkeys(spent.citations + res.get("citations", [])))
+            spent.reasoning_tokens += res.get("reasoning_tokens", 0)
             text, finish = res["text"], res["finish"]
             if not text.strip():
                 limit = payload["max_tokens"]
@@ -335,6 +347,8 @@ class OpenRouterClient:
                 max_tokens=payload["max_tokens"],
                 cached_tokens=spent.cached_tokens,
                 citations=spent.citations,
+                reasoning_tokens=spent.reasoning_tokens,
+                reasoning_off=payload.get("reasoning") == REASONING_OFF,
             )
         raise ProviderError(
             f"{model}: не удалось получить ответ после {self.max_retries + 1} попыток: {last_error}",
@@ -393,6 +407,7 @@ class OpenRouterClient:
             "finish": choice.get("finish_reason") or choice.get("native_finish_reason"),
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "cached_tokens": _cached(usage),
+            "reasoning_tokens": _reasoning(usage),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "cost": float(usage.get("cost") or 0.0),
             "model": data.get("model") or model,
@@ -451,6 +466,7 @@ class OpenRouterClient:
             "finish": finish,
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
             "cached_tokens": _cached(usage),
+            "reasoning_tokens": _reasoning(usage),
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "cost": float(usage.get("cost") or 0.0),
             "model": real_model,

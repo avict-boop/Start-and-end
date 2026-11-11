@@ -286,3 +286,17 @@ def test_thinking_budget_lets_model_answer():
 
     comp = asyncio.run(make(handler).complete("m", [], temperature=0, max_tokens=8000, reasoning_effort="low"))
     assert comp.text == "ответ" and bodies[1]["reasoning"] == {"max_tokens": 8000}
+
+
+def test_reasoning_tokens_and_reasoning_off_are_reported():
+    def handler(req):
+        b = json.loads(req.content)
+        if b.get("reasoning") == {"enabled": False}:
+            return httpx.Response(200, json={**ok_body("ответ"), "usage": {"completion_tokens": 50, "cost": 0.001}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                                         "usage": {"completion_tokens": 8000, "cost": 0.01,
+                                                   "completion_tokens_details": {"reasoning_tokens": 8000}}})
+
+    comp = asyncio.run(make(handler, retries=5).complete("deepseek/r", [], temperature=0, max_tokens=8000,
+                                                         reasoning_effort="low"))
+    assert comp.reasoning_off and comp.reasoning_tokens == 16000

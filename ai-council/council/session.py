@@ -66,6 +66,8 @@ class MemberStats:
     cost: float = 0.0
     failures: list[str] = field(default_factory=list)
     cached_tokens: int = 0  # входные токены, прочитанные из кэша провайдера
+    reasoning_tokens: int = 0  # из выходных — скрытые рассуждения (если провайдер сообщает)
+    reasoning_off: bool = False  # рассуждения выключались: модель тратила на них весь лимит ответа
 
 
 @dataclass
@@ -232,6 +234,11 @@ class Council:
         s.completion_tokens += comp.completion_tokens
         s.cached_tokens += getattr(comp, "cached_tokens", 0) or 0
         s.cost += comp.cost
+        s.reasoning_tokens += getattr(comp, "reasoning_tokens", 0) or 0
+        if getattr(comp, "reasoning_off", False) and not s.reasoning_off:
+            s.reasoning_off = True
+            self._emit("warning", stage="", member=member.name,
+                       text="модель тратила весь лимит на скрытые рассуждения — они выключены, отвечает без них")
         self.journal.cost(member.name, 1, comp.prompt_tokens, comp.completion_tokens,
                           getattr(comp, "cached_tokens", 0) or 0, comp.cost)
         self._emit("cost", member=member.name, total=self.total_cost)

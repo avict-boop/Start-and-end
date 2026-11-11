@@ -314,6 +314,17 @@ class View:
     GAP_WORD = {"unverified_memory": "только по памяти моделей", "no_public_data": "нет открытых данных",
                 "not_checked": "не проверено"}
 
+    @staticmethod
+    def think_note(s: dict) -> str:
+        """«рассуждения 12 000» / «рассуждения выключены» — для таблицы расходов."""
+        bits = []
+        rt = int((s or {}).get("reasoning_tokens") or 0)
+        if rt:
+            bits.append(f"рассуждения {rt:,}".replace(",", " "))
+        if (s or {}).get("reasoning_off"):
+            bits.append("рассуждения выключены")
+        return ", ".join(bits)
+
     @property
     def is_research(self) -> bool:
         return self.d.get("mode") == "research" and bool(self.d.get("research"))
