@@ -17,6 +17,7 @@ from typing import Any, Callable
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
+from pydantic import BaseModel
 
 from ..catalog import created, date, family, is_text_model, modalities, provider, sort_newest, upgrades
 from ..config import CouncilConfig
@@ -37,7 +38,27 @@ def _model_row(m: dict[str, Any]) -> dict[str, Any]:
             "completion": round(float(pr.get("completion") or 0) * 1e6, 3),
             "image": "image" in mod, "audio": "audio" in mod,
             "reasoning": bool(params & {"reasoning", "include_reasoning"}),
-            "max_out": (m.get("top_provider") or {}).get("max_completion_tokens")}
+            "max_out": (m.get("top_provider") or {}).get("max_completion_tokens"),
+            "desc": _short(m.get("description") or "")}
+
+
+class _SummaryReq(BaseModel):
+    model: str
+
+
+def _short(text: str, limit: int = 220) -> str:
+    """Первое предложение-два описания разработчика (для списков)."""
+    t = " ".join(str(text).split())
+    if len(t) <= limit:
+        return t
+    cut = t[:limit]
+    dot = cut.rfind(". ")
+    return (cut[:dot + 1] if dot > 80 else cut.rstrip() + "…")
+
+
+def _with_tags(row: dict[str, Any]) -> dict[str, Any]:
+    from ..model_notes import tags
+    return {**row, "tags": tags(row)}
 
 
 def created_of(models: list[dict[str, Any]], mid: str) -> int:
@@ -129,7 +150,7 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         if models is None:
             return {"available": False, "items": []}
         q = q.lower().strip()
-        items = [_model_row(m) for m in sort_newest(models) if is_text_model(m)
+        items = [_with_tags(_model_row(m)) for m in sort_newest(models) if is_text_model(m)
                  and (not q or q in m["id"].lower() or q in (m.get("name") or "").lower())]
         return {"available": True, "items": items[:max(1, min(limit, 2000))]}
 
@@ -144,11 +165,71 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         groups: dict[str, list[dict[str, Any]]] = {}
         for m in sort_newest(models):
             if is_text_model(m) and provider(m["id"]) == prov:
-                groups.setdefault(family(m["id"]), []).append(_model_row(m))
+                groups.setdefault(family(m["id"]), []).append(_with_tags(_model_row(m)))
         cur_fam = family(model)
         order = sorted(groups, key=lambda f: (f != cur_fam, -max(created_of(models, r["id"]) for r in groups[f]), f))
         return {"available": True, "provider": prov, "current": model,
                 "groups": [{"family": f.split("/", 1)[-1], "items": groups[f]} for f in order]}
+
+    history_cache: dict[str, Any] = {}
+
+    def model_history() -> dict[str, dict[str, Any]]:
+        """Ваша статистика по моделям; пересчитывается, только когда в архиве что-то изменилось."""
+        from ..archive import Archive
+        from ..model_notes import history
+        arc = Archive(runs_dir(base_config()))
+        stems = arc.stems()
+        key = f"{len(stems)}:{max((arc.path(s, 'json').stat().st_mtime for s in stems), default=0)}"
+        if history_cache.get("key") != key:
+            sessions = []
+            for s in stems:
+                try:
+                    sessions.append(arc.load(s))
+                except (KeyError, OSError, ValueError):
+                    continue
+            history_cache.update(key=key, data=history(sessions))
+        return history_cache["data"]
+
+    @app.get("/api/models/card")
+    async def model_card(model: str) -> dict[str, Any]:
+        """Всё о модели для выбора: метки, роли в совете, ваша история, описание разработчика и пересказ."""
+        from ..model_notes import history_for, load_cache, roles, tags
+        models = await catalog.get()
+        info = next((m for m in models or [] if m.get("id") == model), None)
+        row = _model_row(info) if info else {"id": model}
+        hist = history_for(await asyncio.to_thread(model_history), model)
+        return {"available": models is not None, "found": info is not None, "row": row,
+                "tags": tags(row) if info else [], "roles": roles(row) if info else [],
+                "history": hist, "description": (info or {}).get("description") or "",
+                "summary": load_cache(runs_dir(base_config())).get(model, "")}
+
+    @app.post("/api/models/card/summary")
+    async def model_summary(body: _SummaryReq) -> dict[str, Any]:
+        """Кратко по-русски по описанию разработчика (дешёвая модель, доли цента; запоминается)."""
+        from ..client import OpenRouterClient, ProviderError
+        from ..model_notes import load_cache, save_summary, summary_prompt
+        cfg = base_config()
+        cached = load_cache(runs_dir(cfg)).get(body.model)
+        if cached:
+            return {"summary": cached, "cached": True}
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            raise HTTPException(400, "нет OPENROUTER_API_KEY — пересказ недоступен в демо-режиме")
+        models = await catalog.get()
+        info = next((m for m in models or [] if m.get("id") == body.model), None)
+        if not info or not info.get("description"):
+            raise HTTPException(404, "у этой модели нет описания в каталоге OpenRouter")
+        client = OpenRouterClient(key, timeout=60, max_retries=1)
+        try:
+            comp = await client.complete(cfg.transcribe_model, [{"role": "user", "content": summary_prompt(
+                _model_row(info), info["description"])}], temperature=0.2, max_tokens=700)
+        except ProviderError as e:
+            raise HTTPException(502, f"не удалось получить пересказ: {e}") from e
+        finally:
+            await client.aclose()
+        text = comp.text.strip()
+        await asyncio.to_thread(save_summary, runs_dir(cfg), body.model, text)
+        return {"summary": text, "cached": False, "cost": comp.cost}
 
     @app.get("/api/models/upgrades")
     async def model_upgrades() -> dict[str, Any]:

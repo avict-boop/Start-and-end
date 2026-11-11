@@ -237,3 +237,28 @@ def test_pick_any_model_of_the_same_developer(web, monkeypatch):
     assert groups["deepseek-pro"] == ["deepseek/deepseek-v4-pro"] and not any("embed" in i for v in groups.values() for i in v)
     pro = r["groups"][1]["items"][0]
     assert pro["reasoning"] and pro["max_out"] == 64000 and pro["prompt"] == 0.5
+
+
+def test_model_notes_tags_roles_and_history():
+    from council.model_notes import history, roles, tags
+    pro = {"id": "deepseek/deepseek-v4-pro", "completion": 2.0, "reasoning": True, "context": 128000, "max_out": 64000}
+    flash = {"id": "deepseek/deepseek-v4.1-flash", "completion": 0.6, "reasoning": True, "context": 128000}
+    search = {"id": "perplexity/sonar-pro", "completion": 15, "context": 200000}
+    assert ["ok", "дешёвая"] in tags(flash) and ["plain", "облегчённая версия"] in tags(flash)
+    assert any("председатель" in r for r in roles(pro)) and not any("председатель:" in r for r in roles(flash))
+    assert any("проверка фактов" in r for r in roles(search)) and ["ok", "ищет в интернете"] in tags(search)
+    sessions = [{"transcript": [{"member": "ds", "model": "deepseek/deepseek-v4-pro"}],
+                 "stats": {"ds": {"cost": 0.2, "failures": ["x"], "reasoning_off": True}},
+                 "authors": {"A": "ds"}, "verdict": {"winner": "A"}, "tally": [{"label": "A", "avg_score": 7.5}]}]
+    h = history(sessions)["deepseek/deepseek-v4-pro"]
+    assert h["wins"] == 1 and h["win_rate"] == 1.0 and h["failures"] == 1 and h["reasoning_off"] == 1
+
+
+def test_model_card_api(web, monkeypatch):
+    c, _ = web
+    r = c.get("/api/models/card", params={"model": "anthropic/claude-sonnet-5"}).json()
+    assert r["found"] and r["tags"] and r["roles"] and r["history"] is None
+    assert c.get("/api/models/card", params={"model": "nope/x"}).json()["found"] is False
+    assert c.post("/api/models/card/summary", json={"model": "anthropic/claude-sonnet-5"}).status_code == 400  # нет ключа
+    items = c.get("/api/models?q=claude").json()["items"]
+    assert items[0]["tags"] and "desc" in items[0]

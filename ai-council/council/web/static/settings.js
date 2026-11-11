@@ -57,7 +57,46 @@ function modelInfo(id) {
   if (!SET.models || !SET.models.length) return "";
   const m = SET.models.find((x) => x.id === id);
   if (!m) return `<span class="bad-text">нет на OpenRouter</span>`;
-  return `${esc(m.date)} · $${m.prompt} / $${m.completion} за 1M${m.image ? " · 🖼" : ""}${m.audio ? " · 🎤" : ""}`;
+  return `${esc(m.date)} · $${m.prompt} / $${m.completion} за 1M${m.image ? " · 🖼" : ""}${m.audio ? " · 🎤" : ""}`
+    + `<div class="m-tags">${tagChips(m.tags)}<button type="button" class="link small" data-card="${esc(id)}">О модели…</button></div>`;
+}
+
+function tagChips(tags) {
+  return (tags || []).map(([k, t]) => `<span class="badge ${k === "plain" ? "plain" : k}">${esc(t)}</span>`).join("");
+}
+
+// карточка модели: метки, для каких ролей подходит, ваша история, описание разработчика и пересказ по-русски
+async function openModelCard(id) {
+  let c;
+  try { c = await api(`/api/models/card?model=${encodeURIComponent(id)}`); } catch (e) { toast(e.message); return; }
+  const r = c.row || {};
+  const k = (n) => (n == null ? "—" : n >= 1000 ? `${Math.round(n / 1000)} тыс.` : String(n));
+  const h = c.history;
+  const hist = h ? `<ul class="card-list"><li>заседаний: <b>${h.sessions}</b>${h.cost_per_session != null ? `, в среднем $${h.cost_per_session} за заседание` : ""}</li>
+      ${h.proposals ? `<li>вариант модели победил: <b>${h.wins} из ${h.proposals}</b>${h.win_rate != null ? ` (${Math.round(h.win_rate * 100)}%)` : ""}${h.avg_score != null ? `, средняя оценка критиков ${h.avg_score}` : ""}</li>` : ""}
+      <li>сбоев: <b>${h.failures}</b>${h.reasoning_off ? `; рассуждения пришлось выключать в ${h.reasoning_off} заседаниях` : ""}</li></ul>`
+    : '<p class="muted small">В ваших заседаниях эта модель ещё не участвовала.</p>';
+  const html = !c.found ? `<p class="bad-text">${c.available ? "Такой модели сейчас нет в каталоге OpenRouter." : "Каталог OpenRouter недоступен."}</p>${hist}` : `
+    <div class="m-tags">${tagChips(c.tags)}</div>
+    <p class="muted small">${esc(r.date)} · $${r.prompt} вход / $${r.completion} выход за 1M токенов · контекст ${k(r.context)}${r.max_out ? ` · ответ до ${k(r.max_out)}` : ""}</p>
+    <h4>Для чего подходит в совете</h4><ul class="card-list">${(c.roles || []).map((x) => `<li>${esc(x)}</li>`).join("")}</ul>
+    <p class="muted small">Подсказка по характеристикам модели, а не оценка её качества: качество лучше видно по вашей истории ниже.</p>
+    <h4>В ваших заседаниях</h4>${hist}
+    <h4>Описание разработчика</h4>
+    <div id="cardSummary">${c.summary ? `<p>${esc(c.summary)}</p><p class="muted small">Пересказ по описанию разработчика (сделан моделью).</p>` : ""}</div>
+    ${c.description && !c.summary ? '<button type="button" class="secondary small-btn" id="cardSum">Кратко по-русски</button> <span class="muted small">доли цента, запоминается</span>' : ""}
+    ${c.description ? `<details class="card-desc"><summary>Оригинальный текст (англ.)</summary><p>${esc(c.description)}</p></details>` : '<p class="muted small">Описания в каталоге нет.</p>'}`;
+  const done = ask({ title: id, html, ok: "Закрыть", cancel: null });
+  const btn = document.getElementById("cardSum");
+  if (btn) btn.addEventListener("click", async () => {
+    btn.disabled = true; btn.textContent = "Пересказываю…";
+    try {
+      const s = await api("/api/models/card/summary", { method: "POST", body: { model: id } });
+      document.getElementById("cardSummary").innerHTML = `<p>${esc(s.summary)}</p><p class="muted small">Пересказ по описанию разработчика (сделан моделью).</p>`;
+      btn.remove();
+    } catch (e) { btn.disabled = false; btn.textContent = "Кратко по-русски"; toast(e.message); }
+  });
+  await done;
 }
 
 function sel(id, options, value, attrs = "") {
@@ -215,6 +254,7 @@ function bindSettings() {
   on("sChairFollows", "change", (e) => { d.chair_follows_vote = e.target.checked; setDirty(); });
   on("checkUpgrades", "click", checkUpgrades);
   for (const b of $("setBody").querySelectorAll("[data-family]")) b.addEventListener("click", () => pickFromFamily(+b.dataset.family));
+  $("setBody").addEventListener("click", (e) => { const b = e.target.closest("[data-card]"); if (b) openModelCard(b.dataset.card); });
   const bindVal = (id, fn) => on(id, id.startsWith("f") && $(id) && $(id).type === "checkbox" ? "change" : "input", (e) => { fn(e.target); setDirty(); });
   bindVal("sMode", (t) => { d.mode = t.value; });
   bindVal("sRounds", (t) => { d.debate_rounds = num(t.value); });
@@ -308,7 +348,8 @@ async function pickFromFamily(i) {
   const k = (n) => (n == null ? "—" : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
   const row = (x) => `<li class="fam-item${x.id === m.model ? " cur" : ""}" data-text="${esc((x.id + " " + x.name).toLowerCase())}">
       <div class="fam-main"><code>${esc(x.id)}</code>${x.id === m.model ? ' <span class="badge plain">сейчас</span>' : ""}
-        <div class="muted small">${esc(x.date)} · $${x.prompt} / $${x.completion} за 1M · контекст ${k(x.context)}${x.max_out ? ` · ответ до ${k(x.max_out)}` : ""}${x.reasoning ? " · 🧠 рассуждения" : ""}${x.image ? " · 🖼" : ""}</div></div>
+        <div class="muted small">${esc(x.date)} · $${x.prompt} / $${x.completion} за 1M · контекст ${k(x.context)}${x.max_out ? ` · ответ до ${k(x.max_out)}` : ""}</div>
+        <div class="m-tags">${tagChips(x.tags)}</div>${x.desc ? `<div class="small fam-desc">${esc(x.desc)}</div>` : ""}</div>
       ${x.id === m.model ? "" : `<button type="button" class="secondary small-btn" data-pick="${esc(x.id)}">Выбрать</button>`}</li>`;
   const html = `<p class="muted small">Все модели <b>${esc(r.provider)}</b>, доступные сейчас на OpenRouter, по линейкам, новые сверху.
       🧠 — умеет рассуждать (глубину задайте в столбце «Глубина рассуждений»).</p>

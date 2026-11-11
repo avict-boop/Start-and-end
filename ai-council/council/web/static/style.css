@@ -737,3 +737,12 @@ a.brand:hover .brand-name { color: var(--accent); }
 .fam-main { min-width: 0; overflow-wrap: anywhere; }
 #famSearch { width: 100%; }
 .set-members .w-tok { width: 7.5rem; }
+
+/* описания моделей */
+.m-tags { display: flex; flex-wrap: wrap; gap: .25rem .3rem; align-items: center; margin-top: .25rem; }
+.m-tags .badge { font-size: .72rem; padding: .1rem .45rem; font-weight: 600; }
+.m-tags .badge::before { display: none; }
+.fam-desc { color: var(--muted); margin-top: .2rem; }
+.card-list { margin: .2rem 0 .4rem; padding-left: 1.1rem; }
+.card-desc summary { cursor: pointer; color: var(--muted); }
+.card-desc p { white-space: pre-wrap; font-size: .9rem; }
