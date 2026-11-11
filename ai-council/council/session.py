@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import random
 import re
 import string
@@ -12,6 +13,8 @@ from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable, TypeVar
 
 from pydantic import BaseModel
+
+log = logging.getLogger("council.session")
 
 from . import prompts
 from .checkpoint import Journal, call_key
@@ -161,6 +164,7 @@ class Council:
         vision: dict[str, bool | None] | None = None,
         journal: Journal | None = None,
         labels: dict[str, str] | None = None,
+        link_checker: Callable[[list[str]], Awaitable[dict[str, Any]]] | None = None,
     ) -> None:
         """labels — метки вариантов, как в прошлом прогоне («доделать» заседание из архива: ответы из стенограммы
         ссылаются на эти метки)."""
@@ -174,6 +178,7 @@ class Council:
         self.budget = config.max_cost_usd  # можно поднять на ходу: set_budget()
         self._budget_warned = False
         self.replayed = 0  # сколько ответов взято из журнала
+        self.link_checker = link_checker  # проверка ссылок реестра (в демо и тестах — нет)
         self._replaying = False
         self.forced_labels = dict(labels or {})
         self._seen: dict[tuple[str, str], int] = {}  # (этап, участник) -> сколько обращений уже было
@@ -988,6 +993,16 @@ class Council:
             selected = R.select_claims(proposals, critiques, rc.arbitration_claims)  # type: ignore[arg-type]
             if selected:
                 ledger = await self._arbitrate(R, refined, as_of, scope, selected, rc)
+        if ledger and ledger.get("evidence") and rc.link_check and self.link_checker:
+            # открываем каждую ссылку: мёртвая не подтверждает (бесплатно, модели не нужны)
+            try:
+                found = await self.link_checker([e["url"] for e in ledger["evidence"] if e.get("url")])
+            except Exception as e:  # noqa: BLE001 — проверка ссылок не должна ронять исследование
+                log.warning("проверка ссылок не удалась: %s", e)
+                found = {}
+            R.apply_links(ledger, found)
+            if ledger.get("links"):
+                self._emit("links", **ledger["links"])
         ledger_txt = R.ledger_text(ledger)
 
         # 4. Доработка по реестру и выжимкам чужих вариантов

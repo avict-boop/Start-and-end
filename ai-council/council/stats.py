@@ -1,6 +1,7 @@
 """Статистика по архиву заседаний: расходы, длительность, какие модели чаще побеждают и чаще сбоят."""
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from statistics import mean
@@ -20,7 +21,38 @@ def _month(d: dict[str, Any], stem: str) -> str:
         return f"{stem[:4]}-{stem[4:6]}" if stem[:6].isdigit() else "—"
 
 
-def compute(archive: Archive) -> dict[str, Any]:
+def _qkey(q: str) -> str:
+    """Один и тот же вопрос в разных режимах — для сравнения пилота."""
+    return re.sub(r"\s+", " ", str(q or "").lower()).strip()[:400]
+
+
+def research_metrics(stem: str, d: dict[str, Any], v: View, rating: dict[str, Any] | None) -> dict[str, Any]:
+    """Показатели одного заседания для таблицы пилота: что подтверждено, ссылки, покрытие, деньги, ваша оценка."""
+    led = (d.get("research") or {}).get("ledger") or {}
+    claims = led.get("claims") or []
+    st = Counter(c.get("status", "") for c in claims)
+    ev = led.get("evidence") or []
+    links = Counter(e.get("link") for e in ev if e.get("link"))
+    cover = Counter(str(r.get("status") or "") for r in v.coverage_rows) if v.is_research else Counter()
+    checked = sum(n for k, n in st.items() if k not in ("not_checked", ""))
+    return {
+        "id": stem, "title": v.title_text, "mode": d.get("mode", ""), "date": (d.get("started_at") or "")[:10],
+        "cost": round(v.cost, 4), "duration": float(d.get("duration_s") or 0),
+        "failures": sum(len((s or {}).get("failures") or []) for s in (d.get("stats") or {}).values()),
+        "claims": len(claims), "checked": checked, "confirmed": st.get("confirmed", 0), "refuted": st.get("refuted", 0),
+        "confirmed_share": round(st.get("confirmed", 0) / checked, 2) if checked else None,
+        "known": len(v.known) if v.is_research else None, "contested": len(v.contested) if v.is_research else None,
+        "unknown": len(v.unknown) if v.is_research else None,
+        "sources": len(ev), "links_checked": sum(links.values()), "links_ok": links.get("ok", 0),
+        "links_dead": links.get("dead", 0), "links_blocked": links.get("blocked", 0),
+        "subq": len(v.coverage_rows) if v.is_research else 0, "covered": cover.get("covered", 0),
+        "partial": cover.get("partial", 0),
+        "rating": (rating or {}).get("rating"), "note": (rating or {}).get("note", ""),
+    }
+
+
+def compute(archive: Archive, ratings: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+    ratings = ratings or {}
     sessions = []
     for stem in archive.stems():
         try:
@@ -40,6 +72,8 @@ def compute(archive: Archive) -> dict[str, Any]:
     chairs: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "sessions": 0, "decisions": 0, "overrides": 0, "fallbacks": 0, "agreement": [], "examples": []})
 
+    pilot: list[dict[str, Any]] = []
+    pilot_q: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for stem, d in sessions:
         v = View(d, stem)
         cost = v.cost
@@ -75,6 +109,8 @@ def compute(archive: Archive) -> dict[str, Any]:
             if e.get("member") in models and e.get("model"):
                 models[e["member"]]["model"][e["model"]] += 1
         _chair_stats(chairs, stem, d, v)
+        pilot.append(research_metrics(stem, d, v, ratings.get(stem)))
+        pilot_q[_qkey(d.get("question", ""))].append(pilot[-1])
 
     model_rows = []
     for name, st in models.items():
@@ -123,6 +159,11 @@ def compute(archive: Archive) -> dict[str, Any]:
         "models": model_rows,
         "chairs": chair_rows,
         "fact_check": fact,
+        # пилот: исследования и тот же вопрос в других режимах (рядом — чтобы сравнить)
+        "research": [r for r in pilot if r["mode"] == "research"][-30:],
+        "pairs": [{"title": rows[-1]["title"], "runs": rows} for rows in pilot_q.values()
+                  if len({r["mode"] for r in rows}) > 1 and any(r["mode"] == "research" for r in rows)][-15:],
+        "rated": sum(1 for r in pilot if r["rating"]),
     }
 
 

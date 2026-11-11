@@ -835,3 +835,16 @@ a.brand:hover .brand-name { color: var(--accent); }
   border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: .8rem; cursor: pointer; }
 .m-pick::after { content: ""; position: absolute; inset: -9px; }  /* палец попадает, хотя значок маленький */
 .m-pick:hover { color: var(--accent); border-color: var(--accent); }
+
+/* оценка пользы и таблица пилота */
+.rate-row { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .6rem; margin: .9rem 0 .2rem; }
+.stars { display: inline-flex; gap: .1rem; }
+.star { font: inherit; font-size: 1.35rem; line-height: 1; background: none; border: 0; padding: .15rem .2rem; min-height: 0;
+  color: var(--line-strong); cursor: pointer; }
+.star.on { color: #e3a008; }
+.star:hover { color: #e3a008; }
+.table.pilot td { vertical-align: top; }
+.stars-cell { color: #e3a008; white-space: nowrap; letter-spacing: .05em; }
+.pair-title { font-size: .95rem; margin: 1rem 0 .3rem; }
+.table.pilot .pilot-title { min-width: 15rem; max-width: 24rem; }
+.table.pilot th { white-space: nowrap; }

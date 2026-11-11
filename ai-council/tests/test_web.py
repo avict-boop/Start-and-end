@@ -292,3 +292,20 @@ def test_research_length_is_set_per_question_and_compact_ignored(client):
     assert req["research_words"] == 2200 and req["research_shorten"] is True and req["compact_proposals"] is False
     cfg = client.get("/api/config").json()["research"]
     assert cfg["words"] == 1400 and cfg["shorten"] is False  # общие настройки не изменились
+
+
+def test_rating_and_pilot_table(client):
+    q = "Рынок кофеен у вузов?"
+    ids = []
+    for mode in ("research", "debate"):
+        r = client.post("/api/sessions", json={"question": q, "mock": True, "mode": mode, "members": ["a", "b", "c"]})
+        ids.append(r.json()["id"])
+        assert read_events(client, ids[-1])[-1]["type"] == "done"
+    assert client.post(f"/api/sessions/{ids[0]}/rating", json={"rating": 4, "note": "полезно"}).json()["rating"]["rating"] == 4
+    assert client.get(f"/api/sessions/{ids[0]}/rating").json()["rating"]["rating"] == 4
+    assert client.post("/api/sessions/nope/rating", json={"rating": 3}).status_code == 404
+    s = client.get("/api/stats").json()
+    row = s["research"][0]
+    assert row["id"] == ids[0] and row["rating"] == 4 and row["checked"] > 0 and row["subq"] == 3
+    assert len(s["pairs"]) == 1 and {r["mode"] for r in s["pairs"][0]["runs"]} == {"research", "debate"}
+    assert client.post(f"/api/sessions/{ids[0]}/rating", json={"rating": 0}).json()["rating"] is None

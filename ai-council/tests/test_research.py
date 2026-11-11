@@ -288,3 +288,30 @@ def test_too_long_proposal_is_sent_back_when_enabled_and_length_is_per_session()
     assert all(n == 2 for n in Wordy.asks.values())  # каждого автора попросили сократить один раз
     assert all(len(p.summary.split()) < 600 for p in res.initial_proposals.values())
     assert not make_cfg(mode="research").research.shorten_long  # по умолчанию выключено
+
+
+def test_dead_links_do_not_confirm_and_are_reported():
+    from council.links import classify_code
+    assert [classify_code(c) for c in (200, 301, 404, 410, 403, 429, 500)] == ["ok", "ok", "dead", "dead", "blocked", "blocked", "error"]
+    checked = []
+
+    async def checker(urls):
+        checked.extend(urls)
+        return {u: {"status": "dead", "code": 404} for u in urls}  # все ссылки мёртвые
+
+    events = []
+    res = run(Council(make_cfg(mode="research"), MockClient(delay=0), seed=3, link_checker=checker,
+                      on_event=lambda e, **d: events.append((e, d))).run("Стоит ли открывать кофейню у вуза?"))
+    led = res.to_dict()["research"]["ledger"]
+    assert checked and all(e["link"] == "dead" for e in led["evidence"]) and led["links"]["dead"] == len(led["evidence"])
+    assert not any(c["status"] == "confirmed" for c in led["claims"])  # мёртвые ссылки ничего не подтверждают
+    assert any("не открываются" in " ".join(c.get("notes") or []) for c in led["claims"])
+    assert not res.verdict.known  # в «известно» опереться не на что
+    assert ("links", {"ok": 0, "dead": len(led["evidence"]), "blocked": 0, "error": 0}) in events
+
+
+def test_blocked_links_keep_confirmation():
+    led = {"evidence": [{"id": "E1", "url": "https://gov.example/a"}],
+           "claims": [{"id": "A-C1", "status": "confirmed", "evidence": ["E1"]}]}
+    R.apply_links(led, {"https://gov.example/a": {"status": "blocked", "code": 403}})
+    assert led["claims"][0]["status"] == "confirmed" and led["evidence"][0]["link"] == "blocked"

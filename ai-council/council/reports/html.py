@@ -546,6 +546,11 @@ def _sources(v: View) -> str:
         seen = {"page": "страница", "snippet": "фрагмент", "search_answer": "ответ поиска"}.get(e.get("material_seen", ""), "")
         flag = ('<div class="small" style="color:var(--bad)">нет в результатах поиска — не подтверждение</div>'
                 if e.get("search_returned") is False else "")
+        link = {"dead": ("var(--bad)", "ссылка не открывается — страница не найдена"),
+                "blocked": ("var(--muted)", "сайт не пускает автоматическую проверку"),
+                "error": ("var(--muted)", "ссылка не открылась при проверке")}.get(e.get("link", ""))
+        if link:
+            flag += f'<div class="small" style="color:{link[0]}">{link[1]}</div>'
         url = v.safe_url(e.get("url", ""))
         rows.append(f'<tr id="src-{_e(e["id"])}"><td><b>{_e(e["id"])}</b></td><td>{_e(e.get("title") or url)}'
                     f'<div class="small"><a href="{_e(url)}">{_e(url)}</a></div>'

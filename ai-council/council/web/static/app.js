@@ -13,6 +13,9 @@ const STAGES = [
   ["verdict", "Вердикт"],
 ];
 const ARB_STAGE = ["arbitration", "Арбитраж доказательств"];
+// проверка ссылок реестра: открывается ли страница
+const LINK_BADGE = { dead: ' <span class="badge bad">ссылка не открывается</span>', blocked: ' <span class="badge plain" title="Сайт не пускает автоматическую проверку — сама ссылка может быть верной">сайт не пускает проверку</span>',
+  error: ' <span class="badge plain">не открылась при проверке</span>' };
 const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения",
   factcheck: "Проверка фактов", arbitration: "Арбитраж доказательств" };
 // что происходит на этапе — простыми словами
@@ -1285,6 +1288,8 @@ function render(s) {
   $("sParent").hidden = !s.parent;
   if (s.parent) $("sParent").innerHTML = `↳ Уточнение к заседанию <a href="#/s/${encodeURIComponent(s.parent.id)}">${esc(s.parent.title || "…")}</a>`;
   $("nextActions").hidden = !s.done;
+  if (!s.done) $("rateRow").hidden = true;
+  else if (!s.rateLoaded) { s.rateLoaded = true; loadRating(s.id); }
   const title = shortTitle(s.question);
   $("sQuestion").textContent = title;
   const longQuery = !!s.question && s.question.trim() !== title;
@@ -1421,7 +1426,7 @@ function renderResearch(s) {
     h += `<details class="sources"><summary>Проверка утверждений и источники (${claims.length} утв., ${Object.keys(ev).length} источн.)</summary><ul class="claims">${claims.map((c) => {
       const [k, t] = CLAIM_BADGE[c.status] || CLAIM_BADGE.not_checked;
       return `<li><span class="badge ${k}">${t}</span> <span class="lbl">${esc(c.id)}</span> ${inline(c.text)} ${refs(c.evidence)}${(c.notes || []).length ? `<div class="muted small">${c.notes.map(inline).join(" · ")}</div>` : ""}</li>`;
-    }).join("")}</ul><ol class="srcs">${Object.values(ev).map((e) => `<li><b>${esc(e.id)}</b> <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title || e.url)}</a> <span class="muted small">${esc([e.publisher, e.date].filter(Boolean).join(", "))}${e.search_returned === false ? " · нет в результатах поиска" : ""}</span></li>`).join("")}</ol></details>`;
+    }).join("")}</ul><ol class="srcs">${Object.values(ev).map((e) => `<li><b>${esc(e.id)}</b> <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title || e.url)}</a> <span class="muted small">${esc([e.publisher, e.date].filter(Boolean).join(", "))}${e.search_returned === false ? " · нет в результатах поиска" : ""}</span>${LINK_BADGE[e.link] || ""}</li>`).join("")}</ol></details>`;
   }
   box.innerHTML = h;
 }
@@ -2093,9 +2098,60 @@ async function openStats() {
           (он обязан это обосновать). Изредка — нормально; часто — председатель своеволен, стоит сменить модель.
           Согласие — насколько одинаково модели ранжировали варианты (τ: 1 — полностью, 0 — никак).</p>` : ""}
       </div>
-    </div>`;
+    </div>
+    ${pilotHtml(d)}`;
 }
 $("statsBtn").addEventListener("click", async () => { await openStats(); markAllScroll($("statsBody")); });
+
+// пилот «исследование против обсуждения»: показатели исследований и тот же вопрос в разных режимах
+function pilotHtml(d) {
+  const rows = d.research || [];
+  if (!rows.length) return "";
+  const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
+  const stars = (r) => (r ? "★".repeat(r) + "☆".repeat(5 - r) : '<span class="muted">—</span>');
+  const links = (r) => (r.links_checked ? `${r.links_ok} из ${r.links_checked}${r.links_dead ? ` <span class="bad-text">· мёртвых ${r.links_dead}</span>` : ""}` : "—");
+  const runRow = (r) => `<tr>
+      <td class="pilot-title"><a href="#/s/${encodeURIComponent(r.id)}" title="${esc(r.title)}">${esc(shortTitle(r.title, 80))}</a><div class="muted small">${esc(r.date)} · ${esc(MODE_NAME[r.mode] || r.mode)}</div></td>
+      <td class="num">${r.checked ? `${r.confirmed} из ${r.checked}` : "—"}<div class="muted small">${pct(r.confirmed_share)}</div></td>
+      <td class="num">${r.known == null ? "—" : `${r.known} · ${r.contested} · ${r.unknown}`}</td>
+      <td class="num">${links(r)}</td>
+      <td class="num">${r.subq ? `${r.covered} из ${r.subq}${r.partial ? ` <span class="muted small">(+${r.partial} частично)</span>` : ""}` : "—"}</td>
+      <td class="num">${money(r.cost)}</td>
+      <td class="num" style="${r.failures ? "color:var(--bad)" : ""}">${r.failures}</td>
+      <td class="stars-cell" title="${esc(r.note || "")}">${stars(r.rating)}</td></tr>`;
+  const head = `<thead><tr><th>Заседание</th><th>Подтверждено</th><th>Известно · спорно · неизвестно</th><th>Живые ссылки</th>
+      <th>Подвопросы раскрыты</th><th>Цена</th><th>Сбои</th><th>Ваша оценка</th></tr></thead>`;
+  const pairs = (d.pairs || []).map((p) => `<h3 class="pair-title">${esc(p.title)}</h3>
+      <div class="table-wrap"><table class="table pilot">${head}<tbody>${p.runs.map(runRow).join("")}</tbody></table></div>`).join("");
+  return `<section class="pilot-sec"><h2 style="margin-top:1.4rem">Пилот: исследования</h2>
+    <p class="muted small">Подтверждено — сколько проверенных поиском утверждений источники подтвердили. Живые ссылки —
+      сколько ссылок реестра открылось при проверке. Оценку пользы ставьте под решением каждого заседания (★ 1–5):
+      по ней видно, окупается ли исследование.</p>
+    <div class="table-wrap"><table class="table pilot">${head}<tbody>${rows.slice().reverse().map(runRow).join("")}</tbody></table></div>
+    ${pairs ? `<h2 style="margin-top:1.2rem">Один вопрос — разные режимы</h2>
+      <p class="muted small">Заседания с тем же текстом вопроса в разных режимах — для прямого сравнения.</p>${pairs}`
+      : '<p class="muted small">Чтобы сравнить режимы, задайте тот же вопрос в «Подробном обсуждении» и в «Исследовании» — кнопка «Повторить» под решением.</p>'}</section>`;
+}
+
+// оценка пользы под решением
+async function loadRating(sid) {
+  const row = $("rateRow");
+  row.hidden = false;
+  let cur = null;
+  try { cur = (await api(`/api/sessions/${encodeURIComponent(sid)}/rating`)).rating; } catch { row.hidden = true; return; }
+  renderStars(sid, cur ? cur.rating : 0);
+}
+
+function renderStars(sid, value) {
+  $("rateStars").innerHTML = [1, 2, 3, 4, 5].map((n) => `<button type="button" class="star${n <= value ? " on" : ""}" role="radio"
+    aria-checked="${n === value}" aria-label="${n} из 5" data-rate="${n}">${n <= value ? "★" : "☆"}</button>`).join("");
+  $("rateNote").textContent = value ? "спасибо — учтено в «Статистике»" : "";
+  for (const b of $("rateStars").querySelectorAll("[data-rate]")) b.addEventListener("click", async () => {
+    const n = +b.dataset.rate === value ? 0 : +b.dataset.rate;  // повторное нажатие — убрать оценку
+    try { await api(`/api/sessions/${encodeURIComponent(sid)}/rating`, { method: "POST", body: { rating: n } }); renderStars(sid, n); }
+    catch (e) { toast(e.message); }
+  });
+}
 
 /* ------------------------------------------------------------ уведомления и заголовок вкладки */
 

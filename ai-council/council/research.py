@@ -829,6 +829,35 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
             "gaps": gaps[:10]}
 
 
+LINK_TEXT = {"ok": "открывается", "dead": "страница не найдена", "blocked": "сайт не пускает автоматическую проверку",
+             "error": "не удалось открыть"}
+
+
+def apply_links(ledger: dict[str, Any], results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Итог проверки ссылок — в реестр. Утверждение, подтверждённое только мёртвыми ссылками (404/410),
+    больше не «подтверждено»: опереться на него в «известно» нельзя."""
+    if not ledger or not results:
+        return ledger
+    counts = {"ok": 0, "dead": 0, "blocked": 0, "error": 0}
+    by_id = {}
+    for e in ledger.get("evidence", []):
+        r = results.get(e.get("url", ""))
+        if not r:
+            continue
+        e["link"] = r["status"]
+        if r.get("code"):
+            e["link_code"] = r["code"]
+        counts[r["status"]] = counts.get(r["status"], 0) + 1
+        by_id[e["id"]] = r["status"]
+    for c in ledger.get("claims", []):
+        ev = [i for i in c.get("evidence") or [] if i in by_id]
+        if c.get("status") == "confirmed" and ev and all(by_id[i] == "dead" for i in ev):
+            c["status"] = "unclear"
+            c.setdefault("notes", []).append("ссылки на источники не открываются (страница не найдена)")
+    ledger["links"] = counts
+    return ledger
+
+
 def ledger_text(ledger: dict[str, Any] | None) -> str:
     if not ledger or not ledger.get("claims"):
         return ""
@@ -843,6 +872,8 @@ def ledger_text(ledger: dict[str, Any] | None) -> str:
             meta = ", ".join(x for x in (e.get("publisher"), e.get("date"), e.get("source_type"),
                                          f"seen: {e.get('material_seen')}") if x)
             flag = "" if e.get("search_returned") is not False else " (NOT among search results — treat as unverified)"
+            if e.get("link") == "dead":
+                flag += " (LINK IS DEAD: page not found — do not rely on it)"
             lines.append(f"- {e['id']}: {e['url']} — {e.get('title') or ''} ({meta}){flag}")
     if ledger.get("gaps"):
         lines.append("Unresolved by search: " + "; ".join(to_text(g.get("question") or g) for g in ledger["gaps"][:6]))

@@ -26,6 +26,7 @@ from ..attachments import (MAX_FILE_BYTES, MAX_FILES, Attachment, AttachmentErro
                            load_attachment, merge)
 from ..report import make_stem, save
 from ..reports.brand import set_brand
+from ..links import check_links
 from ..checkpoint import Checkpoint, Journal, classify
 from ..session import Council, CouncilError, SessionResult
 from .api import TelegramAPI, TelegramError
@@ -1074,7 +1075,8 @@ class CouncilBot:
                     atts = await asyncio.to_thread(cp.attachments)
                     journal = await asyncio.to_thread(Journal, cp.journal_path)
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
-                                      seed=sp.get("seed"), journal=journal, labels=sp.get("labels"))
+                                      seed=sp.get("seed"), journal=journal, labels=sp.get("labels"),
+                                      link_checker=None if sp.get("mock") else check_links)
                     council_ref["c"] = council
                     r = self.running.get(chat_id)
                     if r:

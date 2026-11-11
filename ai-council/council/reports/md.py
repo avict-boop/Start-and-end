@@ -171,6 +171,8 @@ def _sources(v: View, full: bool) -> list[str]:
     for e in v.evidence:
         meta = ", ".join(x for x in (e.get("publisher"), e.get("date")) if x)
         flag = " — ⚠ нет в результатах поиска" if e.get("search_returned") is False else ""
+        flag += {"dead": " — ⚠ ссылка не открывается (страница не найдена)", "blocked": " — сайт не пускает автоматическую проверку",
+                 "error": " — ссылка не открылась при проверке"}.get(e.get("link", ""), "")
         out.append(f"- **{e['id']}** [{e.get('title') or e['url']}](<{e['url']}>)" + (f" — {meta}" if meta else "")
                    + f" · утверждения: {', '.join(e.get('claims') or [])}{flag}")
     out.append("")

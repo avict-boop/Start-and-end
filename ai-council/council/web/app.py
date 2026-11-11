@@ -29,6 +29,7 @@ from ..attachments import (ACCEPT, MAX_FILE_BYTES, MAX_FILES, AttachmentError, a
                            limit_total, load_attachment, merge, safe_name)
 from ..report import make_stem, save
 from ..reports.brand import set_brand
+from ..links import check_links
 from ..checkpoint import Checkpoint, Journal, classify
 from ..session import Council, CouncilError
 from .auth import BasicAuth
@@ -116,6 +117,11 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
     ev.append({"type": "done", "id": session_id, "total_cost": d.get("total_cost_usd", 0),
                "duration_s": d.get("duration_s"), "stats": d.get("stats", {})})
     return ev
+
+
+class RatingRequest(BaseModel):
+    rating: int = Field(ge=0, le=5)
+    note: str = ""
 
 
 class RunRequest(BaseModel):
@@ -362,8 +368,23 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 
     @app.get("/api/stats")
     async def stats() -> dict[str, Any]:
+        from ..ratings import load
         from ..stats import compute
-        return await asyncio.to_thread(compute, archive())
+        return await asyncio.to_thread(lambda: compute(archive(), load(runs_dir(base_config()))))
+
+    @app.get("/api/sessions/{sid}/rating")
+    async def get_rating(sid: str) -> dict[str, Any]:
+        from ..ratings import load
+        return {"rating": (await asyncio.to_thread(load, runs_dir(base_config()))).get(sid)}
+
+    @app.post("/api/sessions/{sid}/rating")
+    async def set_rating(sid: str, body: RatingRequest) -> dict[str, Any]:
+        """Ваша оценка пользы заседания (1–5) — для пилота; 0 — убрать оценку."""
+        from ..ratings import save
+        if not archive().exists(sid):
+            raise HTTPException(404, "заседание не найдено")
+        item = await asyncio.to_thread(save, runs_dir(base_config()), sid, body.rating or None, body.note)
+        return {"rating": item}
 
     @app.get("/api/sessions/{sid}/request")
     async def session_request(sid: str) -> dict[str, Any]:
@@ -617,7 +638,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     atts = await asyncio.to_thread(cp.attachments)
                     journal = await asyncio.to_thread(Journal, cp.journal_path)
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
-                                      seed=sp.get("seed"), journal=journal, labels=sp.get("labels"))
+                                      seed=sp.get("seed"), journal=journal, labels=sp.get("labels"),
+                                      link_checker=None if sp.get("mock") else check_links)
                     st.council = council
                     if journal.replayable or journal.loose:
                         st.push({"type": "resumed", "replayable": journal.replayable or len(journal.loose),

@@ -975,6 +975,10 @@ class _Report:
                 _small(cc.add_paragraph(), meta, size=8)
             if e.get("search_returned") is False:
                 _small(cc.add_paragraph(), "нет в результатах поиска — не подтверждение", size=8)
+            link = {"dead": "ссылка не открывается — страница не найдена", "blocked": "сайт не пускает автоматическую проверку",
+                    "error": "ссылка не открылась при проверке"}.get(e.get("link", ""))
+            if link:
+                _small(cc.add_paragraph(), link, size=8)
             _cell_text(t.cell(n, 2), ", ".join(e.get("claims") or []))
         self.doc.add_paragraph().paragraph_format.space_after = Pt(0)
         if full and v.checked_claims:
