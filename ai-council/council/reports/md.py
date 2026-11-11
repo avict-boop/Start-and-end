@@ -112,6 +112,78 @@ def _ideas(v: View) -> list[str]:
     return out + [""]
 
 
+def _erefs(v: View, ids: list[str]) -> str:
+    by = v.evidence_by_id
+    return " ".join("DOC" if i == "DOC" else f"[{i}](<{by[i]['url']}>)" for i in ids if i == "DOC" or i in by)
+
+
+def _kcu(v: View) -> list[str]:
+    if not v.is_research:
+        return []
+    out = ["## Что известно, что спорно, чего не знает никто", "",
+           "*«Известно» — только подтверждённое найденными источниками или вашими документами; согласие моделей и "
+           "цифры «из памяти» сюда не попадают.*", "", "### ✓ Известно", ""]
+    if v.known:
+        out += ["| Утверждение | Рамки | Источники |", "|---|---|---|"]
+        out += [f"| {_cell(k.get('statement', ''))}{' *(быстро меняется)*' if k.get('volatility') == 'changes_fast' else ''} "
+                f"| {_cell(k.get('scope', ''))} | {_erefs(v, k.get('evidence_ids') or [])} |" for k in v.known]
+    else:
+        out.append("*Подтверждённых источниками утверждений нет.*")
+    out.append("")
+    if v.contested:
+        out += ["### ⇄ Спорно", ""]
+        for c in v.contested:
+            out.append(f"- **{c.get('issue', '')}**")
+            out += [f"  - {p}" for p in c.get("positions") or []]
+            if c.get("why_they_differ"):
+                out.append(f"  - *почему расходятся:* {c['why_they_differ']}")
+            if c.get("what_would_resolve"):
+                out.append(f"  - *что решило бы спор:* {c['what_would_resolve']}")
+            refs = _erefs(v, c.get("evidence_ids") or [])
+            if refs:
+                out.append(f"  - источники: {refs}")
+        out.append("")
+    if v.unknown:
+        out += ["### ? Неизвестно", "", "| Чего не знаем | Почему | Как узнать |", "|---|---|---|"]
+        out += [f"| {_cell(u.get('gap', ''))} | {_cell(v.GAP_WORD.get(u.get('reason', ''), u.get('reason', '')))} | {_cell(u.get('how_to_check', ''))} |"
+                for u in v.unknown]
+        out.append("")
+    for key, title in (("what_would_change", "Что изменило бы выводы"), ("next_questions", "Что исследовать дальше")):
+        items = v.verdict.get(key) or []
+        if items:
+            out += [f"### {title}", "", *[f"- {x}" for x in items], ""]
+    if v.subquestions:
+        out += ["## Рамки и подвопросы", ""]
+        if v.scope_line:
+            out += [f"**Рамки:** {v.scope_line}", ""]
+        out += ["| Подвопрос | В итоге | Каркас раздела |", "|---|---|---|"]
+        for r in v.coverage_rows:
+            out.append(f"| {r['id']}. {_cell(r['text'])} | {v.COVER_WORD.get(r['status'], r['status'] or '—')} | "
+                       f"{r['backbone'] or '—'} |")
+        out.append("")
+    return out
+
+
+def _sources(v: View, full: bool) -> list[str]:
+    if not v.is_research or not v.evidence:
+        return []
+    out = ["## Источники", "", f"*{v.ledger.get('model', '')}, арбитраж доказательств — {v.ledger_line}*", ""]
+    for e in v.evidence:
+        meta = ", ".join(x for x in (e.get("publisher"), e.get("date")) if x)
+        flag = " — ⚠ нет в результатах поиска" if e.get("search_returned") is False else ""
+        out.append(f"- **{e['id']}** [{e.get('title') or e['url']}](<{e['url']}>)" + (f" — {meta}" if meta else "")
+                   + f" · утверждения: {', '.join(e.get('claims') or [])}{flag}")
+    out.append("")
+    if full and v.checked_claims:
+        out += ["## Проверка утверждений", "", "| № | Утверждение | Статус | Источники |", "|---|---|---|---|"]
+        for c in v.checked_claims:
+            st = c.get("status", "not_checked")
+            out.append(f"| {c.get('id', '')} | {_cell(c.get('text', ''))} | {v.CLAIM_SIGN.get(st, '')} "
+                       f"{v.CLAIM_WORD.get(st, st)} | {_erefs(v, c.get('evidence') or [])} |")
+        out.append("")
+    return out
+
+
 def _facts(v: View) -> list[str]:
     if not v.fact_check:
         return []
@@ -178,8 +250,9 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
     v = view
     w = v.winner
     out = _head(v, "summary" if summary else "full") + _keyfacts(v)
-    out += ["## Решение совета", "", *_callouts(v), demote(v.verdict.get("final_answer", ""), 3), ""]
-    out += _rationale(v) + _ideas(v) + _facts(v)
+    out += [f"## {'Итог исследования' if v.is_research else 'Решение совета'}", "", *_callouts(v),
+            demote(v.verdict.get("final_answer", ""), 3), ""]
+    out += _kcu(v) + _rationale(v) + _ideas(v) + _sources(v, full=not summary) + _facts(v)
     if summary:
         out += _request(v, True)
         out += ["---", "*Это краткая версия: решение и его обоснование. Полный отчёт с вариантами всех моделей, "

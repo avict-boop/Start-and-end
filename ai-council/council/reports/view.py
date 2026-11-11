@@ -13,9 +13,9 @@ from typing import Any
 
 import markdown as _markdown
 
-MODE_NAME = {"debate": "Дебаты", "quick": "Быстрый", "evaluate": "Оценка вариантов"}
+MODE_NAME = {"debate": "Дебаты", "quick": "Быстрый", "evaluate": "Оценка вариантов", "research": "Исследование"}
 STAGE_NAME = {"framing": "Постановка", "proposal": "Предложения", "critique": "Критика",
-              "revision": "Доработка", "vote": "Голосование", "verdict": "Вердикт"}
+              "revision": "Доработка", "vote": "Голосование", "verdict": "Вердикт", "arbitration": "Арбитраж доказательств"}
 
 
 @dataclass
@@ -302,6 +302,112 @@ class View:
         n = len(ideas)
         word = "идея" if n % 10 == 1 and n % 100 != 11 else ("идеи" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "идей")
         return f"{n} {word}: " + ", ".join(parts)
+
+    # ------------------------------------------------------------ режим «Исследование»
+    CLAIM_WORD = {"confirmed": "Подтверждено", "refuted": "Опровергнуто", "contested_in_sources": "Спорно в источниках",
+                  "unclear": "Не удалось проверить", "user_doc": "Из документов пользователя",
+                  "search_unavailable": "Поиск недоступен", "not_checked": "Не проверялось"}
+    CLAIM_SIGN = {"confirmed": "✓", "refuted": "✗", "contested_in_sources": "⇄", "unclear": "?", "user_doc": "📄",
+                  "search_unavailable": "—", "not_checked": "—"}
+    BASIS_WORD = {"memory": "из памяти модели", "calc": "расчёт", "user_doc": "из документов", "search_reported": "из поиска"}
+    COVER_WORD = {"covered": "раскрыт", "partial": "частично", "unknown": "без ответа"}
+    GAP_WORD = {"unverified_memory": "только по памяти моделей", "no_public_data": "нет открытых данных",
+                "not_checked": "не проверено"}
+
+    @property
+    def is_research(self) -> bool:
+        return self.d.get("mode") == "research" and bool(self.d.get("research"))
+
+    @property
+    def research(self) -> dict[str, Any]:
+        return dict(self.d.get("research") or {})
+
+    @property
+    def subquestions(self) -> list[str]:
+        return list(self.research.get("subquestions") or [])
+
+    @property
+    def scope_line(self) -> str:
+        r = self.research
+        bits = [r.get("scope") or ""]
+        if r.get("as_of"):
+            bits.append(f"актуально на {r['as_of']}")
+        return " · ".join(b for b in bits if b)
+
+    @property
+    def ledger(self) -> dict[str, Any]:
+        return dict(self.research.get("ledger") or {})
+
+    @property
+    def evidence(self) -> list[dict[str, Any]]:
+        return [e for e in self.ledger.get("evidence") or [] if self.safe_url(e.get("url", ""))]
+
+    @property
+    def evidence_by_id(self) -> dict[str, dict[str, Any]]:
+        return {e["id"]: e for e in self.evidence}
+
+    @property
+    def checked_claims(self) -> list[dict[str, Any]]:
+        return list(self.ledger.get("claims") or [])
+
+    @property
+    def claim_counts(self) -> dict[str, int]:
+        c: dict[str, int] = {}
+        for x in self.checked_claims:
+            c[x.get("status", "not_checked")] = c.get(x.get("status", "not_checked"), 0) + 1
+        return c
+
+    @property
+    def ledger_line(self) -> str:
+        """«проверено 10 утверждений: ✓ 4 · ⇄ 2 · ? 4; источников 12» или пусто."""
+        claims = self.checked_claims
+        if not claims:
+            return ""
+        c = self.claim_counts
+        parts = [f"{self.CLAIM_SIGN[k]} {c[k]}" for k in self.CLAIM_WORD if c.get(k)]
+        return (f"проверено {len(claims)} {_plural(len(claims), 'утверждение', 'утверждения', 'утверждений')}: "
+                + " · ".join(parts) + f"; источников {len(self.evidence)}")
+
+    def research_list(self, key: str) -> list[dict[str, Any]]:
+        return [x for x in (self.verdict.get(key) or []) if isinstance(x, dict)]
+
+    @property
+    def known(self) -> list[dict[str, Any]]:
+        return self.research_list("known")
+
+    @property
+    def contested(self) -> list[dict[str, Any]]:
+        return self.research_list("contested")
+
+    @property
+    def unknown(self) -> list[dict[str, Any]]:
+        return self.research_list("unknown")
+
+    @property
+    def coverage_rows(self) -> list[dict[str, Any]]:
+        """Подвопросы: текст, статус в итоге, каркас (лидер голосования по подвопросу)."""
+        audit = {x.get("subquestion_id"): x for x in self.research_list("coverage_audit")}
+        sections = self.research.get("sections") or {}
+        backbone = self.verdict.get("section_backbone") or {}
+        rows = []
+        for i, q in enumerate(self.subquestions, 1):
+            qid = f"Q{i}"
+            a = audit.get(qid) or {}
+            sec = sections.get(qid) or {}
+            rows.append({"id": qid, "text": q, "status": a.get("status", ""), "note": a.get("note", ""),
+                         "backbone": backbone.get(qid) or sec.get("leader", ""), "counts": sec.get("counts") or {}})
+        return rows
+
+    def evidence_refs(self, ids: list[str]) -> list[dict[str, Any]]:
+        by = self.evidence_by_id
+        return [by[i] for i in ids if i in by]
+
+    @property
+    def kcu_line(self) -> str:
+        """«известно 3 · спорно 2 · неизвестно 4»."""
+        if not self.is_research:
+            return ""
+        return f"известно {len(self.known)} · спорно {len(self.contested)} · неизвестно {len(self.unknown)}"
 
     @property
     def fact_check(self) -> dict[str, dict]:
@@ -728,3 +834,11 @@ def md_to_html(text: str, *, breaks: bool = False) -> str:
     md.inlinePatterns.deregister("html")
     src, store = _protect(normalize_md(text))
     return _TABLE_HTML.sub(_wrap_table, _restore(md.convert(src), store))
+
+
+def _plural(n: int, one: str, few: str, many: str) -> str:
+    n = abs(n) % 100
+    if 11 <= n <= 19:
+        return many
+    n %= 10
+    return one if n == 1 else few if 2 <= n <= 4 else many

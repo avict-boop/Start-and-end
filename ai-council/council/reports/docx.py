@@ -824,11 +824,19 @@ class _Report:
 
     def toc(self) -> None:
         v = self.v
-        entries = [("Решение совета", "verdict", 1)]
+        entries = [("Итог исследования" if v.is_research else "Решение совета", "verdict", 1)]
+        if v.is_research:
+            entries.append(("Известно, спорно, неизвестно", "kcu", 1))
+            if v.subquestions:
+                entries.append(("Рамки и подвопросы", "scope", 1))
         if any(v.verdict.get(k) for k in ("why", "risks", "dissent")):
             entries.append(("Обоснование", "why", 1))
         if v.ideas:
             entries.append(("Что взято из других вариантов", "ideas", 1))
+        if v.is_research and v.evidence:
+            entries.append(("Источники", "sources", 1))
+        if v.is_research and v.checked_claims:
+            entries.append(("Проверка утверждений", "claims", 1))
         if v.fact_check:
             entries.append(("Проверка фактов", "facts", 1))
         if v.tally or v.ballots:
@@ -846,7 +854,7 @@ class _Report:
         h = self.h("", 1, "verdict")
         r = h.add_run("◆  ")
         r.font.color.rgb = RGBColor.from_string(self.theme["dec"])
-        h.add_run("Решение совета")
+        h.add_run("Итог исследования" if v.is_research else "Решение совета")
         if v.tie_line:
             self.callout("Ничья за первое место", v.tie_line)
         if v.deviation_line:
@@ -873,6 +881,118 @@ class _Report:
         if vd.get("dissent"):
             self.h("Особые мнения", 2)
             self.bullets(vd["dissent"])
+
+    # ---------------------------------------------------------- режим «Исследование»
+    def _erefs(self, par, ids: list[str]) -> None:
+        by = self.v.evidence_by_id
+        first = True
+        for i in ids:
+            if i != "DOC" and i not in by:
+                continue
+            if not first:
+                par.add_run(" ")
+            first = False
+            if i == "DOC":
+                _small(par, "DOC", size=8.5)
+            else:
+                _hyperlink(par, f"[{i}]", by[i]["url"])
+
+    def kcu(self) -> None:
+        v = self.v
+        if not v.is_research:
+            return
+        self.h("Что известно, что спорно, чего не знает никто", 1, "kcu")
+        self.meta("«Известно» — только подтверждённое найденными источниками или вашими документами; согласие "
+                  "моделей и цифры «из памяти» сюда не попадают.")
+        self.h("✓ Известно", 2)
+        if v.known:
+            t = _table(self.doc, len(v.known) + 1, 3, widths=[10.0, 4.0, 3.0])
+            for c, text in enumerate(("Утверждение", "Рамки", "Источники")):
+                _cell_text(t.cell(0, c), text)
+            for n, k in enumerate(v.known, 1):
+                inline_markdown(t.cell(n, 0).paragraphs[0], k.get("statement", ""))
+                if k.get("volatility") == "changes_fast":
+                    _small(t.cell(n, 0).add_paragraph(), "быстро меняется — проверьте дату", size=8)
+                _cell_text(t.cell(n, 1), k.get("scope", ""))
+                self._erefs(t.cell(n, 2).paragraphs[0], k.get("evidence_ids") or [])
+            self.doc.add_paragraph().paragraph_format.space_after = Pt(0)
+        else:
+            self.meta("Подтверждённых источниками утверждений нет.")
+        if v.contested:
+            self.h("⇄ Спорно", 2)
+            for c in v.contested:
+                bits = [f"Позиции: {'; '.join(c.get('positions') or [])}" if c.get("positions") else "",
+                        f"Почему расходятся: {c['why_they_differ']}" if c.get("why_they_differ") else "",
+                        f"Что решило бы спор: {c['what_would_resolve']}" if c.get("what_would_resolve") else "",
+                        "Источники: " + ", ".join(c.get("evidence_ids") or []) if c.get("evidence_ids") else ""]
+                self.callout(c.get("issue", ""), "\n".join(b for b in bits if b))
+        if v.unknown:
+            self.h("? Неизвестно", 2)
+            t = _table(self.doc, len(v.unknown) + 1, 3, widths=[8.0, 4.0, 5.0])
+            for c, text in enumerate(("Чего не знаем", "Почему", "Как узнать")):
+                _cell_text(t.cell(0, c), text)
+            for n, u in enumerate(v.unknown, 1):
+                inline_markdown(t.cell(n, 0).paragraphs[0], u.get("gap", ""))
+                _cell_text(t.cell(n, 1), v.GAP_WORD.get(u.get("reason", ""), u.get("reason", "")))
+                inline_markdown(t.cell(n, 2).paragraphs[0], u.get("how_to_check", ""))
+            self.doc.add_paragraph().paragraph_format.space_after = Pt(0)
+        for key, title in (("what_would_change", "Что изменило бы выводы"), ("next_questions", "Что исследовать дальше")):
+            items = v.verdict.get(key) or []
+            if items:
+                self.h(title, 2)
+                self.bullets(items)
+        if v.subquestions:
+            self.h("Рамки и подвопросы", 1, "scope")
+            if v.scope_line:
+                self.meta(f"Рамки: {v.scope_line}")
+            rows = v.coverage_rows
+            t = _table(self.doc, len(rows) + 1, 3, widths=[10.0, 3.5, 3.5])
+            for c, text in enumerate(("Подвопрос", "В итоге", "Каркас раздела")):
+                _cell_text(t.cell(0, c), text)
+            for n, r in enumerate(rows, 1):
+                inline_markdown(t.cell(n, 0).paragraphs[0], f"**{r['id']}.** {r['text']}")
+                _cell_text(t.cell(n, 1), v.COVER_WORD.get(r["status"], r["status"] or "—"), bold=True,
+                           color={"covered": OK, "partial": WARN, "unknown": BAD}.get(r["status"], MUTED))
+                _cell_text(t.cell(n, 2), r["backbone"] or "—")
+            self.doc.add_paragraph().paragraph_format.space_after = Pt(0)
+
+    def sources(self, full: bool) -> None:
+        v = self.v
+        if not v.is_research or not v.evidence:
+            return
+        self.h("Источники", 1, "sources")
+        self.meta(f"Нашла поисковая модель ({v.ledger.get('model', '')}) на этапе арбитража доказательств — {v.ledger_line}.")
+        t = _table(self.doc, len(v.evidence) + 1, 3, widths=[1.4, 11.6, 4.0])
+        for c, text in enumerate(("№", "Источник", "Утверждения")):
+            _cell_text(t.cell(0, c), text)
+        for n, e in enumerate(v.evidence, 1):
+            _cell_text(t.cell(n, 0), e["id"], bold=True)
+            cc = t.cell(n, 1)
+            inline_markdown(cc.paragraphs[0], e.get("title") or e["url"])
+            _hyperlink(cc.add_paragraph(), e["url"], e["url"])
+            meta = ", ".join(x for x in (e.get("publisher"), e.get("date")) if x)
+            if meta:
+                _small(cc.add_paragraph(), meta, size=8)
+            if e.get("search_returned") is False:
+                _small(cc.add_paragraph(), "нет в результатах поиска — не подтверждение", size=8)
+            _cell_text(t.cell(n, 2), ", ".join(e.get("claims") or []))
+        self.doc.add_paragraph().paragraph_format.space_after = Pt(0)
+        if full and v.checked_claims:
+            self.h("Проверка утверждений", 1, "claims")
+            claims = v.checked_claims
+            t = _table(self.doc, len(claims) + 1, 3, widths=[1.8, 11.2, 4.0])
+            for c, text in enumerate(("№", "Утверждение", "Статус")):
+                _cell_text(t.cell(0, c), text)
+            for n, c in enumerate(claims, 1):
+                st = c.get("status", "not_checked")
+                _cell_text(t.cell(n, 0), c.get("id", ""), bold=True)
+                inline_markdown(t.cell(n, 1).paragraphs[0], c.get("text", ""))
+                for note in c.get("notes") or []:
+                    _small(t.cell(n, 1).add_paragraph(), note, size=8)
+                _cell_text(t.cell(n, 2), f"{v.CLAIM_SIGN.get(st, '')} {v.CLAIM_WORD.get(st, st)}", bold=True,
+                           color={"confirmed": OK, "refuted": BAD, "contested_in_sources": WARN}.get(st, MUTED))
+                self._erefs(t.cell(n, 2).add_paragraph(), c.get("evidence") or [])
+            self.doc.add_paragraph().paragraph_format.space_after = Pt(0)
 
     def ideas(self) -> None:
         v = self.v
@@ -1282,8 +1402,10 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
     if not summary:
         rep.toc()
     rep.decision()
+    rep.kcu()
     rep.rationale()
     rep.ideas()
+    rep.sources(full=not summary)
     rep.facts()
     if summary:
         rep.request(images=False)

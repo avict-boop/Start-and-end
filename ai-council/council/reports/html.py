@@ -92,7 +92,8 @@ h2 { font-size: 13pt; line-height: 1.3; font-weight: 700; letter-spacing: -.01em
 h2.first { border-top: 0; padding-top: 0; margin-top: 10pt; }
 h3 { font-size: 10.6pt; font-weight: 700; margin: 13pt 0 5pt; bookmark-level: 2; break-after: avoid; }
 h4 { font-size: 9.6pt; font-weight: 700; margin: 9pt 0 3pt; bookmark-level: none; break-after: avoid; color: #2c3852; }
-#ideas > p, #facts > p { break-after: avoid; }
+#ideas > p, #facts > p, #kcu > p, #scope > p, #sources > p, #claims > p { break-after: avoid; }
+#kcu h3, #kcu .callout, #scope tr, #sources tr, #claims tr { break-inside: avoid; }
 #ideas tr { break-inside: avoid; }
 .decision h2 .mark, .dec-mark { display: inline-block; width: 7.5pt; height: 7.5pt; background: var(--dec); transform: rotate(45deg);
   border-radius: 1.2pt; margin: 0 8pt 1.5pt 2pt; vertical-align: middle; }
@@ -415,7 +416,7 @@ def _callouts(v: View) -> str:
 
 def _decision(v: View, *, first: bool = True) -> str:
     vd = v.verdict
-    return (f'<section class="decision" id="verdict"><h2 class="{"first" if first else ""}"><span class="mark"></span>Решение совета</h2>'
+    return (f'<section class="decision" id="verdict"><h2 class="{"first" if first else ""}"><span class="mark"></span>{"Итог исследования" if v.is_research else "Решение совета"}</h2>'
             f'{_callouts(v)}<div class="answer md">{md_to_html(vd.get("final_answer", ""))}</div></section>')
 
 
@@ -455,6 +456,124 @@ def _ideas(v: View) -> str:
             f'Итого — {_e(v.ideas_line)}.</p>'
             '<table><thead><tr><th style="width:17%">Решение</th><th style="width:43%">Идея</th>'
             '<th>Как использована или почему отклонена</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table></section>")
+
+
+# ------------------------------------------------------------------ режим «Исследование»
+
+CLAIM_COLOR = {"confirmed": "var(--ok)", "refuted": "var(--bad)", "contested_in_sources": "var(--warn)"}
+
+
+def _eref(v: View, ids: list[str]) -> str:
+    """[E1] [E3] — ссылки на источники в разделе «Источники»; DOC — данные пользователя."""
+    out = []
+    for i in ids:
+        if i == "DOC":
+            out.append('<span class="lbl">DOC</span>')
+        elif i in v.evidence_by_id:
+            out.append(f'<a class="eref" href="#src-{_e(i)}">[{_e(i)}]</a>')
+    return " ".join(out)
+
+
+def _kcu(v: View) -> str:
+    """Известно / Спорно / Неизвестно — главное в исследовании."""
+    if not v.is_research:
+        return ""
+    parts = ['<section id="kcu"><h2>Что известно, что спорно, чего не знает никто</h2>',
+             '<p class="muted small">«Известно» — только то, что подтвердили найденные источники или ваши документы; '
+             'согласие моделей и цифры «из памяти» сюда не попадают.</p>']
+    known = v.known
+    parts.append('<h3>✓ Известно</h3>' + ('<table><thead><tr><th>Утверждение</th><th style="width:22%">Рамки</th>'
+                 '<th style="width:16%">Источники</th></tr></thead><tbody>' + "".join(
+                     f'<tr><td>{_inline(k.get("statement", ""))}'
+                     + ('<div class="muted small">быстро меняется — проверьте дату</div>' if k.get("volatility") == "changes_fast" else "")
+                     + f'</td><td class="small">{_inline(k.get("scope", ""))}</td><td>{_eref(v, k.get("evidence_ids") or [])}</td></tr>'
+                     for k in known) + "</tbody></table>" if known else '<p class="muted">Подтверждённых источниками утверждений нет.</p>'))
+    cont = v.contested
+    if cont:
+        parts.append("<h3>⇄ Спорно</h3>")
+        for c in cont:
+            pos = _list(c.get("positions") or [])
+            meta = [f"<b>Почему расходятся:</b> {_inline(c['why_they_differ'])}" if c.get("why_they_differ") else "",
+                    f"<b>Что решило бы спор:</b> {_inline(c['what_would_resolve'])}" if c.get("what_would_resolve") else "",
+                    _eref(v, c.get("evidence_ids") or [])]
+            parts.append(f'<div class="callout"><b class="t">{_inline(c.get("issue", ""))}</b>{pos}'
+                         + "".join(f'<p class="small">{m}</p>' for m in meta if m) + "</div>")
+    unk = v.unknown
+    if unk:
+        reason = v.GAP_WORD
+        parts.append('<h3>? Неизвестно</h3><table><thead><tr><th>Чего не знаем</th><th style="width:22%">Почему</th>'
+                     '<th style="width:30%">Как узнать</th></tr></thead><tbody>' + "".join(
+                         f'<tr><td>{_inline(u.get("gap", ""))}</td><td class="small">{_e(reason.get(u.get("reason", ""), u.get("reason", "")))}</td>'
+                         f'<td class="small">{_inline(u.get("how_to_check", ""))}</td></tr>' for u in unk) + "</tbody></table>")
+    wwc = v.verdict.get("what_would_change") or []
+    if wwc:
+        parts.append("<h3>Что изменило бы выводы</h3>" + _list(wwc))
+    nq = v.verdict.get("next_questions") or []
+    if nq:
+        parts.append("<h3>Что исследовать дальше</h3>" + _list(nq))
+    return "".join(parts) + "</section>"
+
+
+def _scope(v: View) -> str:
+    """Рамки исследования и покрытие подвопросов (с каркасом раздела по голосованию)."""
+    if not v.is_research or not v.subquestions:
+        return ""
+    rows = []
+    for r in v.coverage_rows:
+        st = r["status"]
+        color = {"covered": "var(--ok)", "partial": "var(--warn)", "unknown": "var(--bad)"}.get(st, "var(--muted)")
+        votes = ", ".join(f"{l}: {n}" for l, n in sorted(r["counts"].items(), key=lambda x: -x[1]))
+        rows.append(f'<tr><td><span class="lbl">{_e(r["id"])}</span> {_inline(r["text"])}</td>'
+                    f'<td style="color:{color}"><b>{_e(v.COVER_WORD.get(st, st or "—"))}</b>'
+                    f'{"<div class=\"muted small\">" + _inline(r["note"]) + "</div>" if r["note"] else ""}</td>'
+                    f'<td>{"<span class=\"lbl\">" + _e(r["backbone"]) + "</span>" if r["backbone"] else "—"}'
+                    f'{"<div class=\"muted small\">голоса: " + _e(votes) + "</div>" if votes else ""}</td></tr>')
+    scope = f'<p><b>Рамки:</b> {_e(v.scope_line)}</p>' if v.scope_line else ""
+    return (f'<section id="scope"><h2>Рамки и подвопросы</h2>{scope}'
+            '<table><thead><tr><th>Подвопрос</th><th style="width:20%">В итоге</th><th style="width:22%">Каркас раздела</th>'
+            '</tr></thead><tbody>' + "".join(rows) + '</tbody></table><p class="muted small">Каркас раздела — вариант, '
+            'который участники сочли лучшим по этому подвопросу; это выбор основы текста, а не проверка фактов.</p></section>')
+
+
+def _sources(v: View) -> str:
+    ev = v.evidence
+    if not v.is_research or not ev:
+        return ""
+    rows = []
+    for e in ev:
+        meta = ", ".join(_e(x) for x in (e.get("publisher"), e.get("date"),
+                                         {"primary": "первичный", "secondary": "пересказ"}.get(e.get("source_type", ""), "")) if x)
+        seen = {"page": "страница", "snippet": "фрагмент", "search_answer": "ответ поиска"}.get(e.get("material_seen", ""), "")
+        flag = ('<div class="small" style="color:var(--bad)">нет в результатах поиска — не подтверждение</div>'
+                if e.get("search_returned") is False else "")
+        url = v.safe_url(e.get("url", ""))
+        rows.append(f'<tr id="src-{_e(e["id"])}"><td><b>{_e(e["id"])}</b></td><td>{_e(e.get("title") or url)}'
+                    f'<div class="small"><a href="{_e(url)}">{_e(url)}</a></div>'
+                    f'{"<div class=\"muted small\">" + meta + "</div>" if meta else ""}{flag}</td>'
+                    f'<td class="small">{_e(", ".join(e.get("claims") or []))}{"<div class=\"muted\">" + seen + "</div>" if seen else ""}</td></tr>')
+    return (f'<section id="sources"><h2>Источники</h2><p class="muted small">Нашла поисковая модель '
+            f'({_e(v.ledger.get("model", ""))}) на этапе арбитража доказательств — {_e(v.ledger_line)}.</p>'
+            '<table><thead><tr><th style="width:7%">№</th><th>Источник</th><th style="width:22%">Утверждения</th>'
+            '</tr></thead><tbody>' + "".join(rows) + "</tbody></table></section>")
+
+
+def _claims_check(v: View) -> str:
+    claims = v.checked_claims
+    if not v.is_research or not claims:
+        return ""
+    rows = []
+    for c in claims:
+        st = c.get("status", "not_checked")
+        rows.append(f'<tr><td><span class="lbl">{_e(c.get("id", ""))}</span></td><td>{_inline(c.get("text", ""))}'
+                    f'<div class="muted small">{_e(v.BASIS_WORD.get(c.get("basis", ""), ""))}'
+                    f'{" · критики спорили: " + str(c["disputed"]) if c.get("disputed") else ""}</div>'
+                    + "".join(f'<div class="small">{_inline(n)}</div>' for n in c.get("notes") or [])
+                    + f'</td><td style="color:{CLAIM_COLOR.get(st, "var(--muted)")}"><b>{v.CLAIM_SIGN.get(st, "")} '
+                    f'{_e(v.CLAIM_WORD.get(st, st))}</b><div>{_eref(v, c.get("evidence") or [])}</div></td></tr>')
+    return ('<section id="claims"><h2>Проверка утверждений</h2><p class="muted small">Утверждения всех вариантов, '
+            'которые совет счёл важными или спорными, проверены поиском двумя заданиями: найти подтверждения и найти '
+            'опровержения.</p><table><thead><tr><th style="width:9%">№</th><th>Утверждение</th>'
+            '<th style="width:22%">Статус</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table></section>")
 
 
 def _facts(v: View) -> str:
@@ -691,11 +810,19 @@ def _request(v: View, *, images: bool) -> str:
 
 
 def _toc(v: View) -> str:
-    items = [("verdict", "Решение совета", "")]
+    items = [("verdict", "Итог исследования" if v.is_research else "Решение совета", "")]
     if any(v.verdict.get(k) for k in ("why", "risks", "dissent")):
         items.append(("why", "Обоснование", ""))
+    if v.is_research:
+        items.insert(1, ("kcu", "Известно, спорно, неизвестно", ""))
+        if v.subquestions:
+            items.insert(2, ("scope", "Рамки и подвопросы", ""))
     if v.ideas:
         items.append(("ideas", "Что взято из других вариантов", ""))
+    if v.is_research and v.evidence:
+        items.append(("sources", "Источники", ""))
+    if v.is_research and v.checked_claims:
+        items.append(("claims", "Проверка утверждений", ""))
     if v.fact_check:
         items.append(("facts", "Проверка фактов", ""))
     if v.tally or v.ballots:
@@ -736,7 +863,10 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
              _keyfacts(v, full=not summary)]
     if not summary:
         parts.append(_toc(v))
-    parts += [_decision(v), _rationale(v), _ideas(v), _facts(v)]
+    parts += [_decision(v), _kcu(v), _scope(v), _rationale(v), _ideas(v), _sources(v)]
+    if not summary:
+        parts.append(_claims_check(v))
+    parts.append(_facts(v))
     if summary:
         parts += [_request(v, images=False), f'<p class="muted small" style="margin-top:12pt">{SUMMARY_NOTE}</p></main>']
         return _document(v, "".join(parts), toolbar)

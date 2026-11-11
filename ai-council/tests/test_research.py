@@ -101,3 +101,28 @@ def test_revision_gets_digests_not_full_texts_unless_disabled():
     short = R.revision("H", ["k"], "A", own, [], others, "", "", 1000, 8, full_others=False)
     full = R.revision("H", ["k"], "A", own, [], others, "", "", 1000, 8, full_others=True)
     assert "ПОЛНЫЙ_ТЕКСТ" not in short and "B-C1" in short and "ПОЛНЫЙ_ТЕКСТ" in full
+
+
+def test_research_reports_in_every_format(tmp_path):
+    from docx import Document
+    import io
+    from council.archive import Archive, all_reports
+    from council.reports.docx import render_docx
+    from council.reports.html import render_html
+    from council.reports.md import render_md
+    from council.reports.view import View
+    res = run(Council(make_cfg(mode="research"), MockClient(delay=0), seed=3).run("Стоит ли открывать кофейню у вуза?"))
+    d = res.to_dict()
+    v = View(d, "x")
+    html = render_html(v)
+    assert all(f'id="{i}"' in html for i in ("kcu", "scope", "sources", "claims")) and "Итог исследования" in html
+    assert 'href="#src-E1"' in html and 'id="src-E1"' in html
+    summary = render_html(v, summary=True)
+    assert 'id="kcu"' in summary and 'id="claims"' not in summary  # итог короче: без проверки утверждений
+    md = render_md(v)
+    assert "### ✓ Известно" in md and "## Источники" in md and "## Проверка утверждений" in md
+    doc = Document(io.BytesIO(render_docx(v)))
+    heads = [p.text for p in doc.paragraphs if p.style.name.startswith("Heading")]
+    assert "Что известно, что спорно, чего не знает никто" in heads and "Источники" in heads
+    built = Archive(tmp_path).build("r", all_reports(), data=d)
+    assert not [k for k, x in built.items() if str(x).startswith("ошибка")]
