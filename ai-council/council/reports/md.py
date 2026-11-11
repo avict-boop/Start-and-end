@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 
-from .view import View
+from .view import View, readable_flaw
 
 AGREE = {"high": "высокое", "medium": "среднее", "low": "низкое"}
 KIND = {"full": "Отчёт о заседании", "summary": "Итог заседания", "decision": "Решение совета"}
@@ -328,7 +328,7 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
                 scores = ", ".join(f"{k}: {float(s):g}" for k, s in (r.get("scores") or {}).items())
                 out.append(f"- **{reviewer}** ({scores})")
                 out += [f"  - ➕ {x}" for x in r.get("strengths", [])]
-                out += [f"  - ➖ {x}" for x in r.get("weaknesses", [])]
+                out += [f"  - ➖ {readable_flaw(x)}" for x in r.get("weaknesses", [])]
             out.append("")
 
     if v.critiques:

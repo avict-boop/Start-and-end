@@ -21,7 +21,7 @@ from lxml import html as LH
 
 from . import brand
 from .html import AGREE_DOTS, AGREE_SENT, AGREE_WORD, FACT_SIGN, FACT_WORD, IDEAS_INTRO, KIND, SUMMARY_NOTE, TURQUOISE, _accent_soft, _plural
-from .view import View, md_to_html
+from .view import View, md_to_html, readable_flaw
 
 FONT = "Calibri"           # есть в Word на Windows и Mac; LibreOffice подставляет метрически совместимый Carlito
 MONO = "Consolas"
@@ -1197,7 +1197,7 @@ class _Report:
                         sc.add_run(f"{float(val):g}").bold = True
                     cc = t.cell(i, 2)
                     first = True
-                    for sign, color, items in (("+ ", OK, r.get("strengths", [])), ("− ", BAD, r.get("weaknesses", []))):
+                    for sign, color, items in (("+ ", OK, r.get("strengths", [])), ("− ", BAD, [readable_flaw(x) for x in r.get("weaknesses", [])])):
                         for x in items:
                             par = cc.paragraphs[0] if first else cc.add_paragraph()
                             first = False

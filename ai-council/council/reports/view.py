@@ -626,6 +626,14 @@ class View:
         return out
 
 
+_VIOLATES = re.compile(r"\bVIOLATES\s+(R\d+)\s*[:—–-]?\s*", re.I)
+
+
+def readable_flaw(text: str) -> str:
+    """Служебная пометка рецензента «VIOLATES R9: …» (нарушено обязательное требование R9) — по-русски."""
+    return _VIOLATES.sub(lambda m: f"Нарушает обязательное требование {m.group(1).upper()}: ", str(text))
+
+
 def chair_failure(d: dict[str, Any]) -> tuple[str, str] | None:
     """Итог написан без председателя (запасной путь), а сбой не записан — так было до исправления.
     Возвращает (председатель, причина по последней ошибке в стенограмме) или None."""

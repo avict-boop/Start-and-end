@@ -2061,11 +2061,19 @@ function proposalHtml(p, s, label) {
   return parts.join("");
 }
 
+// «VIOLATES R9: …» — служебная пометка рецензента: нарушено обязательное требование R9 из постановки
+function flawHtml(x) {
+  const m = String(x).match(/^\s*VIOLATES\s+(R\d+)\s*[:—–-]?\s*(.*)$/is);
+  if (!m) return inline(x);
+  const n = Number(m[1].slice(1)), req = ((current && current.requirements) || [])[n - 1];
+  return `<span class="badge bad" ${req ? `title="${esc(req)}"` : ""}>нарушает ${esc(m[1].toUpperCase())}</span> ${inline(m[2])}`;
+}
+
 function reviewHtml(reviewer, r) {
   const scores = Object.entries(r.scores || {}).map(([k, v]) => `<span class="chip">${esc(k)}: <b>${v}</b></span>`).join("");
   return `<div class="review"><b>${esc(reviewer)}</b><div class="scores">${scores}</div>
     ${(r.strengths || []).length ? `<ul class="plus">${r.strengths.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>` : ""}
-    ${(r.weaknesses || []).length ? `<ul class="minus">${r.weaknesses.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>` : ""}</div>`;
+    ${(r.weaknesses || []).length ? `<ul class="minus">${r.weaknesses.map((x) => `<li>${flawHtml(x)}</li>`).join("")}</ul>` : ""}</div>`;
 }
 
 function openProposal(s, label) {

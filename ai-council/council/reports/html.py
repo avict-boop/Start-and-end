@@ -12,7 +12,7 @@ from html import escape
 from pathlib import Path
 
 from . import brand
-from .view import View, md_to_html
+from .view import View, md_to_html, readable_flaw
 
 TURQUOISE = "#00a596"   # ромб «решения» из логотипа (темнее фирменного #00C7B5 — читается при печати)
 INK = "#18233d"
@@ -721,7 +721,7 @@ def _proposal(v: View, l: str, p: dict) -> str:
         for reviewer, r in reviews:
             scores = "<br>".join(f"{_e(k)}: <b>{float(s):g}</b>" for k, s in (r.get("scores") or {}).items())
             pm = "".join(f'<li class="plus">{_inline(x)}</li>' for x in r.get("strengths", [])) + "".join(
-                f'<li class="minus">{_inline(x)}</li>' for x in r.get("weaknesses", []))
+                f'<li class="minus">{_inline(readable_flaw(x))}</li>' for x in r.get("weaknesses", []))
             parts.append(f"<tr><td>{_e(reviewer)}</td><td>{scores}</td><td><ul>{pm}</ul></td></tr>")
         parts.append("</tbody></table>")
     return "".join(parts) + "</article>"

@@ -252,3 +252,9 @@ def test_verdict_with_unsupported_known_is_repaired_not_thrown_away():
     assert any(u.gap == "НЕПОДКРЕПЛЁННОЕ" for u in res.verdict.unknown)
     assert len(res.verdict.coverage_audit) == len(res.to_dict()["research"]["subquestions"])
     assert any(e == "warning" and "перенесено" in d.get("text", "") for e, d in events)
+
+
+def test_requirement_violation_marker_is_readable_in_reports():
+    from council.reports.view import readable_flaw
+    assert readable_flaw("VIOLATES R9: нет дат проверки") == "Нарушает обязательное требование R9: нет дат проверки"
+    assert readable_flaw("обычное замечание") == "обычное замечание"
