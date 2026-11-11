@@ -12,6 +12,8 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
+from .catalog import is_light
+
 CACHE = "model_notes.json"  # в runs/notes/: не в корне архива, иначе файл примут за заседание
 
 
@@ -52,7 +54,7 @@ def tags(row: dict[str, Any]) -> list[list[str]]:
     mo = row.get("max_out") or 0
     if mo and mo < 8000:
         out.append(["warn", f"короткий ответ (до {_k(mo)})"])
-    if any(x in mid for x in ("flash", "mini", "nano", "lite", "haiku", "small")):
+    if is_light(mid):
         out.append(["plain", "облегчённая версия"])
     return out
 
@@ -63,7 +65,7 @@ def roles(row: dict[str, Any]) -> list[str]:
     out_price = float(row.get("completion") or 0)
     ctx = row.get("context") or 0
     mo = row.get("max_out") or 0
-    light = any(x in mid for x in ("flash", "mini", "nano", "lite", "haiku", "small"))
+    light = is_light(mid)
     res = []
     if mid.startswith("perplexity/") or mid.endswith(":online"):
         res.append("проверка фактов и арбитраж доказательств — у неё встроенный поиск; участником совета её обычно не ставят")

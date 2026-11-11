@@ -253,3 +253,10 @@ def test_research_overrides_are_recorded_and_restored(site):
     assert site.get(f"/api/sessions/{sid}/request").json()["research_overrides"] == {"arbitration_claims": 15, "missions": 1}
     bad = site.post("/api/sessions", json={"question": "Вопрос?", "mock": True, "mode": "research", "research": {"runs_dir": "x"}})
     assert bad.status_code == 400
+
+
+def test_light_models_are_detected_by_whole_words():
+    from council.catalog import is_light
+    assert not is_light("google/gemini-4-pro") and not is_light("google/gemini-2.5-pro")
+    assert is_light("google/gemini-4-flash") and is_light("openai/gpt-6.1-mini") and is_light("anthropic/claude-haiku-5")
+    assert is_light("google/gemini-2.0-flash-lite") and not is_light("x-ai/grok-4.7")

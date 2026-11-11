@@ -38,6 +38,16 @@ def modalities(m: dict[str, Any]) -> set[str]:
     return set((m.get("architecture") or {}).get("input_modalities") or [])
 
 
+LIGHT_WORDS = {"flash", "mini", "nano", "lite", "haiku", "small", "air", "tiny"}
+
+
+def is_light(model_id: str) -> bool:
+    """Облегчённая версия по слову в названии: «gemini-4-flash», «gpt-6.1-mini». По целым словам —
+    иначе «gemini» содержит «mini» и любая Gemini считалась бы облегчённой."""
+    name = model_id.split("/", 1)[-1].split(":", 1)[0].lower()
+    return any(w in LIGHT_WORDS or w.rstrip("0123456789") in LIGHT_WORDS for w in re.split(r"[-_.\s]+", name))
+
+
 def provider(model_id: str) -> str:
     return model_id.split("/", 1)[0]
 

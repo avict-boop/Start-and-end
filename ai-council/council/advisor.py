@@ -21,13 +21,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .catalog import created, date, family, is_text_model, modalities, provider, sort_newest
+from .catalog import created, date, family, is_light, is_text_model, modalities, provider, sort_newest
 from .config import CouncilConfig
 
 DOSSIER_FILE = "model_dossiers.json"  # в runs/notes/
 DOSSIER_BATCH = 6
 MODES = ("debate", "quick", "evaluate", "research")
-LIGHT = ("flash", "mini", "nano", "lite", "haiku", "small", "air", "tiny")
 # известные разработчики: из них берём свежие модели, даже если в совете их нет («какие ещё модели лучше»)
 NOTABLE = ("anthropic", "openai", "google", "deepseek", "moonshotai", "x-ai", "qwen", "mistralai", "z-ai", "meta-llama")
 SHORT_NAME = {"anthropic": "claude", "openai": "chatgpt", "google": "gemini", "moonshotai": "kimi", "deepseek": "deepseek",
@@ -113,7 +112,7 @@ def facts(m: dict[str, Any]) -> dict[str, Any]:
             "price_in": round(float(pr.get("prompt") or 0) * 1e6, 3),
             "price_out": round(float(pr.get("completion") or 0) * 1e6, 3),
             "reasoning": bool(params & {"reasoning", "include_reasoning"}),
-            "image": "image" in modalities(m), "light": any(x in mid.lower() for x in LIGHT),
+            "image": "image" in modalities(m), "light": is_light(mid),
             "builtin_search": mid.startswith("perplexity/") or mid.endswith(":online"),
             "description": " ".join(str(m.get("description") or "").split())[:500]}
 
