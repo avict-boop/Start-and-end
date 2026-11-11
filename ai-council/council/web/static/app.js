@@ -670,6 +670,21 @@ function goCompose() {
   current = null;
   showView("empty");
   markActiveHistory();
+  loadPaused();
+}
+
+// напоминание на стартовом экране: есть заседания, которые можно продолжить
+async function loadPaused() {
+  let data;
+  try { data = await api("/api/paused"); } catch { return; }
+  const items = (data && data.items) || [];
+  const b = $("pausedBanner");
+  b.hidden = !items.length;
+  if (!items.length) return;
+  b.innerHTML = `<b>${items.length === 1 ? "Есть приостановленное заседание" : `Приостановленных заседаний: ${items.length}`}</b> — `
+    + "уже полученные ответы сохранены, его можно продолжить без повторной оплаты:"
+    + `<ul class="paused-list">${items.slice(0, 5).map((it) => `<li><a href="#/s/${encodeURIComponent(it.id)}">${esc(shortTitle(it.question, 90))}</a>`
+      + ` <span class="muted small">· ${esc(it.reason_text)} · потрачено ${money(it.spent)}</span></li>`).join("")}</ul>`;
 }
 
 function goHome() {
@@ -726,7 +741,8 @@ $("dlBtn").addEventListener("click", () => toggleMenu($("dlBtn"), $("downloads")
 /* ------------------------------------------------------------ недавние заседания (в меню слева) */
 
 const HISTORY_LIMIT = 12;
-const STATUS_TEXT = { running: "идёт", error: "прервано", cancelled: "остановлено" };
+const STATUS_TEXT = { running: "идёт", error: "прервано", cancelled: "остановлено",
+  paused: '<span class="hist-paused">на паузе</span>', interrupted: '<span class="hist-paused">прервано — можно продолжить</span>' };
 function niceDate(it) {
   const d = it.date || it.id.slice(0, 13).replace(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/, "$3.$2.$1 $4:$5");
   const m = String(d).match(/^(\d{2})\.(\d{2})\.(\d{4})\s+(\d{2}:\d{2})/);
@@ -751,7 +767,7 @@ async function loadHistory() {
   ul.innerHTML = items.slice(0, HISTORY_LIMIT).map((it) => {
     const meta = it.status === "done"
       ? `${esc(niceDate(it))}${it.winner ? ` · решение ${esc(it.winner)}` : ""}`
-      : `${it.status === "running" ? '<span class="dot-run"></span>' : ""}${esc(niceDate(it))} · ${STATUS_TEXT[it.status] || esc(it.status)}`;
+      : `${it.status === "running" ? '<span class="dot-run"></span>' : ""}${esc(niceDate(it))} · ${STATUS_TEXT[it.status] || esc(it.status)}${it.spent ? ` · ${money(it.spent)}` : ""}`;
     return `<li class="item" data-id="${esc(it.id)}"><button type="button" class="open" data-open-id="${esc(it.id)}" title="${esc(shortTitle(it.question, 300))}">
       <span class="q">${esc(shortTitle(it.question))}</span><span class="meta">${meta}</span></button>
       ${it.status === "running" ? "" : `<button type="button" class="icon-btn del" data-del="${esc(it.id)}" aria-label="Удалить заседание «${esc(shortTitle(it.question, 60))}»" title="Удалить"><svg class="ic" style="width:16px;height:16px"><use href="#i-trash"/></svg></button>`}</li>`;
@@ -946,7 +962,26 @@ function apply(s, ev) {
     }
     case "start":
       Object.assign(s, { question: ev.question, mode: ev.mode, rounds: ev.rounds, members: ev.members || [],
-        chair: ev.chair || null, mock: !!ev.mock, parent: ev.parent || null, factPlanned: !!ev.fact_check });
+        chair: ev.chair || null, mock: !!ev.mock, parent: ev.parent || null, factPlanned: !!ev.fact_check,
+        budget: ev.budget || null });
+      break;
+    case "resumed":
+      s.cost = ev.spent || s.cost;
+      logAdd(s, `▶ Продолжение: ${ev.replayable} ${plural(ev.replayable, "готовый ответ берётся", "готовых ответа берутся", "готовых ответов берутся")} из сохранённого — без повторной оплаты`, "k-ok");
+      break;
+    case "budget_warning":
+      s.budgetWarn = ev;
+      logAdd(s, `Потрачено ${money(ev.spent)} из бюджета ${money(ev.budget)} — бюджета может не хватить`, "k-warn");
+      break;
+    case "budget":
+      s.budget = ev.budget; s.budgetWarn = null;
+      logAdd(s, `Бюджет заседания поднят до ${money(ev.budget)}`, "k-ok");
+      break;
+    case "paused":
+      s.paused = ev; s.stage = null; s.work = {};
+      if (ev.budget) s.budget = ev.budget;
+      if (ev.spent) s.cost = ev.spent;
+      logAdd(s, `Заседание приостановлено: ${ev.reason_text}${ev.message && ev.reason !== "stopped" ? ` (${ev.message})` : ""}`, "k-warn");
       break;
     case "stage": {
       s.stageStart = Date.now();
@@ -1051,7 +1086,7 @@ function stagePlan(s) {
 function render(s) {
   if (view !== "session") return;
   updateTitle();
-  const finished = !!(s.done || s.error);
+  const finished = !!(s.done || s.error || s.paused);
 
   $("sMeta").textContent = [MODE_NAME[s.mode] || s.mode, s.mode === "debate" && s.rounds > 1 ? `${s.rounds} раунда` : "",
     s.members.length ? `${s.members.length} ${plural(s.members.length, "модель", "модели", "моделей")}` : "", s.mock ? "демо-режим" : ""].filter(Boolean).join(" · ");
@@ -1075,6 +1110,16 @@ function render(s) {
     });
   }
   $("sCost").textContent = money(s.cost);
+  const running = !finished;
+  $("sBudget").textContent = s.budget && !s.done ? ` из ${money(s.budget)}` : "";
+  $("budgetBtn").hidden = !running || !s.budget;
+  $("sBudgetWarn").hidden = !(running && s.budgetWarn);
+  if (running && s.budgetWarn) {
+    $("sBudgetWarn").innerHTML = `<b>Бюджет почти исчерпан:</b> потрачено ${money(s.cost)} из ${money(s.budget)}. `
+      + `Если его не хватит, заседание приостановится, а не пропадёт — но можно поднять бюджет сейчас, и оно не прервётся. `
+      + `<button type="button" class="link" data-raise="1">Поднять бюджет</button>`;
+  }
+  renderPaused(s);
   $("sError").hidden = !s.error;
   $("sError").innerHTML = s.error ? `<b>Заседание прервано.</b> ${esc(s.error)}<br><a href="/api/sessions/${encodeURIComponent(s.id)}/diagnostics">Скачать журнал для разбора</a>` : "";
   $("diagLink").href = `/api/sessions/${encodeURIComponent(s.id)}/diagnostics`;
@@ -1100,6 +1145,54 @@ function render(s) {
 }
 
 // «Как совет понял задачу»: уточнённый вопрос, критерии и обязательные требования (после этапа «Постановка»)
+// приостановлено: причина, сколько потрачено, продолжить (с новым бюджетом) или удалить
+const PAUSE_HELP = {
+  budget: "Поднимите бюджет и нажмите «Продолжить».",
+  credits: 'Пополните баланс на <a href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener">OpenRouter</a> и нажмите «Продолжить».',
+  interrupted: "Нажмите «Продолжить» — заседание пойдёт с того места, где остановилось.",
+  stopped: "Его можно продолжить с того места, где оно остановилось.",
+  error: "Можно попробовать продолжить: модели, которые не ответили на последнем этапе, спросим заново.",
+};
+function renderPaused(s) {
+  const p = s.paused;
+  $("sPaused").hidden = !p;
+  if (!p) return;
+  $("pReason").innerHTML = `<b>Причина:</b> ${esc(p.reason_text || "")}${p.message && ["error", "credits"].includes(p.reason) ? ` — <span class="muted">${esc(p.message)}</span>` : ""}. ${PAUSE_HELP[p.reason] || ""}`;
+  $("pSpent").textContent = `Потрачено ${money(p.spent || s.cost)} из бюджета ${money(p.budget || s.budget)}`
+    + `${p.stage ? ` · остановилось на этапе «${p.stage}»` : ""}. Уже полученные ответы моделей сохранены: при продолжении они не оплачиваются повторно.`;
+  const inp = $("pBudget");
+  if (inp.dataset.for !== s.id + p.reason) {
+    inp.dataset.for = s.id + p.reason;
+    const b = Number(p.budget || s.budget || 1), spent = Number(p.spent || 0);
+    inp.value = p.reason === "budget" || b <= spent ? Math.ceil(Math.max(b * 1.5, spent + 1) * 2) / 2 : b;
+  }
+}
+
+async function resumeSession(id) {
+  const budget = Number($("pBudget").value) || null;
+  $("pResume").disabled = true;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(id)}/resume`, { method: "POST", body: { budget } });
+    openSession(id);
+    loadHistory();
+  } catch (e) { toast(e.message); } finally { $("pResume").disabled = false; }
+}
+
+async function raiseBudget() {
+  const s = current;
+  if (!s) return;
+  const suggest = Math.ceil(Math.max(Number(s.budget || 1) * 1.5, Number(s.cost || 0) + 1) * 2) / 2;
+  const ok = await ask({ title: "Поднять бюджет заседания", ok: "Поднять",
+    html: `<p>Потрачено ${money(s.cost)} из ${money(s.budget)}. Новый лимит действует сразу — заседание продолжится без остановки.</p>`
+      + `<label class="field"><span>Новый бюджет, $</span><input id="newBudget" type="number" min="0.1" step="0.5" value="${suggest}" inputmode="decimal"></label>` });
+  if (!ok) return;
+  const val = Number((document.getElementById("newBudget") || {}).value) || suggest;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(s.id)}/budget`, { method: "POST", body: { budget: val } });
+    s.budget = val; s.budgetWarn = null; scheduleRender();
+  } catch (e) { toast(e.message); }
+}
+
 function renderFraming(s) {
   const reqs = s.requirements || [];
   const refined = s.refined && s.refined.trim() !== (s.question || "").trim() ? s.refined : "";
@@ -1205,7 +1298,7 @@ function workerRows(s, now) {
 }
 
 function renderActivity(s) {
-  const finished = !!(s.done || s.error);
+  const finished = !!(s.done || s.error || s.paused);
   const now = Date.now();
   $("progressSec").hidden = !!s.done;
   $("cancelBtn").hidden = finished;
@@ -1216,7 +1309,12 @@ function renderActivity(s) {
   // строка «что сейчас»
   const bar = $("stageBar").parentElement;
   bar.classList.remove("done", "stopped");
-  if (s.error) {
+  if (s.paused) {
+    const at = plan.find(([k]) => !s.doneStages.has(k));
+    $("stageNow").innerHTML = `<b>Приостановлено${at ? ` на этапе «${esc(at[1])}»` : ""}</b> <span class="muted">· пройдено ${doneN} из ${plan.length} · можно продолжить</span>`;
+    bar.classList.remove("indeterminate");
+    bar.classList.add("stopped");
+  } else if (s.error) {
     const at = plan.find(([k]) => !s.doneStages.has(k));
     $("stageNow").innerHTML = at ? `<b>Остановлено на этапе «${esc(at[1])}»</b> <span class="muted">· пройдено ${doneN} из ${plan.length}</span>` : "<b>Остановлено</b>";
     bar.classList.remove("indeterminate");
@@ -1552,7 +1650,7 @@ function openSession(id) {
     if (ev.type === "ping") return;
     scheduleRender();
     if (pendingProposal && ev.type === "done") { const l = pendingProposal; pendingProposal = null; setTimeout(() => openProposal(s, l), 50); }
-    if (ev.type === "done" || ev.type === "error") {
+    if (ev.type === "done" || ev.type === "error" || ev.type === "paused") {
       // уведомляем только о заседании, которое шло у нас на глазах (не о повторном открытии из архива)
       if (Date.now() - s.startedAt > 5000) notifyFinished(s, ev.type === "done");
       closeStream();
@@ -1577,11 +1675,24 @@ $("sQueryToggle").addEventListener("click", () => {
 
 $("cancelBtn").addEventListener("click", async () => {
   if (!current) return;
-  const ok = await ask({ title: "Остановить заседание?", html: "<p>Уже потраченные на запросы деньги не вернутся, а решения не будет.</p>", ok: "Остановить", cancel: "Продолжить", danger: true });
+  const ok = await ask({ title: "Остановить заседание?", html: "<p>Заседание приостановится. Уже полученные ответы моделей сохранятся — его можно будет продолжить позже, не оплачивая их повторно.</p>", ok: "Остановить", cancel: "Не останавливать", danger: true });
   if (!ok) return;
   try { await api(`/api/sessions/${encodeURIComponent(current.id)}/cancel`, { method: "POST" }); } catch (e) { toast(e.message); }
 });
 $("blind").addEventListener("change", () => current && render(current));
+$("budgetBtn").addEventListener("click", raiseBudget);
+$("sBudgetWarn").addEventListener("click", (e) => { if (e.target.closest("[data-raise]")) raiseBudget(); });
+$("pResume").addEventListener("click", () => current && resumeSession(current.id));
+$("pDrop").addEventListener("click", async () => {
+  if (!current) return;
+  const ok = await ask({ title: "Удалить приостановленное заседание?", danger: true, ok: "Удалить", cancel: "Оставить",
+    html: "<p>Продолжить его будет нельзя. Уже потраченные деньги не вернутся.</p>" });
+  if (!ok) return;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(current.id)}/paused`, { method: "DELETE" });
+    loadHistory(); goHome();
+  } catch (e) { toast(e.message); }
+});
 
 /* ------------------------------------------------------------ голосовой ввод */
 
@@ -1915,6 +2026,7 @@ function route() {
     showFormError(`Не удалось загрузить конфигурацию: ${e.message}`);
   }
   await loadHistory();
+  loadPaused();
   if (!location.hash) showView("empty");
   route();
   window.addEventListener("hashchange", route);

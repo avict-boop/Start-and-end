@@ -63,6 +63,7 @@
         <h1 id="composeTitle">Новый вопрос совету</h1>
         <p class="lead">Несколько моделей предложат решения, анонимно покритикуют друг друга и проголосуют. Председатель напишет итог.</p>
       </header>
+      <div id="pausedBanner" class="alert paused" hidden></div>
       <form id="form" autocomplete="off" novalidate>
         <div class="compose-grid">
           <div class="compose-main">
@@ -219,10 +220,23 @@
         </div>
         <div id="sAtts" class="s-atts" hidden></div>
         <div class="s-facts">
-          <span><span class="muted">Стоимость</span> <b id="sCost">$0.0000</b></span>
+          <span><span class="muted">Стоимость</span> <b id="sCost">$0.0000</b><span id="sBudget" class="muted"></span>
+            <button id="budgetBtn" type="button" class="link" hidden>поднять бюджет</button></span>
           <span><span class="muted">Время</span> <b id="sTime">0 с</b></span>
         </div>
         <div id="sError" class="alert bad" role="alert" hidden></div>
+        <div id="sBudgetWarn" class="alert warn" role="status" hidden></div>
+        <div id="sPaused" class="alert paused" role="alert" hidden>
+          <h2 class="paused-title">Заседание на паузе</h2>
+          <p id="pReason"></p>
+          <p id="pSpent" class="muted small"></p>
+          <div class="paused-row">
+            <label for="pBudget">Бюджет заседания, $</label>
+            <input id="pBudget" type="number" min="0.1" step="0.5" inputmode="decimal">
+            <button id="pResume" type="button" class="primary">▶ Продолжить</button>
+            <button id="pDrop" type="button" class="secondary">Удалить</button>
+          </div>
+        </div>
       </section>
 
       <section id="frameSec" class="card frame" hidden aria-labelledby="frameTitle">

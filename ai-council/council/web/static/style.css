@@ -693,3 +693,14 @@ a.brand:hover .brand-name { color: var(--accent); }
 .ideas { list-style: none; padding: 0; margin: .4rem 0 0; display: grid; gap: .6rem; }
 .ideas li { padding: .6rem .75rem; border-radius: 10px; background: var(--surface-2); overflow-wrap: anywhere; }
 .ideas .badge { margin-right: .25rem; }
+
+/* приостановленное заседание */
+.alert.paused { background: var(--warn-soft); color: var(--text); border-left: 4px solid var(--warn); white-space: normal; }
+.alert.paused .paused-title { font-size: 1.05rem; margin: 0 0 .35rem; }
+.alert.paused p { margin: .25rem 0; }
+.paused-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .6rem; margin-top: .6rem; }
+.paused-row label { font-weight: 600; }
+.paused-row input { width: 7.5rem; }
+.hist-paused { color: var(--warn); font-weight: 600; }
+.paused-list { margin: .4rem 0 0; padding-left: 1.1rem; }
+.paused-list li { margin: .2rem 0; }

@@ -29,6 +29,7 @@ from ..attachments import (ACCEPT, MAX_FILE_BYTES, MAX_FILES, AttachmentError, a
                            limit_total, load_attachment, merge, safe_name)
 from ..report import make_stem, save
 from ..reports.brand import set_brand
+from ..checkpoint import Checkpoint, Journal, classify
 from ..session import Council, CouncilError
 from .auth import BasicAuth
 
@@ -133,6 +134,14 @@ class RunRequest(BaseModel):
         return c or None
 
 
+class BudgetRequest(BaseModel):
+    budget: float = Field(gt=0, le=1000)
+
+
+class ResumeRequest(BaseModel):
+    budget: float | None = Field(default=None, gt=0, le=1000)
+
+
 class RunState:
     def __init__(self, sid: str, question: str, mode: str = "") -> None:
         self.id = sid
@@ -142,6 +151,8 @@ class RunState:
         self.status = "running"
         self.task: asyncio.Task | None = None
         self.started = time.time()
+        self.council: Any = None  # идущее заседание — чтобы поднять бюджет на ходу
+        self.checkpoint: Checkpoint | None = None
         self._changed = asyncio.Event()
 
     def push(self, event: dict[str, Any]) -> None:
@@ -481,94 +492,205 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         assign_files(atts)
         att_warnings = limit_total(atts)
         vision = vision_map(cfg, None if req.mock else await catalog.get())
-        if req.mock:
-            client = MockClient(delay=mock_delay)
-        else:
-            key = os.environ.get("OPENROUTER_API_KEY")
-            if not key:
-                raise HTTPException(400, "нет OPENROUTER_API_KEY: добавьте ключ в .env и перезапустите сервер "
-                                         "или включите демо-режим")
-            client = OpenRouterClient(key, timeout=cfg.timeout_s, max_retries=cfg.max_retries,
-                            max_tokens_cap=cfg.max_tokens_cap)
+        client = make_client(cfg, req.mock)
         sid = make_stem(req.question)
-        while sid in runs or (runs_dir(cfg) / f"{sid}.json").exists():
+        while sid in runs or (runs_dir(cfg) / f"{sid}.json").exists() or Checkpoint.load(runs_dir(cfg), sid):
             sid += "-1"
-        st = RunState(sid, req.question, "evaluate" if opts else req.mode)
         rounds = cfg.debate_rounds if req.rounds is None else req.rounds
-        st.push({"type": "start", "id": sid, "question": req.question, "mode": "evaluate" if opts else req.mode,
-                 "rounds": rounds, "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
-                 "budget": cfg.max_cost_usd, "mock": req.mock, "fact_check": cfg.fact_check.enabled,
-                 "parent": {"id": req.parent, "title": parent_title} if req.parent else None})
+        mode = "evaluate" if opts else req.mode
+        request = {"question": req.question, "mode": mode, "rounds": rounds,
+                   "criteria": req.clean_criteria or [], "options": opts or [], "context": req.context or "",
+                   "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
+                   "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
+                   "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
+                   "compact_proposals": cfg.compact_proposals}
+        # «паспорт» заседания на диске: если оно прервётся, его можно будет продолжить без потери оплаченного
+        cp = await asyncio.to_thread(
+            Checkpoint.create, runs_dir(cfg), sid, cfg=cfg, question=req.question, mode=req.mode, rounds=rounds,
+            criteria=req.clean_criteria, options=opts, context=req.context or None, attachments=atts,
+            history=history, followup_of=req.parent or "", vision=vision, request=request, origin="web",
+            mock=req.mock, extra={"uploads": req.attachments, "parent_title": parent_title,
+                                  "att_warnings": att_warnings})
+        launch(cp, client)
+        return {"id": sid}
+
+    def make_client(cfg: CouncilConfig, mock: bool):
+        if mock:
+            return MockClient(delay=mock_delay)
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            raise HTTPException(400, "нет OPENROUTER_API_KEY: добавьте ключ в .env и перезапустите сервер "
+                                     "или включите демо-режим")
+        return OpenRouterClient(key, timeout=cfg.timeout_s, max_retries=cfg.max_retries,
+                                max_tokens_cap=cfg.max_tokens_cap)
+
+    def start_event(cp: Checkpoint) -> dict[str, Any]:
+        sp = cp.spec
+        cfg = cp.config()
+        mode = "evaluate" if sp.get("options") else sp.get("mode")
+        parent = sp.get("followup_of")
+        return {"type": "start", "id": cp.id, "question": sp["question"], "mode": mode, "rounds": sp.get("rounds"),
+                "members": [m.name for m in cfg.active_members], "chair": cfg.chair, "budget": cfg.max_cost_usd,
+                "mock": bool(sp.get("mock")), "fact_check": cfg.fact_check.enabled,
+                "parent": {"id": parent, "title": sp.get("parent_title", "")} if parent else None,
+                "resumed": int(sp.get("resumes") or 0)}
+
+    def paused_event(cp: Checkpoint) -> dict[str, Any]:
+        info = cp.summary()
+        return {"type": "paused", "id": cp.id, "reason": info["reason"], "reason_text": info["reason_text"],
+                "message": info["message"], "spent": info["spent"], "budget": info["budget"], "stage": info["stage"]}
+
+    def launch(cp: Checkpoint, client: Any) -> RunState:
+        """Запускает новое или продолженное заседание по его «паспорту» на диске."""
+        sid = cp.id
+        sp = cp.spec
+        cfg = cp.config()
+        st = RunState(sid, sp["question"], "evaluate" if sp.get("options") else sp.get("mode", ""))
+        st.checkpoint = cp
+        st.push(start_event(cp))
 
         def on_event(event: str, **data: Any) -> None:
             st.push({"type": event, **jsonable(data)})
+            if event == "stage":
+                cp.update(stage=data.get("title", ""))
 
         council: Council | None = None
 
         def keep_failed(status: str, error: str) -> None:
             """Прерванное заседание тоже сохраняется — с событиями и частичной стенограммой, для разбора."""
-            save_failed(runs_dir(cfg), sid, question=req.question, status=status, error=error, events=st.events,
+            save_failed(runs_dir(cfg), sid, question=sp["question"], status=status, error=error, events=st.events,
                         transcript=council.transcript if council else [], stats=council.stats if council else {},
-                        request={"mode": req.mode, "members": [m.name for m in cfg.active_members], "chair": cfg.chair})
+                        request={"mode": sp.get("mode"), "members": [m.name for m in cfg.active_members],
+                                 "chair": cfg.chair})
 
         async def execute() -> None:
             nonlocal council
             final = "error"
-            log.info("заседание %s: старт (%s, участников %d)", sid, req.mode, len(cfg.active_members))
-            try:
-                council = Council(cfg, client, on_event=on_event, vision=vision)
-                for w in att_warnings:
-                    st.push({"type": "member_failed", "stage": "attachments", "member": "вложения", "error": w})
-                res = await council.run(req.question, criteria=req.clean_criteria, options=opts,
-                                        context=req.context or None, mode=req.mode, rounds=rounds,
-                                        attachments=atts, history=history, followup_of=req.parent or "")
-                res.request = {"question": req.question, "mode": "evaluate" if opts else req.mode, "rounds": rounds,
-                               "criteria": req.clean_criteria or [], "options": opts or [], "context": req.context or "",
-                               "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
-                               "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
-                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
-                               "compact_proposals": cfg.compact_proposals}
-                st.push({"type": "saving"})
-                await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts, True)
-                import shutil
-                for uid in req.attachments:  # черновики больше не нужны: файлы уже в архиве заседания
-                    shutil.rmtree(uploads_dir() / uid, ignore_errors=True)
-                final = "done"
-                st.push({"type": "done", "id": sid, "total_cost": res.total_cost, "duration_s": res.duration_s,
-                         "stats": jsonable(res.stats)})
-                cached = sum(s.cached_tokens for s in res.stats.values())
-                log.info("заседание %s: готово, $%.4f, %s с, из кэша %d входных токенов",
-                         sid, res.total_cost, res.duration_s, cached)
-                failures = {n: s.failures for n, s in res.stats.items() if s.failures}
-                if failures:
-                    log.warning("заседание %s: сбои участников: %s", sid, failures)
-            except asyncio.CancelledError:
-                final = "cancelled"
-                st.push({"type": "error", "message": "Заседание остановлено пользователем"})
-                log.info("заседание %s: остановлено пользователем", sid)
-                await asyncio.to_thread(keep_failed, "cancelled", "остановлено пользователем")
-            except CouncilError as e:
-                final = "error"
-                st.push({"type": "error", "message": str(e)})
-                log.warning("заседание %s прервано: %s", sid, e)
-                await asyncio.to_thread(keep_failed, "error", str(e))
-            except Exception as e:  # noqa: BLE001
-                log.exception("заседание %s упало", sid)
-                final = "error"
-                st.push({"type": "error", "message": f"внутренняя ошибка: {e!r}"})
-                import traceback
-                await asyncio.to_thread(keep_failed, "crash", traceback.format_exc())
-            finally:
-                await asyncio.to_thread(save_events, runs_dir(cfg), sid, st.events)
-                st.finish(final)  # статус «завершено» — только когда журнал уже на диске
-                await client.aclose()
+            resumed = int(sp.get("resumes") or 0)
+            log.info("заседание %s: %s (%s, участников %d)", sid, "продолжение" if resumed else "старт",
+                     sp.get("mode"), len(cfg.active_members))
+            with cp.lock():
+                try:
+                    cp.update(status="running", reason="", message="")
+                    atts = await asyncio.to_thread(cp.attachments)
+                    journal = await asyncio.to_thread(Journal, cp.journal_path)
+                    council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
+                                      seed=sp.get("seed"), journal=journal)
+                    st.council = council
+                    if journal.replayable:
+                        st.push({"type": "resumed", "replayable": journal.replayable,
+                                 "spent": round(journal.spent, 4)})
+                    for w in sp.get("att_warnings") or []:
+                        st.push({"type": "member_failed", "stage": "attachments", "member": "вложения", "error": w})
+                    res = await council.run(sp["question"], attachments=atts, **cp.run_args())
+                    res.request = {**(sp.get("request") or {}), "budget": council.budget}
+                    st.push({"type": "saving"})
+                    await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts, True)
+                    import shutil
+                    for uid in sp.get("uploads") or []:  # черновики больше не нужны: файлы уже в архиве заседания
+                        shutil.rmtree(uploads_dir() / uid, ignore_errors=True)
+                    await asyncio.to_thread(cp.remove)
+                    final = "done"
+                    st.push({"type": "done", "id": sid, "total_cost": res.total_cost, "duration_s": res.duration_s,
+                             "stats": jsonable(res.stats)})
+                    cached = sum(s.cached_tokens for s in res.stats.values())
+                    log.info("заседание %s: готово, $%.4f, %s с, из кэша %d входных токенов, из журнала %d ответов",
+                             sid, res.total_cost, res.duration_s, cached, council.replayed)
+                    failures = {n: s.failures for n, s in res.stats.items() if s.failures}
+                    if failures:
+                        log.warning("заседание %s: сбои участников: %s", sid, failures)
+                except (asyncio.CancelledError, Exception) as e:  # noqa: BLE001 — любая остановка = пауза
+                    reason, message = classify(e)
+                    if isinstance(e, CouncilError) or reason in ("credits", "stopped"):
+                        log.warning("заседание %s приостановлено (%s): %s", sid, reason, message)
+                    else:
+                        log.exception("заседание %s упало", sid)
+                        message = f"внутренняя ошибка: {e!r}"
+                    spent = council.total_cost if council else 0.0
+                    cp.update(status="paused", reason=reason, message=message, spent=round(spent, 6),
+                              config={**cp.spec["config"], "max_cost_usd": council.budget if council else cp.budget})
+                    final = "paused"
+                    st.push(paused_event(cp))
+                    if reason in ("error", "stopped"):
+                        import traceback
+                        expected = reason == "stopped" or isinstance(e, CouncilError)
+                        await asyncio.to_thread(keep_failed, "cancelled" if reason == "stopped" else
+                                                "error" if expected else "crash",
+                                                message if expected else traceback.format_exc())
+                finally:
+                    st.council = None
+                    await asyncio.to_thread(save_events, runs_dir(cfg), sid, st.events)
+                    st.finish(final)  # статус «завершено» — только когда журнал уже на диске
+                    await client.aclose()
 
         finished = [r for r in runs.values() if r.status != "running"]
         for old in sorted(finished, key=lambda r: r.started)[:-KEEP_FINISHED or None]:
             runs.pop(old.id, None)
         runs[sid] = st
         st.task = asyncio.create_task(execute())
+        return st
+
+    @app.get("/api/paused")
+    async def paused_list() -> dict[str, Any]:
+        """Приостановленные и прерванные заседания, которые можно продолжить."""
+        cps = await asyncio.to_thread(Checkpoint.all, runs_dir(base_config()))
+        items = [c.summary() for c in cps]
+        return {"items": [i for i in items if i["status"] != "running"]}
+
+    @app.post("/api/sessions/{sid}/budget")
+    async def raise_budget(sid: str, body: BudgetRequest) -> dict[str, Any]:
+        """Поднять бюджет заседания — прямо на ходу или перед продолжением."""
+        st = runs.get(sid)
+        if st is not None and st.status == "running" and st.council is not None:
+            if body.budget <= st.council.total_cost:
+                raise HTTPException(400, f"уже потрачено ${st.council.total_cost:.2f} — новый бюджет должен быть больше")
+            st.council.set_budget(body.budget)
+            if st.checkpoint:
+                await asyncio.to_thread(st.checkpoint.set_budget, body.budget)
+            return {"ok": True, "budget": body.budget, "running": True}
+        cp = await asyncio.to_thread(Checkpoint.load, runs_dir(base_config()), sid)
+        if cp is None:
+            raise HTTPException(404, "заседание не найдено или уже завершено")
+        await asyncio.to_thread(cp.set_budget, body.budget)
+        return {"ok": True, "budget": body.budget, "running": False}
+
+    @app.post("/api/sessions/{sid}/resume")
+    async def resume(sid: str, body: ResumeRequest | None = None) -> dict[str, Any]:
+        """Продолжить приостановленное заседание: уже полученные ответы берутся из журнала, без повторной оплаты."""
+        st = runs.get(sid)
+        if st is not None and st.status == "running":
+            raise HTTPException(409, "заседание уже идёт")
+        d = runs_dir(base_config())
+        cp = await asyncio.to_thread(Checkpoint.load, d, sid)
+        if cp is None:
+            raise HTTPException(404, "заседание не найдено или уже завершено")
+        if await asyncio.to_thread(cp.is_live):
+            raise HTTPException(409, "это заседание сейчас идёт в другом процессе (например, в Telegram-боте)")
+        budget = body.budget if body and body.budget else None
+        spent = float(cp.spec.get("spent") or 0) or await asyncio.to_thread(lambda: Journal(cp.journal_path).spent)
+        if budget:
+            cp.set_budget(budget)
+        if cp.budget <= spent:
+            raise HTTPException(400, f"бюджет ${cp.budget:g} уже потрачен (${spent:.2f}) — укажите бюджет больше")
+        client = make_client(cp.config(), bool(cp.spec.get("mock")))
+        cp.update(resumes=int(cp.spec.get("resumes") or 0) + 1)
+        launch(cp, client)
         return {"id": sid}
+
+    @app.delete("/api/sessions/{sid}/paused")
+    async def drop_paused(sid: str) -> dict[str, Any]:
+        """Отказаться от приостановленного заседания (потраченное уже не вернуть)."""
+        st = runs.get(sid)
+        if st is not None and st.status == "running":
+            raise HTTPException(409, "заседание идёт — сначала остановите его")
+        cp = await asyncio.to_thread(Checkpoint.load, runs_dir(base_config()), sid)
+        if cp is None:
+            raise HTTPException(404, "заседание не найдено")
+        if await asyncio.to_thread(cp.is_live):
+            raise HTTPException(409, "это заседание сейчас идёт в другом процессе")
+        await asyncio.to_thread(cp.remove)
+        runs.pop(sid, None)
+        return {"ok": True}
 
     # ------------------------------------------------------------ диагностика
 
@@ -616,6 +738,23 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                  "winner_author": "", "cost": None, "members": [], "proposals": 0, "attachments": 0}
                 for st in runs.values()
                 if st.id not in known and (not q or q.casefold() in st.question.casefold()) and (not mode or st.mode == mode)]
+        # приостановленные и прерванные (например, перезапуском при обновлении) — их можно продолжить
+        live_ids = {x["id"] for x in live}
+        for cp in await asyncio.to_thread(Checkpoint.all, runs_dir(base_config())):
+            info = cp.summary()
+            if cp.id in known or (q and q.casefold() not in info["question"].casefold()) or (mode and info["mode"] != mode):
+                continue
+            row = {"id": cp.id, "question": info["question"], "status": info["status"], "reason": info["reason"],
+                   "reason_text": info["reason_text"], "spent": info["spent"], "budget": info["budget"],
+                   "date": time.strftime("%d.%m.%Y %H:%M", time.localtime(info["created"] or time.time())),
+                   "mode": info["mode"], "mode_name": MODE_NAME.get(info["mode"], ""), "winner": "", "winner_title": "",
+                   "winner_author": "", "cost": info["spent"], "members": info["members"], "proposals": 0, "attachments": 0}
+            if cp.id in live_ids:
+                for x in live:
+                    if x["id"] == cp.id and x["status"] != "running":
+                        x.update(row)
+            else:
+                live.append(row)
         return {"items": sorted(live + items, key=lambda x: x["id"], reverse=True),
                 "formats": available_formats(), "total": len(items) + len(live)}
 
@@ -623,8 +762,12 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     async def stream(sid: str, request: Request) -> StreamingResponse:
         st = runs.get(sid)
         if st is None:
-            data = json.loads(find_file(sid, "json").read_text(encoding="utf-8"))
-            static_events = events_from_result(data, sid)
+            cp = await asyncio.to_thread(Checkpoint.load, runs_dir(base_config()), sid) if ID_RE.match(sid) else None
+            if cp is not None:  # приостановлено или прервано перезапуском — показываем, что можно продолжить
+                static_events = [start_event(cp), paused_event(cp)]
+            else:
+                data = json.loads(find_file(sid, "json").read_text(encoding="utf-8"))
+                static_events = events_from_result(data, sid)
         try:
             start = int(request.headers.get("last-event-id", "-1")) + 1
         except ValueError:
@@ -710,6 +853,12 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             raise HTTPException(409, "сначала остановите заседание")
         runs.pop(sid, None)
         removed = archive().delete(sid) if ID_RE.match(sid) else False
+        cp = await asyncio.to_thread(Checkpoint.load, runs_dir(base_config()), sid) if ID_RE.match(sid) else None
+        if cp is not None:  # приостановленное заседание
+            if await asyncio.to_thread(cp.is_live):
+                raise HTTPException(409, "это заседание сейчас идёт в другом процессе")
+            await asyncio.to_thread(cp.remove)
+            removed = True
         if not removed and st is None:
             raise HTTPException(404, "заседание не найдено")
         return {"ok": True}

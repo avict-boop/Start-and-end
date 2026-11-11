@@ -236,3 +236,27 @@ def test_index_busts_static_cache(tmp_path):
     assert r.headers["cache-control"] == "no-cache"
     assert re.search(r'/static/app\.js\?v=[0-9a-f]{10}"', r.text) and re.search(r'/static/style\.css\?v=[0-9a-f]{10}"', r.text)
     assert c.get(re.search(r'"(/static/app\.js\?v=[0-9a-f]+)"', r.text).group(1)).status_code == 200
+
+
+def test_budget_pause_resume_and_raise(client):
+    sid = client.post("/api/sessions", json={"question": "Вопрос с маленьким бюджетом?", "mock": True, "budget": 0.01}).json()["id"]
+    events = read_events(client, sid)
+    paused = events[-1]
+    assert paused["type"] == "paused" and paused["reason"] == "budget"
+    listed = client.get("/api/sessions").json()["items"]
+    assert any(i["id"] == sid and i["status"] == "paused" for i in listed)
+    assert [i["id"] for i in client.get("/api/paused").json()["items"]] == [sid]
+    assert client.post(f"/api/sessions/{sid}/resume", json={}).status_code == 400  # бюджет уже потрачен
+    assert client.post(f"/api/sessions/{sid}/resume", json={"budget": 3}).status_code == 200
+    events = read_events(client, sid)
+    types = [e["type"] for e in events]
+    assert "resumed" in types and types[-1] == "done"
+    assert client.get("/api/paused").json()["items"] == []
+    assert client.get(f"/api/sessions/{sid}/report?format=md").status_code == 200
+
+    # на ходу: бюджет можно поднять, пока заседание идёт; удалить приостановленное
+    sid2 = client.post("/api/sessions", json={"question": "Второй вопрос?", "mock": True, "budget": 0.01}).json()["id"]
+    read_events(client, sid2)
+    assert client.post(f"/api/sessions/{sid2}/budget", json={"budget": 0.5}).json()["running"] is False
+    assert client.delete(f"/api/sessions/{sid2}").status_code == 200
+    assert client.get("/api/paused").json()["items"] == []

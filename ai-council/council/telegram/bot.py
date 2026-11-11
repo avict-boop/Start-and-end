@@ -26,6 +26,7 @@ from ..attachments import (MAX_FILE_BYTES, MAX_FILES, Attachment, AttachmentErro
                            load_attachment, merge)
 from ..report import make_stem, save
 from ..reports.brand import set_brand
+from ..checkpoint import Checkpoint, Journal, classify
 from ..session import Council, CouncilError, SessionResult
 from .api import TelegramAPI, TelegramError
 from ..reports.view import short_title
@@ -52,7 +53,8 @@ COMMANDS = [
     ("settings", "режим, модели, проверка фактов, демо"),
     ("archive", "прошлые заседания и отчёты"),
     ("stats", "расходы и успехи моделей"),
-    ("stop", "остановить идущее заседание"),
+    ("stop", "приостановить идущее заседание"),
+    ("paused", "приостановленные заседания — продолжить"),
     ("budget", "лимит стоимости, напр. /budget 0.5"),
     ("evaluate", "выбрать лучший из ваших вариантов"),
     ("clear", "убрать приложенные файлы"),
@@ -249,6 +251,8 @@ class Running:
     progress: Progress
     message_id: int
     dirty: bool = True
+    council: Any = None            # идущее заседание — чтобы поднять бюджет на ходу
+    checkpoint: Any = None
 
 
 # ---------------------------------------------------------------- бот
@@ -362,6 +366,7 @@ class CouncilBot:
         except TelegramError as e:
             log.warning("setMyCommands: %s", e)
         log.info("бот @%s запущен", self.username)
+        await self.notify_interrupted()
         offset = None
         while True:
             try:
@@ -454,6 +459,8 @@ class CouncilBot:
             await self.cmd_budget(chat_id, arg)
         elif cmd == "/stop":
             await self.cmd_stop(chat_id)
+        elif cmd == "/paused":
+            await self.cmd_paused(chat_id)
         elif cmd == "/evaluate":
             await self.cmd_evaluate(chat_id, arg)
         elif cmd == "/stats":
@@ -908,6 +915,9 @@ class CouncilBot:
         if kind0 in ("arc", "ses", "rep", "res", "fup", "rpt"):
             await self.on_archive_callback(cq, chat_id, message.get("message_id"), kind0, rest0)
             return
+        if kind0 in ("cp", "cpb"):
+            await self.on_pause_callback(cq, chat_id, kind0, rest0)
+            return
         if data == "stop":
             r = self.running.get(chat_id)
             if r and r.message_id == message.get("message_id"):
@@ -979,14 +989,44 @@ class CouncilBot:
         self.pending.pop(chat_id, None)
         await self.api.edit_message(chat_id, p.card_id, f"🏛 <b>Вопрос передан совету</b>\n{esc(p.question[:1500])}")
 
-        progress = Progress(question=p.question, mode=mode, rounds=s.rounds,
-                            members=[m.name for m in cfg.active_members], chair=cfg.chair, demo=s.demo,
-                            fact_check=cfg.fact_check.enabled)
-        stop_kb = {"inline_keyboard": [[self._btn("⏹ Остановить", "stop")]]}
-        msg = await self.api.send_message(chat_id, progress.render(), reply_markup=stop_kb)
-        client = self.llm_factory(cfg, s.demo)
-
         stem = make_stem(p.question)
+        while (self.runs_dir / f"{stem}.json").exists() or Checkpoint.load(self.runs_dir, stem):
+            stem += "-1"
+        atts = p.attachments
+        history: list[dict] = []
+        if p.parent:
+            history, parent_atts = await asyncio.to_thread(self.archive.followup, p.parent)
+            atts = merge(parent_atts, atts)
+        assign_files(atts)
+        for w in limit_total(atts):
+            await self.send(chat_id, f"⚠️ {esc(w)}")
+        vision = vision_map(cfg, None if s.demo else await self.catalog.get())
+        request = {"question": p.question, "mode": mode, "rounds": s.rounds, "criteria": [],
+                   "options": p.options or [], "members": [m.name for m in cfg.active_members],
+                   "chair": cfg.chair, "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
+                   "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
+                   "compact_proposals": cfg.compact_proposals}
+        # «паспорт» заседания на диске: если оно прервётся, его можно продолжить без потери оплаченного
+        cp = await asyncio.to_thread(
+            Checkpoint.create, self.runs_dir, stem, cfg=cfg, question=p.question, mode=mode, rounds=s.rounds,
+            criteria=None, options=p.options, context=None, attachments=atts, history=history,
+            followup_of=p.parent or "", vision=vision, request=request, origin="telegram", mock=s.demo,
+            chat_id=chat_id, extra={"parent_title": p.parent_title})
+        await self.launch(chat_id, cp)
+
+    async def launch(self, chat_id: int, cp: Checkpoint) -> None:
+        """Запускает новое или продолженное заседание по его «паспорту» на диске."""
+        sp = cp.spec
+        cfg = cp.config()
+        stem = cp.id
+        mode = sp.get("mode") or "debate"
+        resumed = int(sp.get("resumes") or 0)
+        progress = Progress(question=sp["question"], mode=mode, rounds=sp.get("rounds") or 1,
+                            members=[m.name for m in cfg.active_members], chair=cfg.chair, demo=bool(sp.get("mock")),
+                            fact_check=cfg.fact_check.enabled)
+        stop_kb = {"inline_keyboard": [[self._btn("⏸ Остановить", "stop")]]}
+        msg = await self.api.send_message(chat_id, progress.render(), reply_markup=stop_kb)
+        client = self.llm_factory(cfg, bool(sp.get("mock")))
         events: list[dict[str, Any]] = []
         council_ref: dict[str, Council] = {}
 
@@ -996,72 +1036,193 @@ class CouncilBot:
             r = self.running.get(chat_id)
             if r:
                 r.dirty = True
+            if event == "stage":
+                cp.update(stage=d.get("title", ""))
+            elif event == "budget_warning":
+                asyncio.get_running_loop().create_task(self.send(
+                    chat_id, f"💰 <b>Бюджет почти исчерпан:</b> потрачено ${d['spent']:.2f} из ${d['budget']:g}.\n"
+                             "Если не хватит — заседание приостановится, а не пропадёт. Можно поднять бюджет сейчас, "
+                             "и оно не прервётся:", reply_markup=self._budget_kb(cp.id, live=True)))
 
         async def execute() -> None:
             updater = asyncio.create_task(self._updater(chat_id, stop_kb))
-            try:
-                atts = p.attachments
-                history: list[dict] = []
-                if p.parent:
-                    history, parent_atts = await asyncio.to_thread(self.archive.followup, p.parent)
-                    atts = merge(parent_atts, atts)
-                assign_files(atts)
-                for w in limit_total(atts):
-                    await self.send(chat_id, f"⚠️ {esc(w)}")
-                vision = vision_map(cfg, None if s.demo else await self.catalog.get())
-                council = Council(cfg, client, on_event=on_event, vision=vision)
-                council_ref["c"] = council
-                log.info("заседание %s: старт (чат %s, %s, участников %d)", stem, chat_id, mode, len(cfg.active_members))
-                res = await council.run(p.question, options=p.options, mode=mode, rounds=s.rounds, attachments=atts,
-                                        history=history, followup_of=p.parent)
-                res.request = {"question": p.question, "mode": mode, "rounds": s.rounds, "criteria": [],
-                               "options": p.options or [], "members": [m.name for m in cfg.active_members],
-                               "chair": cfg.chair, "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
-                               "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
-                               "compact_proposals": cfg.compact_proposals}
-                progress.saving = True
-                r = self.running.get(chat_id)
-                if r:
-                    r.dirty = True
-                await asyncio.to_thread(save, res, self.runs_dir, stem, atts, True)
-                log.info("заседание %s: готово, $%.4f", stem, res.total_cost)
-                updater.cancel()
-                await self._safe_edit(chat_id, msg["message_id"], progress.render(final="✅ <b>Заседание завершено</b>"))
-                await self.send_result(chat_id, res, stem)
-            except asyncio.CancelledError:
-                updater.cancel()
-                keep("cancelled", "остановлено пользователем")
-                await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⏹ <b>Заседание остановлено</b>"))
-            except CouncilError as e:
-                updater.cancel()
-                log.warning("заседание %s прервано: %s", stem, e)
-                keep("error", str(e))
-                await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⚠️ <b>Заседание прервано</b>"))
-                await self.send(chat_id, f"⚠️ <b>Заседание прервано.</b>\n{esc(e)}\n\n<i>Если непонятно, что случилось, — /logs пришлёт журнал для разбора.</i>")
-            except Exception as e:  # noqa: BLE001
-                updater.cancel()
-                log.exception("заседание %s упало", stem)
-                import traceback
-                keep("crash", traceback.format_exc())
-                await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⚠️ <b>Внутренняя ошибка</b>"))
-                await self.send(chat_id, "⚠️ <b>Что-то сломалось внутри программы</b>, заседание остановлено. "
-                                         "Деньги за уже сделанные запросы потрачены.\n\n"
-                                         f"<i>Отправьте /logs владельцу бота — по журналу видно причину.</i>\n<code>{esc(type(e).__name__)}</code>")
-            finally:
-                self.running.pop(chat_id, None)
-                self.last_stem[chat_id] = stem
-                save_events(self.runs_dir, stem, events)
-                await client.aclose()
+            council = None
+            with cp.lock():
+                try:
+                    cp.update(status="running", reason="", message="")
+                    atts = await asyncio.to_thread(cp.attachments)
+                    journal = await asyncio.to_thread(Journal, cp.journal_path)
+                    council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
+                                      seed=sp.get("seed"), journal=journal)
+                    council_ref["c"] = council
+                    r = self.running.get(chat_id)
+                    if r:
+                        r.council = council
+                    log.info("заседание %s: %s (чат %s, %s, участников %d)", stem, "продолжение" if resumed else "старт",
+                             chat_id, mode, len(cfg.active_members))
+                    res = await council.run(sp["question"], attachments=atts, **cp.run_args())
+                    res.request = {**(sp.get("request") or {}), "budget": council.budget}
+                    progress.saving = True
+                    r = self.running.get(chat_id)
+                    if r:
+                        r.dirty = True
+                    await asyncio.to_thread(save, res, self.runs_dir, stem, atts, True)
+                    await asyncio.to_thread(cp.remove)
+                    log.info("заседание %s: готово, $%.4f, из журнала %d ответов", stem, res.total_cost, council.replayed)
+                    updater.cancel()
+                    await self._safe_edit(chat_id, msg["message_id"], progress.render(final="✅ <b>Заседание завершено</b>"))
+                    await self.send_result(chat_id, res, stem)
+                except (asyncio.CancelledError, Exception) as e:  # noqa: BLE001 — любая остановка = пауза
+                    updater.cancel()
+                    reason, message = classify(e)
+                    if isinstance(e, CouncilError) or reason in ("credits", "stopped"):
+                        log.warning("заседание %s приостановлено (%s): %s", stem, reason, message)
+                    else:
+                        log.exception("заседание %s упало", stem)
+                        message = f"внутренняя ошибка: {type(e).__name__}"
+                    spent = council.total_cost if council else 0.0
+                    cp.update(status="paused", reason=reason, message=message, spent=round(spent, 6),
+                              config={**cp.spec["config"], "max_cost_usd": council.budget if council else cp.budget})
+                    if reason in ("error", "stopped"):
+                        import traceback
+                        expected = reason == "stopped" or isinstance(e, CouncilError)
+                        keep("cancelled" if reason == "stopped" else "error" if expected else "crash",
+                             message if expected else traceback.format_exc())
+                    await self._safe_edit(chat_id, msg["message_id"], progress.render(final="⏸ <b>Заседание приостановлено</b>"))
+                    await self.send_paused(chat_id, cp)
+                finally:
+                    self.running.pop(chat_id, None)
+                    self.last_stem[chat_id] = stem
+                    save_events(self.runs_dir, stem, events)
+                    await client.aclose()
 
         def keep(status: str, error: str) -> None:
             """Прерванное заседание сохраняется с событиями и частичной стенограммой — для разбора."""
             c = council_ref.get("c")
-            save_failed(self.runs_dir, stem, question=p.question, status=status, error=error, events=events,
+            save_failed(self.runs_dir, stem, question=sp["question"], status=status, error=error, events=events,
                         transcript=c.transcript if c else [], stats=c.stats if c else {},
                         request={"mode": mode, "members": [m.name for m in cfg.active_members], "chair": cfg.chair})
 
         self.running[chat_id] = Running(task=asyncio.create_task(execute()), progress=progress,
-                                        message_id=msg["message_id"])
+                                        message_id=msg["message_id"], checkpoint=cp)
+
+    # ------------------------------------------------------------ приостановка и продолжение
+
+    @staticmethod
+    def _cp_token(sid: str) -> str:
+        import hashlib
+        return hashlib.sha1(sid.encode("utf-8")).hexdigest()[:12]
+
+    def _find_cp(self, token: str) -> Checkpoint | None:
+        return next((c for c in Checkpoint.all(self.runs_dir) if self._cp_token(c.id) == token), None)
+
+    @staticmethod
+    def _suggest_budget(budget: float, spent: float) -> float:
+        import math
+        return math.ceil(max(budget * 1.5, spent + 1) * 2) / 2
+
+    def _budget_kb(self, sid: str, *, live: bool) -> dict:
+        t = self._cp_token(sid)
+        kind = "cpb" if live else "cp"
+        row = [self._btn(f"💰 +${n}", f"{kind}:{t}:+{n}") for n in (1, 3, 5)]
+        return {"inline_keyboard": [row]}
+
+    def _paused_kb(self, cp: Checkpoint) -> dict:
+        t = self._cp_token(cp.id)
+        info = cp.summary()
+        budget, spent = info["budget"], info["spent"]
+        rows = []
+        if budget > spent:
+            rows.append([self._btn(f"▶️ Продолжить (бюджет ${budget:g})", f"cp:{t}:go")])
+        rows.append([self._btn(f"💰 +${n} и продолжить", f"cp:{t}:+{n}") for n in (1, 3, 5)])
+        rows.append([self._btn("🗑 Удалить", f"cp:{t}:del")])
+        return {"inline_keyboard": rows}
+
+    async def send_paused(self, chat_id: int, cp: Checkpoint) -> None:
+        info = cp.summary()
+        help_ = {"budget": "Поднимите бюджет — заседание продолжится с того же места.",
+                 "credits": "Пополните баланс на openrouter.ai/settings/credits и нажмите «Продолжить».",
+                 "interrupted": "Нажмите «Продолжить» — заседание пойдёт с того места, где остановилось.",
+                 "stopped": "Его можно продолжить с того места, где оно остановилось.",
+                 "error": "Можно попробовать продолжить: модели, не ответившие на последнем этапе, спросим заново."
+                 }.get(info["reason"], "")
+        detail = f"\n<i>{esc(info['message'][:400])}</i>" if info["message"] and info["reason"] in ("error", "credits") else ""
+        stage = f" · этап «{esc(info['stage'])}»" if info["stage"] else ""
+        await self.send(chat_id,
+                        f"⏸ <b>Заседание приостановлено:</b> {esc(info['reason_text'])}.{detail}\n"
+                        f"❓ {esc(short_title(info['question']))}\n"
+                        f"💰 Потрачено ${info['spent']:.2f} из ${info['budget']:g}{stage}\n\n"
+                        f"Уже полученные ответы моделей сохранены — при продолжении они не оплачиваются повторно. {help_}",
+                        reply_markup=self._paused_kb(cp))
+
+    async def cmd_paused(self, chat_id: int) -> None:
+        cps = [c for c in await asyncio.to_thread(Checkpoint.all, self.runs_dir) if c.state != "running"]
+        if not cps:
+            await self.send(chat_id, "Приостановленных заседаний нет.")
+            return
+        for cp in cps[:5]:
+            await self.send_paused(chat_id, cp)
+
+    async def notify_interrupted(self) -> None:
+        """После перезапуска (например, обновления) сообщает о заседаниях бота, прерванных на ходу."""
+        try:
+            cps = await asyncio.to_thread(Checkpoint.all, self.runs_dir)
+        except OSError:
+            return
+        for cp in cps:
+            if cp.spec.get("origin") != "telegram" or not cp.spec.get("chat_id") or cp.state != "interrupted":
+                continue
+            cp.update(status="paused", reason="interrupted", spent=round(cp.spent_from_journal(), 6))
+            try:
+                await self.send_paused(int(cp.spec["chat_id"]), cp)
+            except TelegramError as e:
+                log.warning("не удалось сообщить о прерванном заседании %s: %s", cp.id, e)
+
+    async def on_pause_callback(self, cq: dict[str, Any], chat_id: int, kind: str, rest: str) -> None:
+        token, _, action = rest.partition(":")
+        if kind == "cpb":  # поднять бюджет идущего заседания
+            r = self.running.get(chat_id)
+            if not r or not r.council or not r.checkpoint or self._cp_token(r.checkpoint.id) != token:
+                await self.api.answer_callback(cq["id"], "Заседание уже не идёт")
+                return
+            add = float(action.lstrip("+") or 0)
+            new = round(r.council.budget + add, 2)
+            r.council.set_budget(new)
+            await asyncio.to_thread(r.checkpoint.set_budget, new)
+            await self.api.answer_callback(cq["id"], f"Бюджет: ${new:g}")
+            await self.send(chat_id, f"💰 Бюджет поднят до ${new:g} — заседание продолжается.")
+            return
+        cp = await asyncio.to_thread(self._find_cp, token)
+        if cp is None:
+            await self.api.answer_callback(cq["id"], "Заседание уже завершено или удалено")
+            return
+        if await asyncio.to_thread(cp.is_live):
+            await self.api.answer_callback(cq["id"], "Это заседание уже идёт")
+            return
+        if action == "del":
+            await asyncio.to_thread(cp.remove)
+            await self.api.answer_callback(cq["id"], "Удалено")
+            await self.send(chat_id, f"🗑 Приостановленное заседание удалено: {esc(short_title(cp.spec.get('question', '')))}")
+            return
+        if chat_id in self.running:
+            await self.api.answer_callback(cq["id"], "В этом чате уже идёт заседание")
+            return
+        info = cp.summary()
+        budget = info["budget"]
+        if action.startswith("+"):
+            budget = round(max(budget, info["spent"]) + float(action[1:] or 0), 2)
+            await asyncio.to_thread(cp.set_budget, budget)
+        if budget <= info["spent"]:
+            await self.api.answer_callback(cq["id"], "Бюджет уже потрачен — поднимите его")
+            return
+        if not cp.spec.get("mock") and not os.environ.get("OPENROUTER_API_KEY"):
+            await self.api.answer_callback(cq["id"], "Нет OPENROUTER_API_KEY")
+            return
+        cp.update(resumes=int(cp.spec.get("resumes") or 0) + 1)
+        await self.api.answer_callback(cq["id"], "Продолжаю…")
+        await self.send(chat_id, f"▶️ <b>Продолжаю заседание</b> (бюджет ${budget:g}). Уже полученные ответы "
+                                 "берутся из сохранённого — без повторной оплаты.")
+        await self.launch(chat_id, cp)
 
     async def _updater(self, chat_id: int, markup: dict) -> None:
         """Периодически обновляет сообщение с прогрессом (Telegram ограничивает частоту правок)."""

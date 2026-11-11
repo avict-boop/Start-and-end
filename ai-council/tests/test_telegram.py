@@ -620,3 +620,48 @@ def test_markdown_tables_become_lists():
     from council.telegram.format import md_to_tg
     out = md_to_tg("| Метрика | Цель |\n|---|:---:|\n| Конверсия | ≥ 3% |\n| <CAC> | 1 500 ₽ |")
     assert "|" not in out and "• <b>Конверсия</b> — Цель: ≥ 3%" in out and "&lt;CAC&gt;" in out
+
+
+def test_budget_pause_and_resume_by_button(env):
+    bot, fake, tmp = env
+
+    async def scenario():
+        await bot.handle_update(msg("/budget 0.005"))
+        await bot.handle_update(msg("Вопрос с маленьким бюджетом?"))
+        await bot.handle_update(press("go", bot.pending[CHAT].card_id))
+        await finish(bot)
+        paused = fake.last("sendMessage")
+        assert "приостановлено" in paused["text"] and "лимит бюджета" in paused["text"]
+        plus = next(b for b in buttons(paused) if b.endswith(":+1"))
+        assert any(d.endswith(":del") for d in buttons(paused))
+        await bot.handle_update(press(plus, 1))
+        await finish(bot)
+
+    asyncio.run(scenario())
+    texts = fake.texts()
+    assert any("Продолжаю заседание" in t for t in texts) and any("🏆 <b>Решение:" in t for t in texts)
+    assert not list((tmp / "runs" / "paused").glob("*"))  # после завершения «паспорт» удалён
+    data = json.loads(next((tmp / "runs").glob("2*.json")).read_text())
+    assert data["request"]["budget"] > 0.005
+
+
+def test_bot_reports_sessions_interrupted_by_restart(env):
+    from council.checkpoint import Checkpoint
+    bot, fake, tmp = env
+    cfg = bot.build_config(bot.chat_settings(CHAT))
+    Checkpoint.create(tmp / "runs", "20260101-000000-x", cfg=cfg, question="Прерванный вопрос", mode="quick", rounds=1,
+                      criteria=None, options=None, context=None, attachments=[], history=[], followup_of="",
+                      vision={}, request={}, origin="telegram", chat_id=CHAT, mock=True)
+
+    async def scenario():
+        await bot.notify_interrupted()
+        note = fake.last("sendMessage")
+        assert "прервано перезапуском" in note["text"]
+        go = next(b for b in buttons(note) if b.endswith(":go"))
+        await bot.handle_update(press(go, 1))
+        await finish(bot)
+        await bot.notify_interrupted()  # второй раз о том же не пишет
+
+    asyncio.run(scenario())
+    assert any("🏆 <b>Решение:" in t for t in fake.texts())
+    assert sum("прервано перезапуском" in t for t in fake.texts()) == 1

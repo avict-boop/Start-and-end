@@ -83,7 +83,7 @@ def test_web_saves_events_and_failed_sessions(web, monkeypatch):
     monkeypatch.setattr(MockClient, "__init__", failing)
     sid2 = c.post("/api/sessions", json={"question": "Упадёт?", "mock": True, "mode": "quick"}).json()["id"]
     evs = _events(c, sid2)
-    assert evs[-1]["type"] == "error"
+    assert evs[-1]["type"] == "paused" and evs[-1]["reason"] == "error"  # не пропадает: можно продолжить
     failed = c.get("/api/diagnostics/failed").json()["items"]
     assert failed and failed[0]["id"] == sid2 and "кворума" in failed[0]["error"]
     z = zipfile.ZipFile(io.BytesIO(c.get(f"/api/sessions/{sid2}/diagnostics").content))
