@@ -761,3 +761,7 @@ a.brand:hover .brand-name { color: var(--accent); }
 .lens-head::first-letter { text-transform: uppercase; }
 .lens-who { font-size: .78rem; color: var(--accent); font-weight: 700; margin-bottom: .1rem; }
 .lens-text { font-size: .88rem; color: var(--muted); line-height: 1.4; margin-top: .15rem; overflow-wrap: anywhere; }
+
+/* длина варианта исследования в «Параметрах» */
+.research-len { display: grid; gap: .5rem; margin: .4rem 0 .8rem; }
+.research-len .field { max-width: 14rem; }

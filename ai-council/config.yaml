@@ -54,6 +54,8 @@ research:
   section_vote: true      # голосование за лучший вариант по каждому подвопросу
   fresh_scouts: 0         # авторов с поиском уже на этапе предложений (0–2; варианты могут стать похожими)
   max_words: 1400         # ориентир длины варианта
+  shorten_long: false     # слишком длинный вариант (длиннее max_words × long_factor) — автору на сокращение
+  long_factor: 2.0
 
 transcribe_model: google/gemini-2.5-flash  # модель для расшифровки голосовых (веб-микрофон и Telegram)
 

@@ -190,14 +190,17 @@ function renderSettings() {
       ${[["rLenses", "lenses", "Углы зрения авторов", "у каждого автора своя линза: рынок, технология, экономика, скептик"],
          ["rArb", "arbitration", "Арбитраж доказательств", "после критики модель с поиском проверяет утверждения всех вариантов"],
          ["rDigest", "revision_digest", "Доработка по выжимкам", "авторы видят реестр источников и тезисы чужих вариантов, а не их полные тексты"],
-         ["rSection", "section_vote", "Голосование по подвопросам", "участники выбирают лучший вариант для каждого подвопроса"]].map(([id, k, t, h]) =>
+         ["rSection", "section_vote", "Голосование по подвопросам", "участники выбирают лучший вариант для каждого подвопроса"],
+         ["rShorten", "shorten_long", "Сокращать слишком длинные варианты", "вариант намного длиннее заданного возвращается автору на сокращение (по умолчанию; можно поменять для отдельного вопроса)"]].map(([id, k, t, h]) =>
         `<label class="switch"><input type="checkbox" id="${id}" data-r="${k}" ${d.research[k] ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>${t}</b><small>${h}</small></span></label>`).join("")}
       <div class="row2" style="margin-top:.6rem">
         <label class="field"><span>Поисковых заданий (подтвердить / опровергнуть)</span><input type="number" id="rMissions" data-rn="missions" min="1" max="2" value="${d.research.missions}" ${ro}></label>
         <label class="field"><span>Утверждений на проверку</span><input type="number" id="rClaims" data-rn="arbitration_claims" min="3" max="20" value="${d.research.arbitration_claims}" ${ro}></label>
         <label class="field"><span>Авторов с поиском уже в предложениях</span><input type="number" id="rScouts" data-rn="fresh_scouts" min="0" max="2" value="${d.research.fresh_scouts}" ${ro}>
           <div class="muted small">0 — независимо и дешевле; 1–2 — для свежих цифр (цены, рынки), но варианты могут стать похожими</div></label>
-        <label class="field"><span>Длина варианта, слов</span><input type="number" id="rWords" data-rn="max_words" min="300" max="5000" step="100" value="${d.research.max_words}" ${ro}></label>
+        <label class="field"><span>Длина варианта, слов</span><input type="number" id="rWords" data-rn="max_words" min="300" max="5000" step="100" value="${d.research.max_words}" ${ro}>
+          <div class="muted small">по умолчанию; в «Параметрах» вопроса можно поменять для отдельного исследования</div></label>
+        <label class="field"><span>«Слишком длинный» — во сколько раз длиннее</span><input type="number" id="rFactor" data-rn="long_factor" min="1.2" max="5" step="0.1" value="${d.research.long_factor}" ${ro}></label>
       </div>
       <h2 style="margin-top:1.2rem">Голосовые сообщения</h2>
       <label class="field"><span>Модель для расшифровки речи <em>(должна понимать звук — 🎤 в подсказке)</em></span>

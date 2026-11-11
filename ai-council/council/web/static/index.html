@@ -141,6 +141,13 @@
                   <label for="context" class="label">Дополнительный контекст</label>
                   <textarea id="context" rows="3" placeholder="Факты, ограничения, данные — всё, что совету нужно знать"></textarea>
                 </div>
+                <div class="research-len" id="researchLen" hidden>
+                  <label class="field"><span class="label">Длина варианта, слов</span>
+                    <input type="number" id="researchWords" min="300" max="5000" step="100" inputmode="numeric"></label>
+                  <label class="switch"><input id="researchShorten" type="checkbox"><span class="sw" aria-hidden="true"></span>
+                    <span><b>Сокращать слишком длинные варианты</b><small id="researchShortenHint">Вариант намного длиннее заданного вернётся автору на сокращение. Председателю дешевле читать, но иногда это лишний запрос.</small></span></label>
+                  <p class="hint">Варианты — материал для председателя: таблицы и полный отчёт пишет он. Больше 2000–2500 слов нужно редко — для задач с большой таблицей кандидатов; заседание станет дороже.</p>
+                </div>
                 <div class="toggles">
                   <label class="switch"><input id="compact" type="checkbox"><span class="sw" aria-hidden="true"></span>
                     <span><b>Компактные варианты</b><small>Участники пишут суть сжато, полный ответ — только председатель. Примерно в 2–3 раза дешевле. <span id="compactHint"></span></small></span></label>

@@ -881,6 +881,16 @@ def section_text(subq: list[str], sections: dict[str, dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def check_length(p: Proposal, max_words: int, factor: float) -> Proposal:
+    """Вариант намного длиннее заданного — вернуть автору на сокращение (ошибка уходит модели)."""
+    n = len(str(p.summary or "").split())
+    if n > max_words * factor:
+        raise ValueError(f'"summary" is {n} words, but the limit is about {max_words} words. Rewrite it to about '
+                         f"{max_words} words: keep every claim, number, source and recommendation, drop repetition, "
+                         "generic text and long tables; reply with the full JSON again")
+    return p
+
+
 def check_verdict(v: ResearchVerdict, *, ledger: dict[str, Any] | None, n_subq: int, strict: bool) -> ResearchVerdict:
     """«Известно» — только с опорой на подтверждённые источники реестра или документы пользователя.
     Ошибка — ответ возвращается председателю; на последней попытке неподкреплённое переносится в «неизвестно»."""

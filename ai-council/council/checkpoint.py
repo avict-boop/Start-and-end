@@ -197,7 +197,8 @@ class Checkpoint:
         cfg = with_overrides(base, members=members, chair=chair,
                              devil_advocate=req.get("devil_advocate") if req.get("devil_advocate") in known else "",
                              budget=budget, chair_proposes=req.get("chair_proposes"),
-                             fact_check=req.get("fact_check"), compact=req.get("compact_proposals"))
+                             fact_check=req.get("fact_check"), compact=req.get("compact_proposals"),
+                             research_words=req.get("research_words"), research_shorten=req.get("research_shorten"))
         folder = Path(runs_dir) / f"{sid}.files"
         authors = {k: v for k, v in (data.get("authors") or {}).items() if v}
         cp = cls.create(runs_dir, sid, cfg=cfg, question=data.get("question", ""), mode=req.get("mode") or data.get("mode"),

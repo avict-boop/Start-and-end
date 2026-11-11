@@ -258,3 +258,33 @@ def test_requirement_violation_marker_is_readable_in_reports():
     from council.reports.view import readable_flaw
     assert readable_flaw("VIOLATES R9: нет дат проверки") == "Нарушает обязательное требование R9: нет дат проверки"
     assert readable_flaw("обычное замечание") == "обычное замечание"
+
+
+def test_too_long_proposal_is_sent_back_when_enabled_and_length_is_per_session():
+    """Длина варианта задаётся для заседания; слишком длинный вариант возвращается на сокращение,
+    последняя попытка принимается как есть, а оплаченный ответ из журнала не переспрашивается."""
+    import json as _json
+
+    from council.config import with_overrides
+
+    class Wordy(MockClient):
+        asks: dict = {}
+
+        async def complete(self, model, messages, **kw):
+            comp = await super().complete(model, messages, **kw)
+            st = kw.get("meta", {}).get("stage")
+            if st == "proposal":
+                key = (model, st)
+                Wordy.asks[key] = Wordy.asks.get(key, 0) + 1
+                if Wordy.asks[key] == 1:  # первый ответ — втрое длиннее предела
+                    d = _json.loads(comp.text)
+                    d["summary"] = "слово " * 1000
+                    comp.text = _json.dumps(d, ensure_ascii=False)
+            return comp
+
+    cfg = with_overrides(make_cfg(mode="research"), research_words=300, research_shorten=True)
+    assert cfg.research.max_words == 300 and cfg.research.shorten_long
+    res = run(Council(cfg, Wordy(delay=0), seed=3).run("Вопрос?"))
+    assert all(n == 2 for n in Wordy.asks.values())  # каждого автора попросили сократить один раз
+    assert all(len(p.summary.split()) < 600 for p in res.initial_proposals.values())
+    assert not make_cfg(mode="research").research.shorten_long  # по умолчанию выключено

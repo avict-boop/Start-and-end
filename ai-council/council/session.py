@@ -174,6 +174,7 @@ class Council:
         self.budget = config.max_cost_usd  # можно поднять на ходу: set_budget()
         self._budget_warned = False
         self.replayed = 0  # сколько ответов взято из журнала
+        self._replaying = False
         self.forced_labels = dict(labels or {})
         self._seen: dict[tuple[str, str], int] = {}  # (этап, участник) -> сколько обращений уже было
         self._sem = asyncio.Semaphore(config.max_concurrency)
@@ -300,7 +301,11 @@ class Council:
             try:
                 obj = schema.model_validate(cached)
                 if check and loose:
-                    obj = check(obj)  # тот же ли набор меток и критериев — иначе спросим заново
+                    self._replaying = True  # проверки формата — да, «сократите» к оплаченному ответу — нет
+                    try:
+                        obj = check(obj)  # тот же ли набор меток и критериев — иначе спросим заново
+                    finally:
+                        self._replaying = False
             except ValueError:
                 obj = None
             if obj is not None:
@@ -928,10 +933,22 @@ class Council:
         scouts = set(scout_pool[:rc.fresh_scouts])
         self._emit("stage", stage="proposal", title="Независимые предложения (без поиска)" if not scouts else
                    f"Независимые предложения (с поиском: {', '.join(sorted(scouts))})", chair_proposes=not self.chair_judge)
+        tries: dict[tuple[str, str], int] = {}
+
+        def fit(p: Proposal, stage: str, name: str) -> Proposal:
+            """Слишком длинный вариант — на сокращение (если включено); последняя попытка принимается как есть,
+            а уже оплаченный ответ из журнала не переспрашивается."""
+            k = (stage, name)
+            tries[k] = tries.get(k, 0) + 1
+            if rc.shorten_long and not self._replaying and tries[k] <= self.cfg.json_retries:
+                return R.check_length(p, rc.max_words, rc.long_factor)
+            return p
+
         got = await self._parallel("proposal", {
             m.name: self._ask(m, "proposal", R.proposal(rhead, criteria, context, lens_of[m.name], rc.max_words,
                                                         rc.max_claims, web=m.name in scouts),
-                              R.ResearchProposal, check=lambda p: check_substance(p), meta=rmeta,
+                              R.ResearchProposal, check=lambda p, n=m.name: fit(check_substance(p), "proposal", n),
+                              meta=rmeta,
                               web_search=m.name in scouts)
             for m in proposers})
         if len(got) < self.cfg.min_quorum:
@@ -985,7 +1002,10 @@ class Council:
                 R.revision(rhead, criteria, own, proposals[own], feedback, others(m.name), ledger_txt,
                            lens_of.get(m.name, ""), rc.max_words, rc.max_claims, full_others=not rc.revision_digest),
                 R.ResearchRevision,
-                check=lambda r, prev=proposals[own]: check_substance(_normalize_revision(r), previous=prev),
+                # сокращение слишком длинного варианта до заданной длины — не «потеря содержания»
+                check=lambda r, prev=(None if rc.shorten_long and len(proposals[own].summary.split())
+                                      > rc.max_words * rc.long_factor else proposals[own]), n=m.name: fit(
+                    check_substance(_normalize_revision(r), previous=prev), "revision", n),
                 meta={"label": own, **rmeta})
         revised = await self._parallel("revision", jobs)
         known_urls = {e["url"] for e in (ledger or {}).get("evidence", [])}

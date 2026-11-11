@@ -53,6 +53,10 @@ class ResearchConfig(BaseModel):
     section_vote: bool = True      # голосование за лучший вариант по каждому подвопросу
     fresh_scouts: int = Field(default=0, ge=0, le=2)    # авторов с поиском уже на этапе предложений («свежие данные»)
     max_words: int = Field(default=1400, ge=300, le=5000)  # ориентир длины варианта
+    # Слишком длинный вариант (длиннее max_words × long_factor) возвращается автору на сокращение: длинные
+    # варианты дорого читать председателю и участникам. Последняя попытка принимается как есть.
+    shorten_long: bool = False
+    long_factor: float = Field(default=2.0, ge=1.2, le=5.0)
 
 
 class CouncilConfig(BaseModel):
@@ -152,6 +156,8 @@ def with_overrides(
     chair_proposes: bool | None = None,
     fact_check: bool | None = None,
     compact: bool | None = None,
+    research_words: int | None = None,
+    research_shorten: bool | None = None,
 ) -> CouncilConfig:
     """Возвращает копию конфига с выбранными участниками/ролями/бюджетом, проверяя результат."""
     from pydantic import ValidationError
@@ -180,6 +186,10 @@ def with_overrides(
         data["fact_check"]["enabled"] = fact_check
     if compact is not None:
         data["compact_proposals"] = compact
+    if research_words:  # длина варианта исследования для этого заседания
+        data["research"]["max_words"] = research_words
+    if research_shorten is not None:
+        data["research"]["shorten_long"] = research_shorten
     try:
         return CouncilConfig.model_validate(data)
     except ValidationError as e:

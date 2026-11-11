@@ -159,6 +159,10 @@ def estimate(
         defaults["proposal"] = int(cfg.compact_words * 2.2) + 400
         defaults["revision"] = int(cfg.compact_words * 2.2) + 700
     out = {k: int(learned.get(k) or v) for k, v in defaults.items()}
+    if mode == "research" and cfg.research.max_words != 1400:  # длина варианта задана иначе, чем по умолчанию
+        scale = cfg.research.max_words / 1400
+        for k in ("proposal", "revision"):
+            out[k] = int(out[k] * scale)
     est = Estimate(learned_from=int(learned.get("sessions") or 0), lengths=out)
     q = int(question_chars / 3 * 1.3)  # уточнённый вопрос + исходный дословно
     est.question_tokens = q

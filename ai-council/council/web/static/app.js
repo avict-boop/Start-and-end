@@ -233,9 +233,19 @@ function setMode(m) {
   $("optionsField").hidden = m !== "evaluate";
   // у исследования своя длина варианта (Настройки → Исследование) — «компактные варианты» к нему не относятся
   $("compact").closest("label").hidden = m === "research";
+  $("researchLen").hidden = m !== "research";
+  $("factCheckRow").hidden = m === "research";  // в исследовании вместо неё — арбитраж доказательств
   $("modeHint").textContent = MODE_HINT[m];
   if ($("chairHint")) updateChairHint();
   formChanged();
+}
+
+// порог «слишком длинного» варианта — от длины, заданной для этого вопроса
+function updateShortenHint() {
+  if (!config || !config.research) return;
+  const w = Number($("researchWords").value) || config.research.words, f = config.research.factor;
+  $("researchShortenHint").textContent = `Вариант длиннее ${Math.round(w * f)} слов (в ${String(f).replace(".", ",")} раза `
+    + "больше заданного) вернётся автору на сокращение. Председателю дешевле читать, но иногда это лишний запрос.";
 }
 
 function selectedMembers() {
@@ -251,7 +261,8 @@ function updateParamsSummary() {
   if (mode === "debate") { const r = Number($("rounds").value) || 1; bits.push(`${r} ${plural(r, "раунд", "раунда", "раундов")}`); }
   bits.push(`лимит $${Number($("budget").value) || config.budget}`);
   if ($("compact").checked && mode !== "research") bits.push("компактно");
-  if ($("factCheck").checked) bits.push("проверка фактов");
+  if (mode === "research") bits.push(`вариант до ${Number($("researchWords").value) || "—"} слов${$("researchShorten").checked ? ", длинные — на сокращение" : ""}`);
+  if ($("factCheck").checked && mode !== "research") bits.push("проверка фактов");
   if ($("mock").checked) bits.push("демо");
   $("paramsSummary").textContent = bits.join(" · ");
 }
@@ -329,6 +340,11 @@ function resetToggles() {
   $("chairProposes").checked = !!config.chair_proposes;
   $("factCheck").checked = !!(config.fact_check && config.fact_check.enabled);
   $("compact").checked = !!(config.compact && config.compact.enabled);
+  if (config.research) {
+    $("researchWords").value = config.research.words;
+    $("researchShorten").checked = !!config.research.shorten;
+    updateShortenHint();
+  }
   $("compactHint").textContent = config.compact ? `До ${config.compact.words} слов на вариант.` : "";
   $("factCheckHint").textContent = config.fact_check ? `Модель: ${config.fact_check.model}, лидеров: ${config.fact_check.top}. Дороже на пару запросов.` : "";
 }
@@ -354,6 +370,8 @@ function payload() {
     chair_proposes: $("chairProposes").checked,
     fact_check: $("factCheck").checked,
     compact: mode === "research" ? false : $("compact").checked,
+    research_words: mode === "research" ? (Number($("researchWords").value) || null) : null,
+    research_shorten: mode === "research" ? $("researchShorten").checked : null,
     budget: Number($("budget").value) || null,
     mock: $("mock").checked,
     attachments: uploads.filter((u) => u.status === "ready").map((u) => u.meta.id),
@@ -412,6 +430,8 @@ $("repeatBtn").addEventListener("click", async () => {
   if (r.chair_proposes !== undefined) $("chairProposes").checked = !!r.chair_proposes;
   if (r.fact_check !== undefined) $("factCheck").checked = !!r.fact_check;
   if (r.compact_proposals !== undefined) $("compact").checked = !!r.compact_proposals;
+  if (r.research_words) { $("researchWords").value = r.research_words; updateShortenHint(); }
+  if (r.research_shorten !== undefined) $("researchShorten").checked = !!r.research_shorten;
   if (r.budget) $("budget").value = r.budget;
   uploads = (data.uploads || []).map((m) => ({ key: ++uploadSeq, name: m.name, status: "ready", meta: m }));
   renderUploads();
@@ -605,7 +625,8 @@ $("keyStatus").addEventListener("click", () => {
 
 $("modeSeg").addEventListener("change", (e) => { if (e.target.name === "mode") setMode(e.target.value); });
 for (const id of ["question", "options", "criteria", "rounds", "budget", "context"]) $(id).addEventListener("input", formChanged);
-for (const id of ["mock", "compact", "factCheck", "chairProposes", "chair", "devil"]) $(id).addEventListener("change", formChanged);
+for (const id of ["mock", "compact", "factCheck", "chairProposes", "chair", "devil", "researchShorten", "researchWords"]) $(id).addEventListener("change", formChanged);
+$("researchWords").addEventListener("input", () => { updateShortenHint(); updateParamsSummary(); });
 for (const id of ["chairProposes", "chair"]) $(id).addEventListener("change", updateChairHint);
 for (const b of document.querySelectorAll("[data-step]")) {
   b.addEventListener("click", () => {

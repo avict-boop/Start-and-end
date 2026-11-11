@@ -131,6 +131,8 @@ class RunRequest(BaseModel):
     chair_proposes: bool | None = None  # None — как в config.yaml
     fact_check: bool | None = None      # проверка фактов лидеров; None — как в config.yaml
     compact: bool | None = None         # компактные варианты; None — как в config.yaml
+    research_words: int | None = Field(default=None, ge=300, le=5000)  # длина варианта исследования
+    research_shorten: bool | None = None  # возвращать слишком длинные варианты на сокращение
     budget: float | None = Field(default=None, gt=0, le=100)
     mock: bool = False
     attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)  # id загрузок
@@ -230,7 +232,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             return with_overrides(base_config(), members=req.members, chair=req.chair,
                                   devil_advocate=req.devil_advocate, budget=req.budget,
                                   chair_proposes=req.chair_proposes, fact_check=req.fact_check,
-                                  compact=False if req.mode == "research" else req.compact)
+                                  compact=False if req.mode == "research" else req.compact,
+                                  research_words=req.research_words if req.mode == "research" else None,
+                                  research_shorten=req.research_shorten if req.mode == "research" else None)
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
 
@@ -414,6 +418,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             "chair_proposes": cfg.chair_proposes,
             "fact_check": {"enabled": cfg.fact_check.enabled, "model": cfg.fact_check.model, "top": cfg.fact_check.top},
             "compact": {"enabled": cfg.compact_proposals, "words": cfg.compact_words},
+            "research": {"words": cfg.research.max_words, "shorten": cfg.research.shorten_long,
+                         "factor": cfg.research.long_factor},
             "mode": cfg.mode,
             "rounds": cfg.debate_rounds,
             "budget": cfg.max_cost_usd,
@@ -521,7 +527,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                    "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
                    "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
                    "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
-                   "compact_proposals": cfg.compact_proposals, "mock": req.mock}
+                   "compact_proposals": cfg.compact_proposals, "mock": req.mock,
+                   **({"research_words": cfg.research.max_words, "research_shorten": cfg.research.shorten_long}
+                      if mode == "research" else {})}
         # «паспорт» заседания на диске: если оно прервётся, его можно будет продолжить без потери оплаченного
         cp = await asyncio.to_thread(
             Checkpoint.create, runs_dir(cfg), sid, cfg=cfg, question=req.question, mode=req.mode, rounds=rounds,
