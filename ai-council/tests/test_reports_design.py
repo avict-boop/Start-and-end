@@ -80,7 +80,7 @@ def test_pdf_is_tagged_with_section_bookmarks():
     root = pdf.trailer["/Root"]
     assert "/StructTreeRoot" in root and root.get("/Lang") in ("ru", "ru-RU")
     titles = [o.title for o in pdf.outline if not isinstance(o, list)]
-    assert titles[:3] == ["Решение совета", "Обоснование", "Проверка фактов"]
+    assert titles[:4] == ["Решение совета", "Обоснование", "Что взято из других вариантов", "Проверка фактов"]
     assert "Почему amoCRM" not in str(pdf.outline)  # заголовки из ответа модели — не в закладках
     assert pdf.metadata.title.startswith("Какую CRM выбрать")
 
@@ -146,3 +146,49 @@ def test_decision_only_report_has_no_question():
         assert "Какую CRM выбрать" not in text and "Сейчас заявки ведём" not in text and "Вопрос совету" not in text
         assert "Решение совета" in text
     assert "amoCRM" in md and doc.core_properties.title.startswith("Решение совета")
+
+
+def test_ideas_worth_keeping_are_collected_and_decided():
+    from council.schemas import CritiqueSet, IdeaDecision
+    from council.session import collect_ideas, normalize_ideas
+
+    def cs(*reviews):
+        return CritiqueSet(reviews=[{"label": l, "scores": {"x": 5}, "keep": k} for l, k in reviews])
+    crit = {"kimi": cs(("A", ["лендинг", "пилот", "чек-лист", "четвёртая"]), ("B", ["идея лидера"])),
+            "gemini": cs(("A", ["Лендинг!", "скидка"]), ("B", []))}
+    ideas = collect_ideas(crit, exclude={"B"})
+    assert [i["idea"] for i in ideas] == ["Лендинг!", "скидка", "пилот"]  # по кругу от критиков, без повторов, до 3
+    assert ideas[0]["by"] == ["gemini", "kimi"] and [i["id"] for i in ideas] == ["I1", "I2", "I3"]
+    ids = [i["id"] for i in ideas]
+    with pytest.raises(ValueError, match="I3"):
+        normalize_ideas([IdeaDecision(id="I1"), IdeaDecision(id="2", decision="rejected", reason="дорого")], ids, strict=True)
+    with pytest.raises(ValueError, match="reason"):
+        normalize_ideas([IdeaDecision(id=i, decision="rejected") for i in ids], ids, strict=True)
+    got = normalize_ideas([IdeaDecision(id="I1", decision="Включена")], ids, strict=False)
+    assert [d.decision for d in got] == ["included", "not_addressed", "not_addressed"]
+
+
+def test_ideas_section_in_reports():
+    v = View(samples.full_debate(), "x")
+    html = render_html(v)
+    assert html.index('id="why"') < html.index('id="ideas"') < html.index('id="facts"')
+    assert "Что взято из других вариантов" in render_html(v, summary=True)
+    assert "4 идеи: включено 2, отклонено 1, не рассмотрено 1" in html
+    md = render_md(v)
+    assert "## Что взято из других вариантов" in md and "| ✗ Отклонена |" in md
+    doc = Document(io.BytesIO(render_docx(v)))
+    assert any(p.text == "Что взято из других вариантов" for p in doc.paragraphs)
+    assert "Что взято" not in render_md(v, decision=True)
+
+
+def test_mock_session_records_ideas(tmp_path):
+    import asyncio
+
+    from council.config import load_config
+    from council.mock import MockClient
+    from council.session import Council
+    from pathlib import Path
+    cfg = load_config(Path(__file__).parent.parent / "config.yaml")
+    res = asyncio.run(Council(cfg, MockClient(delay=0)).run("Как запустить новый продукт?", mode="debate"))
+    assert res.ideas and all(i["decision"] in ("included", "rejected") and i["reason"] for i in res.ideas)
+    assert res.tally[0].label not in {i["label"] for i in res.ideas}  # идеи — из вариантов, не ставших основой решения

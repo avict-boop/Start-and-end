@@ -276,6 +276,33 @@ class View:
             return f"Без этих бюллетеней лидером был бы вариант {alt} — победа зависит от спорных голосов."
         return "Без этих бюллетеней лидер тот же — результат устойчив."
 
+    IDEA_WORD = {"included": "Включена", "rejected": "Отклонена", "not_addressed": "Не рассмотрена"}
+    IDEA_SIGN = {"included": "✓", "rejected": "✗", "not_addressed": "—"}
+
+    @property
+    def ideas(self) -> list[dict]:
+        """Идеи из вариантов, не ставших основой решения, которые критики советовали сохранить, и решение по ним."""
+        out = []
+        for i in self.d.get("ideas") or []:
+            if isinstance(i, dict) and i.get("idea"):
+                st = i.get("decision") if i.get("decision") in self.IDEA_WORD else "not_addressed"
+                out.append({**i, "decision": st})
+        return out
+
+    @property
+    def ideas_line(self) -> str:
+        """«5 идей: включено 3, отклонено 2» или пустая строка."""
+        ideas = self.ideas
+        if not ideas:
+            return ""
+        c = {k: sum(i["decision"] == k for i in ideas) for k in self.IDEA_WORD}
+        parts = [f"включено {c['included']}", f"отклонено {c['rejected']}"]
+        if c["not_addressed"]:
+            parts.append(f"не рассмотрено {c['not_addressed']}")
+        n = len(ideas)
+        word = "идея" if n % 10 == 1 and n % 100 != 11 else ("идеи" if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14 else "идей")
+        return f"{n} {word}: " + ", ".join(parts)
+
     @property
     def fact_check(self) -> dict[str, dict]:
         return dict(self.d.get("fact_check") or {})

@@ -92,6 +92,8 @@ h2 { font-size: 13pt; line-height: 1.3; font-weight: 700; letter-spacing: -.01em
 h2.first { border-top: 0; padding-top: 0; margin-top: 10pt; }
 h3 { font-size: 10.6pt; font-weight: 700; margin: 13pt 0 5pt; bookmark-level: 2; break-after: avoid; }
 h4 { font-size: 9.6pt; font-weight: 700; margin: 9pt 0 3pt; bookmark-level: none; break-after: avoid; color: #2c3852; }
+#ideas > p, #facts > p { break-after: avoid; }
+#ideas tr { break-inside: avoid; }
 .decision h2 .mark, .dec-mark { display: inline-block; width: 7.5pt; height: 7.5pt; background: var(--dec); transform: rotate(45deg);
   border-radius: 1.2pt; margin: 0 8pt 1.5pt 2pt; vertical-align: middle; }
 .decision .answer { border-left: 2.2pt solid var(--dec); padding: 2pt 0 2pt 12pt; margin: 6pt 0 4pt; }
@@ -431,6 +433,30 @@ def _rationale(v: View) -> str:
     return "".join(parts) + "</section>"
 
 
+IDEAS_INTRO = ("Совет не только выбирает лучший вариант, но и собирает ценное из остальных. Критики отметили, что стоит "
+               "сохранить из вариантов, не ставших основой решения, а председатель решил по каждой идее: включить её "
+               "в ответ или отклонить с причиной.")
+
+
+def _ideas(v: View) -> str:
+    ideas = v.ideas
+    if not ideas:
+        return ""
+    rows = []
+    for i in ideas:
+        st = i["decision"]
+        color = {"included": "var(--ok)", "rejected": "var(--bad)"}.get(st, "var(--muted)")
+        by = ", ".join(i.get("by") or [])
+        reason = i.get("reason") or ("председатель не ответил по этой идее" if st == "not_addressed" else "")
+        rows.append(f'<tr><td style="color:{color}"><b>{v.IDEA_SIGN[st]} {v.IDEA_WORD[st]}</b></td>'
+                    f'<td>{_inline(i["idea"])}<div class="muted small">вариант <span class="lbl">{_e(i.get("label", ""))}</span>'
+                    f'{" · отметил: " + _e(by) if by else ""}</div></td><td>{_inline(reason)}</td></tr>')
+    return (f'<section id="ideas"><h2>Что взято из других вариантов</h2><p class="muted small">{IDEAS_INTRO} '
+            f'Итого — {_e(v.ideas_line)}.</p>'
+            '<table><thead><tr><th style="width:17%">Решение</th><th style="width:43%">Идея</th>'
+            '<th>Как использована или почему отклонена</th></tr></thead><tbody>' + "".join(rows) + "</tbody></table></section>")
+
+
 def _facts(v: View) -> str:
     if not v.fact_check:
         return ""
@@ -668,6 +694,8 @@ def _toc(v: View) -> str:
     items = [("verdict", "Решение совета", "")]
     if any(v.verdict.get(k) for k in ("why", "risks", "dissent")):
         items.append(("why", "Обоснование", ""))
+    if v.ideas:
+        items.append(("ideas", "Что взято из других вариантов", ""))
     if v.fact_check:
         items.append(("facts", "Проверка фактов", ""))
     if v.tally or v.ballots:
@@ -708,7 +736,7 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
              _keyfacts(v, full=not summary)]
     if not summary:
         parts.append(_toc(v))
-    parts += [_decision(v), _rationale(v), _facts(v)]
+    parts += [_decision(v), _rationale(v), _ideas(v), _facts(v)]
     if summary:
         parts += [_request(v, images=False), f'<p class="muted small" style="margin-top:12pt">{SUMMARY_NOTE}</p></main>']
         return _document(v, "".join(parts), toolbar)

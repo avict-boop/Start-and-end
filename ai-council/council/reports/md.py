@@ -97,6 +97,21 @@ def _rationale(v: View) -> list[str]:
     return out
 
 
+def _ideas(v: View) -> list[str]:
+    ideas = v.ideas
+    if not ideas:
+        return []
+    out = ["## Что взято из других вариантов", "",
+           f"*Критики отметили, что стоит сохранить из вариантов, не ставших основой решения; председатель решил по "
+           f"каждой идее. Итого — {v.ideas_line}.*", "",
+           "| Решение | Идея | Вариант | Как использована или почему отклонена |", "|---|---|---|---|"]
+    for i in ideas:
+        st = i["decision"]
+        reason = i.get("reason") or ("председатель не ответил по этой идее" if st == "not_addressed" else "")
+        out.append(f"| {v.IDEA_SIGN[st]} {v.IDEA_WORD[st]} | {_cell(i['idea'])} | {i.get('label', '')} | {_cell(reason)} |")
+    return out + [""]
+
+
 def _facts(v: View) -> list[str]:
     if not v.fact_check:
         return []
@@ -164,7 +179,7 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
     w = v.winner
     out = _head(v, "summary" if summary else "full") + _keyfacts(v)
     out += ["## Решение совета", "", *_callouts(v), demote(v.verdict.get("final_answer", ""), 3), ""]
-    out += _rationale(v) + _facts(v)
+    out += _rationale(v) + _ideas(v) + _facts(v)
     if summary:
         out += _request(v, True)
         out += ["---", "*Это краткая версия: решение и его обоснование. Полный отчёт с вариантами всех моделей, "

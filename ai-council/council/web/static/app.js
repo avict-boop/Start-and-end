@@ -1007,6 +1007,7 @@ function apply(s, ev) {
       break;
     case "verdict":
       s.verdict = ev.verdict;
+      s.ideas = ev.ideas || [];
       logAdd(s, `Председатель выбрал вариант ${ev.verdict.winner}`, "k-ok");
       break;
     case "done":
@@ -1280,6 +1281,7 @@ function renderActivity(s) {
 }
 $("logSec").addEventListener("toggle", () => { if ($("logSec").open && current) { $("log").dataset.n = ""; renderActivity(current); } });
 
+const IDEA_BADGE = { included: ["ok", "Включена"], rejected: ["bad", "Отклонена"], not_addressed: ["plain", "Не рассмотрена"] };
 const AGREE_BADGE = {
   high: ["ok", "Мнения совета совпадают"],
   medium: ["warn", "Мнения частично расходятся"],
@@ -1329,9 +1331,24 @@ function renderVerdict(s) {
   $("vDissent").innerHTML = (v.dissent || []).map((x) => `<li>${inline(x)}</li>`).join("");
   $("vRisksBox").hidden = !(v.risks || []).length;
   $("vRisks").innerHTML = (v.risks || []).map((x) => `<li>${inline(x)}</li>`).join("");
+  const ideas = s.ideas || [];
+  $("vIdeasBox").hidden = !ideas.length;
+  if (ideas.length) {
+    const cnt = (k) => ideas.filter((i) => i.decision === k).length;
+    const na = cnt("not_addressed");
+    $("vIdeasSum").textContent = `Критики отметили, что стоит сохранить из вариантов, не ставших основой решения. `
+      + `Председатель решил по каждой идее: включено ${cnt("included")}, отклонено ${cnt("rejected")}${na ? `, не рассмотрено ${na}` : ""}.`;
+    $("vIdeas").innerHTML = ideas.map((i) => {
+      const [k, t] = IDEA_BADGE[i.decision] || IDEA_BADGE.not_addressed;
+      const reason = i.reason || (i.decision === "not_addressed" ? "председатель не ответил по этой идее" : "");
+      return `<li><span class="badge ${k}">${t}</span> <span class="idea-text">${inline(i.idea)}</span>`
+        + `<div class="muted small">вариант ${esc(i.label || "")}${reason ? ` · ${inline(reason)}` : ""}</div></li>`;
+    }).join("");
+  }
   const nr = (v.risks || []).length, nd = (v.dissent || []).length;
   $("whySum").textContent = ["обоснование", nr ? `${nr} ${plural(nr, "риск", "риска", "рисков")}` : "", nd ? `${nd} ${plural(nd, "особое мнение", "особых мнения", "особых мнений")}` : "",
-    s.facts && Object.keys(s.facts).length ? "проверка фактов" : ""].filter(Boolean).join(" · ");
+    s.facts && Object.keys(s.facts).length ? "проверка фактов" : "",
+    ideas.length ? `${ideas.length} ${plural(ideas.length, "идея", "идеи", "идей")} из других вариантов` : ""].filter(Boolean).join(" · ");
   if (s.done && $("downloads").dataset.id !== s.id) { $("downloads").dataset.id = s.id; $("downloads").innerHTML = downloadLinks(s.id); }
 }
 

@@ -1129,6 +1129,8 @@ class CouncilBot:
             lines += ["", f"{icon} {word}"]
         if v.fact_line:
             lines.append(f"🔎 Факты: {esc(v.fact_line)}")
+        if v.ideas_line:
+            lines.append(f"🧩 Из других вариантов: {esc(v.ideas_line)}")
         if v.deviation_line:
             lines.append(f"⚖️ {esc(v.deviation_line[:400])}")
         if v.tie_line:
@@ -1147,6 +1149,12 @@ class CouncilBot:
             parts += ["", "<b>Особые мнения:</b>"] + [f"• {md_to_tg(x)}" for x in vd["dissent"]]
         if vd.get("risks"):
             parts += ["", "<b>Риски:</b>"] + [f"• {md_to_tg(x)}" for x in vd["risks"]]
+        if v.ideas:
+            parts += ["", "🧩 <b>Что взято из других вариантов:</b>"]
+            for i in v.ideas:
+                reason = f" — <i>{md_to_tg(i['reason'])}</i>" if i.get("reason") else ""
+                parts.append(f"{v.IDEA_SIGN[i['decision']]} {esc(v.IDEA_WORD[i['decision']])} ({esc(i.get('label', ''))}): "
+                             f"{md_to_tg(i['idea'])}{reason}")
         if v.fact_check:
             parts += ["", f"🔎 <b>Проверка фактов</b> ({esc(v.d.get('fact_checker', ''))}):"]
             for label, r in v.fact_check.items():

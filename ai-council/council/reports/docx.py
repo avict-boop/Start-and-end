@@ -20,7 +20,7 @@ from docx.shared import Cm, Pt, RGBColor
 from lxml import html as LH
 
 from . import brand
-from .html import AGREE_DOTS, AGREE_SENT, AGREE_WORD, FACT_SIGN, FACT_WORD, KIND, SUMMARY_NOTE, TURQUOISE, _accent_soft, _plural
+from .html import AGREE_DOTS, AGREE_SENT, AGREE_WORD, FACT_SIGN, FACT_WORD, IDEAS_INTRO, KIND, SUMMARY_NOTE, TURQUOISE, _accent_soft, _plural
 from .view import View, md_to_html
 
 FONT = "Calibri"           # есть в Word на Windows и Mac; LibreOffice подставляет метрически совместимый Carlito
@@ -827,6 +827,8 @@ class _Report:
         entries = [("Решение совета", "verdict", 1)]
         if any(v.verdict.get(k) for k in ("why", "risks", "dissent")):
             entries.append(("Обоснование", "why", 1))
+        if v.ideas:
+            entries.append(("Что взято из других вариантов", "ideas", 1))
         if v.fact_check:
             entries.append(("Проверка фактов", "facts", 1))
         if v.tally or v.ballots:
@@ -871,6 +873,28 @@ class _Report:
         if vd.get("dissent"):
             self.h("Особые мнения", 2)
             self.bullets(vd["dissent"])
+
+    def ideas(self) -> None:
+        v = self.v
+        ideas = v.ideas
+        if not ideas:
+            return
+        self.h("Что взято из других вариантов", 1, "ideas")
+        self.meta(f"{IDEAS_INTRO} Итого — {v.ideas_line}.")
+        t = _table(self.doc, len(ideas) + 1, 3, widths=[3.0, 7.4, 6.6])
+        for c, text in enumerate(("Решение", "Идея", "Как использована или почему отклонена")):
+            _cell_text(t.cell(0, c), text)
+        for n, i in enumerate(ideas, 1):
+            st = i["decision"]
+            _cell_text(t.cell(n, 0), f"{v.IDEA_SIGN[st]} {v.IDEA_WORD[st]}", bold=True,
+                       color={"included": OK, "rejected": BAD}.get(st, MUTED))
+            cc = t.cell(n, 1)
+            inline_markdown(cc.paragraphs[0], i["idea"])
+            by = ", ".join(i.get("by") or [])
+            _small(cc.add_paragraph(), f"вариант {i.get('label', '')}" + (f" · отметил: {by}" if by else ""), size=8.5)
+            reason = i.get("reason") or ("председатель не ответил по этой идее" if st == "not_addressed" else "")
+            inline_markdown(t.cell(n, 2).paragraphs[0], reason)
+        self.doc.add_paragraph().paragraph_format.space_after = Pt(0)
 
     def facts(self) -> None:
         v = self.v
@@ -1259,6 +1283,7 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
         rep.toc()
     rep.decision()
     rep.rationale()
+    rep.ideas()
     rep.facts()
     if summary:
         rep.request(images=False)

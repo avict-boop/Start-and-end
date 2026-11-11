@@ -97,7 +97,7 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
         for f in s.get("failures", []):
             stage, _, err = f.partition(": ")
             ev.append({"type": "member_failed", "stage": stage, "member": name, "error": err})
-    ev.append({"type": "verdict", "verdict": d["verdict"]})
+    ev.append({"type": "verdict", "verdict": d["verdict"], "ideas": d.get("ideas") or []})
     ev.append({"type": "done", "id": session_id, "total_cost": d.get("total_cost_usd", 0),
                "duration_s": d.get("duration_s"), "stats": d.get("stats", {})})
     return ev

@@ -687,3 +687,9 @@ a.brand:hover .brand-name { color: var(--accent); }
 .frame-reqs li { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: .6rem; align-items: baseline; font-size: .95rem; overflow-wrap: anywhere; }
 .frame-reqs .rq { font-size: .75rem; font-weight: 800; padding: .1rem .45rem; border-radius: 6px; background: var(--surface-2); color: var(--text); border: 1px solid var(--line-strong); font-variant-numeric: tabular-nums; }
 .frame .hint { margin: .5rem 0 0; }
+
+/* что взято из других вариантов */
+.ideas-box { margin-top: 1rem; }
+.ideas { list-style: none; padding: 0; margin: .4rem 0 0; display: grid; gap: .6rem; }
+.ideas li { padding: .6rem .75rem; border-radius: 10px; background: var(--surface-2); overflow-wrap: anywhere; }
+.ideas .badge { margin-right: .25rem; }
