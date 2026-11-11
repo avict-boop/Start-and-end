@@ -824,3 +824,6 @@ a.brand:hover .brand-name { color: var(--accent); }
 .spinner { display: inline-block; width: .9em; height: .9em; border: 2px solid var(--line-strong); border-top-color: var(--accent);
   border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -.1em; }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+.label-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .3rem .8rem; margin-bottom: .35rem; }
+.label-row .label { margin: 0; }

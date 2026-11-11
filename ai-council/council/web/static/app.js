@@ -265,8 +265,28 @@ function renderMembers(checked) {
     return `<label class="member${mark ? " picked" : ""}" title="${esc(model)}${mark ? ` — ${esc(mark)}` : ""}"><input type="checkbox" value="${esc(m.name)}" ${sel.has(m.name) ? "checked" : ""}>
       <span><b>${esc(m.name)}</b><code>${mark ? "✦ " : ""}${esc(model.split("/").pop())}</code></span></label>`;
   }).join("");
-  $("lineupReset").hidden = !Object.keys(lineup.models).length && !lineup.extra.length && !lineup.web.size;
   renderWebMembers();
+}
+
+// кнопка «Модели по умолчанию» — видна, когда состав отличается от настроек
+function updateResetBtn() {
+  if (!config) return;
+  const def = config.members.filter((m) => m.enabled).map((m) => m.name).sort().join();
+  const defWeb = config.members.filter((m) => m.enabled && m.web_search).map((m) => m.name).sort().join();
+  const changed = Object.keys(lineup.models).length || lineup.extra.length
+    || selectedMembers().sort().join() !== def || [...lineup.web].sort().join() !== defWeb
+    || ($("chair").value && $("chair").value !== config.chair) || ($("devil").value || "") !== (config.devil_advocate || "");
+  $("lineupReset").hidden = !changed;
+}
+
+// сбросить только модели и роли (режим, вопрос и остальные параметры не трогаем)
+function resetModels() {
+  lineup = { models: {}, extra: [], web: new Set(config.members.filter((m) => m.enabled && m.web_search).map((m) => m.name)) };
+  renderMembers();
+  $("chair").value = "";
+  $("devil").value = "";
+  refreshRoleSelects();
+  formChanged();
 }
 
 function renderWebMembers() {
@@ -274,6 +294,7 @@ function renderWebMembers() {
   for (const n of [...lineup.web]) if (!names.includes(n)) lineup.web.delete(n);
   $("webField").hidden = mode === "evaluate" || !names.length;
   $("webMembers").innerHTML = names.map((n) => `<button type="button" class="chip-tg${lineup.web.has(n) ? " on" : ""}" data-web="${esc(n)}" aria-pressed="${lineup.web.has(n)}">🌐 ${esc(n)}</button>`).join("");
+  updateResetBtn();
 }
 
 function selectedMembers() {
@@ -352,6 +373,7 @@ function refreshRoleSelects() {
   fill($("devil"), true, config.devil_advocate);
   if (before && before !== $("chair").value && !names.includes(before)) toast(`Председатель теперь ${$("chair").value}: ${before} не выбран`);
   updateChairHint();
+  updateResetBtn();
 }
 
 // сколько будет вариантов: председатель обычно своего не предлагает (если без него хватает участников для кворума)
@@ -654,11 +676,8 @@ async function initForm() {
       if (lineup.web.has(n)) lineup.web.delete(n); else lineup.web.add(n);
       renderWebMembers(); formChanged();
     });
-    $("lineupReset").addEventListener("click", () => {
-      lineup = { models: {}, extra: [], web: new Set() };
-      renderMembers(); refreshRoleSelects(); formChanged();
-      toast("Состав — как в настройках");
-    });
+    $("lineupReset").addEventListener("click", () => { resetModels(); toast("Модели и роли — как в настройках"); });
+    for (const id of ["chair", "devil"]) $(id).addEventListener("change", updateResetBtn);
     $("adviseBtn").addEventListener("click", () => runAdvice(false));
   }
   refreshRoleSelects();
