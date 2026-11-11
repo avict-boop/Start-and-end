@@ -855,6 +855,8 @@ class _Report:
         r = h.add_run("◆  ")
         r.font.color.rgb = RGBColor.from_string(self.theme["dec"])
         h.add_run("Итог исследования" if v.is_research else "Решение совета")
+        if v.unacceptable:
+            self.callout("Ни один вариант не подходит", "; ".join(v.unacceptable), "bad")
         if v.tie_line:
             self.callout("Ничья за первое место", v.tie_line)
         if v.deviation_line:
@@ -865,6 +867,13 @@ class _Report:
         if refuted:
             self.callout("Проверка фактов нашла ошибки", f"Опровергнуто утверждений: {len(refuted)}. "
                                                           "Подробности — в разделе «Проверка фактов».", "bad")
+        c = v.decision_card
+        if c:
+            parts = [c.get("summary_decision", "")]
+            for t, k in (("Известно", "top_known"), ("Главные пробелы", "key_unknowns"), ("Следующие шаги", "next_steps")):
+                if c.get(k):
+                    parts.append(f"{t}: " + "; ".join(c[k]))
+            self.callout("Карточка решения", "\n".join(p for p in parts if p))
         add_markdown(self.doc, v.verdict.get("final_answer", ""), heading_shift=2)
 
     def rationale(self) -> None:
@@ -976,7 +985,7 @@ class _Report:
             if e.get("search_returned") is False:
                 _small(cc.add_paragraph(), "нет в результатах поиска — не подтверждение", size=8)
             link = {"dead": "ссылка не открывается — страница не найдена", "blocked": "сайт не пускает автоматическую проверку",
-                    "error": "ссылка не открылась при проверке"}.get(e.get("link", ""))
+                    "error": "ссылка не открылась при проверке", "refused": "внутренний адрес — не открывался"}.get(e.get("link", ""))
             if link:
                 _small(cc.add_paragraph(), link, size=8)
             _cell_text(t.cell(n, 2), ", ".join(e.get("claims") or []))
@@ -1251,6 +1260,18 @@ class _Report:
         _cell_text(t.cell(last, 3), f"${v.cost:.4f}", bold=True, align=WD_ALIGN_PARAGRAPH.RIGHT)
         if v.cache_line:
             self.meta(v.cache_line + ".")
+        sc = v.stage_costs
+        if sc["stages"]:
+            self.h("Расходы по этапам", 2)
+            t = _table(self.doc, len(sc["stages"]) + 1, 5, widths=[5, 3.5, 2.6, 3, 2.4])
+            for j, hd in enumerate(("Этап", "Обращений (повторы)", "Вход из кэша", "Стоимость", "Доля")):
+                _cell_text(t.cell(0, j), hd, align=WD_ALIGN_PARAGRAPH.RIGHT if j else None)
+            for i, r in enumerate(sc["stages"], 1):
+                for j, val in enumerate((r["stage_name"], f"{r['requests']} ({r['extra']})", f"{r['cache_share']:.0%}",
+                                         f"${r['cost']:.4f}", f"{r['share']:.0%}")):
+                    _cell_text(t.cell(i, j), val, align=WD_ALIGN_PARAGRAPH.RIGHT if j else None)
+            if sc["extra_cost"]:
+                self.meta(f"На повторы и продолжения ушло ${sc['extra_cost']:.4f}.")
         fails = v.failures()
         if fails:
             self.h("Сбои", 2)

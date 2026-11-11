@@ -178,6 +178,9 @@ class Council:
         self.budget = config.max_cost_usd  # можно поднять на ходу: set_budget()
         self._budget_warned = False
         self.replayed = 0  # сколько ответов взято из журнала
+        self._in_flight = 0      # запросы к моделям, отправленные и ещё не вернувшиеся (резерв бюджета)
+        self._requests_done = 0
+        self._fresh_stage = ""   # первый этап, где ответ пришлось получать от модели (не из журнала)
         self.link_checker = link_checker  # проверка ссылок реестра (в демо и тестах — нет)
         self._replaying = False
         self.forced_labels = dict(labels or {})
@@ -275,6 +278,7 @@ class Council:
         meta: dict[str, Any] | None = None,
         content: list[dict[str, Any]] | None = None,
         web_search: bool = False,
+        max_tokens: int | None = None,
     ) -> T:
         if stage == "factcheck":
             system = prompts.FACTCHECK_SYSTEM.format(language=self.cfg.language)
@@ -300,6 +304,11 @@ class Council:
         self._seen[(stage, member.name)] = n + 1
         cached = self.journal.results.get(key)
         loose = cached is None
+        if loose and self._fresh_stage and self._fresh_stage != stage:
+            # раньше на другом этапе ответ пришлось получать заново — его вход изменился, и ответы этого этапа
+            # из журнала (по номеру обращения) могли быть даны на другой вход: спрашиваем заново
+            loose = False
+            cached = None
         if loose:  # запрос изменился (обновление программы) или «доделать» из архива: ответ того же участника
             cached = self.journal.loose.get((stage, member.name, n))  # на том же этапе по порядку обращений
         if cached is not None:  # ответ уже получен и оплачен раньше
@@ -320,8 +329,11 @@ class Council:
                 return obj
         if key in self.journal.failures:  # участник не справился до приостановки — ход заседания тот же
             raise InvalidResponse(self.journal.failures[key])
+        if not self._fresh_stage and stage not in ("describe",):
+            self._fresh_stage = stage
         try:
-            obj = await self._ask_model(member, stage, schema, base_messages, messages, meta, check, web_search, n)
+            obj = await self._ask_model(member, stage, schema, base_messages, messages, meta, check, web_search, n,
+                                        max_tokens)
         except (InvalidResponse, ProviderError) as e:
             if not isinstance(e, OutOfCredits):
                 self.journal.fail(key, str(e), stage)
@@ -331,8 +343,11 @@ class Council:
 
     async def _ask_model(self, member: MemberConfig, stage: str, schema: type[T], base_messages: list, messages: list,
                          meta: dict[str, Any], check: Callable[[T], T] | None, web_search: bool = False,
-                         call_n: int = 0) -> T:
-        max_tokens = member.max_tokens or self.cfg.max_tokens
+                         call_n: int = 0, max_tokens_override: int | None = None) -> T:
+        max_tokens = max_tokens_override or member.max_tokens or self.cfg.max_tokens
+        temperature = member.temperature if member.temperature is not None else self.cfg.temperature
+        if stage in self.JUDGE_STAGES and self.cfg.judge_temperature is not None:
+            temperature = self.cfg.judge_temperature  # оценки и итог — с меньшей случайностью
         effort = member.reasoning_effort or self.cfg.reasoning_effort
         error = ""
         started = time.monotonic()
@@ -353,6 +368,12 @@ class Council:
                 raise BudgetExceeded(
                     f"достигнут лимит бюджета ${self.budget:g} (потрачено ${self.total_cost:.4f})"
                 )
+            if self.cfg.budget_reserve and self._in_flight and self._requests_done:
+                expected = self.total_cost / self._requests_done * self._in_flight  # средняя цена × запросы в полёте
+                if self.total_cost + expected >= self.budget:
+                    raise BudgetExceeded(
+                        f"бюджет ${self.budget:g} будет исчерпан запросами, которые уже отправлены (потрачено "
+                        f"${self.total_cost:.4f}, ещё в работе {self._in_flight}) — пауза, чтобы не превысить лимит")
             if self._sem.locked():
                 self._call(name, stage, "queued", started, detail="ждёт свободного слота")
             try:
@@ -360,16 +381,13 @@ class Council:
                     # у границы бюджета запросы идут по два: меньше запросов «в полёте» — меньше превышение лимита
                     async with (self._narrow if self._budget_warned else contextlib.nullcontext()):
                         extra = {"web_search": True} if web_search else {}
-                        comp = await self.client.complete(
-                            member.model,
-                            messages,
-                            temperature=member.temperature if member.temperature is not None else self.cfg.temperature,
-                            max_tokens=max_tokens,
-                            reasoning_effort=None if effort == "none" else effort,
-                            meta=meta,
-                            on_progress=progress,
-                            **extra,
-                        )
+                        self._in_flight += 1
+                        try:
+                            comp = await self._complete(member, messages, temperature, max_tokens, effort, meta, progress,
+                                                        extra)
+                        finally:
+                            self._in_flight -= 1
+                        self._requests_done += 1
             except ProviderError as e:
                 if e.spent is not None:  # неудачные попытки тоже стоят денег
                     self._account(member, e.spent)
@@ -465,6 +483,36 @@ class Council:
         raise InvalidResponse(f"{member.name}: некорректный ответ после {self.cfg.json_retries + 1} попыток: {error}")
 
     MAX_CONTINUATIONS = 4  # сколько раз можно попросить продолжить длинный ответ
+    JUDGE_STAGES = {"framing", "critique", "vote", "verdict"}  # здесь — judge_temperature
+
+    def _quorum(self, authors: int, mode: str) -> int:
+        """Сколько вариантов нужно: при 4+ авторах в обсуждении и исследовании — не меньше quorum_large
+        (при двух вариантах у судьи один чужой, выбор по сути делает председатель)."""
+        if mode in ("debate", "research") and authors >= 4:
+            return max(self.cfg.min_quorum, self.cfg.quorum_large)
+        return self.cfg.min_quorum
+
+    async def _complete(self, member: MemberConfig, messages: list, temperature: float, max_tokens: int, effort: str,
+                        meta: dict[str, Any], progress: Any, extra: dict[str, Any]) -> Completion:
+        return await self.client.complete(member.model, messages, temperature=temperature, max_tokens=max_tokens,
+                                          reasoning_effort=None if effort == "none" else effort, meta=meta,
+                                          on_progress=progress, **extra)
+
+    def _input_gaps(self, gaps: list[str], chair: MemberConfig) -> None:
+        """Председатель заметил, что вход обрезан или недоступен, — показать это пользователю."""
+        for g in gaps[:5]:
+            self._emit("warning", stage="framing", member=chair.name, text=f"во входе может не хватать: {g}")
+
+    def verdict_tokens(self, chair: MemberConfig) -> int | None:
+        """Предел ответа председателя на итоге: длинный синтез одним ответом, без склеек из продолжений."""
+        return max(chair.max_tokens or 0, self.cfg.verdict_max_tokens) or None
+
+    def author_tokens(self, member: MemberConfig) -> int | None:
+        """Предел ответа автора исследования — от заданной длины варианта; личный предел участника важнее."""
+        rc = self.cfg.research
+        if member.max_tokens or not rc.author_tokens_per_word:
+            return member.max_tokens or None
+        return max(rc.author_min_tokens, int(rc.max_words * rc.author_tokens_per_word))
 
     @staticmethod
     def _parse(schema: type[T], text: str, last_part: str | None) -> T:
@@ -648,10 +696,12 @@ class Council:
         else:
             self._emit("stage", stage="framing", title="Постановка задачи и критерии")
             try:
-                framing = await self._ask(chair, "framing", prompts.framing(question, context), Framing)
+                framing = await self._ask(chair, "framing", prompts.framing(question, context, self.cfg.max_requirements),
+                                          Framing)
                 refined = framing.refined_question.strip() or question
                 criteria = [c.strip() for c in framing.criteria if c.strip()]
-                self.requirements = [r.strip() for r in framing.requirements if r.strip()]
+                self.requirements = [r.strip() for r in framing.requirements if r.strip()][:self.cfg.max_requirements]
+                self._input_gaps(framing.input_gaps, chair)
             except (ProviderError, InvalidResponse) as e:
                 if isinstance(e, OutOfCredits):
                     raise
@@ -687,8 +737,9 @@ class Council:
                                    web_search=m.web_search)
                  for m in proposers},
             )
-            if len(got) < self.cfg.min_quorum:
-                raise CouncilError(f"нет кворума: ответили {len(got)} из {len(proposers)}, нужно {self.cfg.min_quorum}")
+            need = self._quorum(len(proposers), mode)
+            if len(got) < need:
+                raise CouncilError(f"нет кворума: ответили {len(got)} из {len(proposers)}, нужно {need}")
             labels = self._labels(got)
             authors = dict(labels)
             proposals = {l: got[name] for l, name in labels.items()}
@@ -753,6 +804,7 @@ class Council:
 
         # 5. Голосование (за свой вариант голосовать нельзя)
         self._emit("stage", stage="vote", title="Голосование")
+        keep_in_vote = mode == "quick" and self.cfg.quick_keep  # без критики идеи проигравших называют голосующие
         jobs = {}
         for m in members:
             target = self._shuffled(others(m.name))
@@ -766,7 +818,8 @@ class Council:
             jobs[m.name] = self._ask(
                 m,
                 "vote",
-                prompts.vote(refined, criteria, target, question, bool(self.compact), req=req),
+                prompts.vote(refined, criteria, target, question, bool(self.compact), req=req,
+                             keep=keep_in_vote),
                 Ballot,
                 check=check_ballot,
                 meta={"labels": expected},
@@ -804,6 +857,8 @@ class Council:
         leader = rows[0].label
         follow = self.cfg.chair_follows_vote
         ideas = collect_ideas(critiques, exclude={leader})
+        if keep_in_vote:
+            ideas = ideas_from_ballots(ballots, exclude={leader}, valid=set(proposals))
         ideas_text = "\n".join(f"{i['id']} (from {i['label']}): {i['idea']}" for i in ideas)
         idea_ids = [i["id"] for i in ideas]
         verdict_checks = [0]
@@ -834,9 +889,10 @@ class Council:
                                  "1 = identical rankings, 0 = unrelated)") if agree else "",
                                 prompts.factcheck_block(facts), ballot_notes, leader=leader, follow_vote=follow,
                                 compact=bool(self.compact), req=req, co_leaders=tied if len(tied) > 1 else None,
-                                ideas=ideas_text),
+                                ideas=ideas_text, allow_none=mode == "evaluate" and self.cfg.evaluate_allow_none),
                 Verdict,
                 check=check_verdict,
+                max_tokens=self.verdict_tokens(chair),
                 meta={"labels": valid, "leader": rows[0].label, "ideas": idea_ids},
             )
         except (ProviderError, InvalidResponse) as e:
@@ -907,8 +963,9 @@ class Council:
         self._emit("stage", stage="framing", title="Постановка исследования: рамки и подвопросы")
         fr: R.ResearchFraming | None = None
         try:
-            fr = await self._ask(chair, "framing", R.framing(question, context, len(members)), R.ResearchFraming,
-                                 meta=rmeta)
+            fr = await self._ask(chair, "framing", R.framing(question, context, len(members), self.cfg.max_requirements),
+                                 R.ResearchFraming, meta=rmeta)
+            self._input_gaps(fr.input_gaps, chair)
         except (ProviderError, InvalidResponse) as e:
             if isinstance(e, OutOfCredits):
                 raise
@@ -919,7 +976,7 @@ class Council:
             criteria = [c.strip() for c in criteria if c.strip()]
         else:
             criteria = [c.strip() for c in (fr.criteria if fr else []) if c.strip()] or list(R.DEFAULT_CRITERIA)
-        self.requirements = [r.strip() for r in (fr.requirements if fr else []) if r.strip()]
+        self.requirements = [r.strip() for r in (fr.requirements if fr else []) if r.strip()][:self.cfg.max_requirements]
         subq = (fr.subquestions if fr else [])[:5] or [refined]
         scope, as_of = (fr.scope if fr else ""), (fr.as_of if fr else "")
         lenses = R.fill_lenses(fr.lenses if fr else [], self._n_proposers()) if rc.lenses else []
@@ -956,11 +1013,12 @@ class Council:
             m.name: self._ask(m, "proposal", R.proposal(rhead, criteria, context, lens_of[m.name], rc.max_words,
                                                         rc.max_claims, web=m.name in scouts),
                               R.ResearchProposal, check=lambda p, n=m.name: fit(check_substance(p), "proposal", n),
-                              meta=rmeta,
+                              meta=rmeta, max_tokens=self.author_tokens(m),
                               web_search=m.name in scouts)
             for m in proposers})
-        if len(got) < self.cfg.min_quorum:
-            raise CouncilError(f"нет кворума: ответили {len(got)} из {len(proposers)}, нужно {self.cfg.min_quorum}")
+        need = self._quorum(len(proposers), "research")
+        if len(got) < need:
+            raise CouncilError(f"нет кворума: ответили {len(got)} из {len(proposers)}, нужно {need}")
         authors: dict[str, str | None] = dict(self._labels(got))
         proposals: dict[str, Proposal] = {
             l: R.number_claims(l, got[n] if n in scouts else R.mark_memory_urls(got[n], set()))
@@ -989,20 +1047,25 @@ class Council:
 
         # 3. Арбитраж доказательств: поиск по утверждениям всех вариантов, два противоположных задания
         ledger: dict[str, Any] = {}
+        selected: list[dict[str, Any]] = []
+        deferred: list[dict[str, Any]] = []
+        results: list[Any] = []
         if rc.arbitration:
-            selected = R.select_claims(proposals, critiques, rc.arbitration_claims)  # type: ignore[arg-type]
+            selected, deferred = R.prepare_claims(  # type: ignore[arg-type]
+                proposals, critiques, rc.arbitration_claims, n_subq=len(subq), dedupe=rc.dedupe_claims,
+                defer_private=rc.defer_private, coverage_first=rc.coverage_first)
             if selected:
-                ledger = await self._arbitrate(R, refined, as_of, scope, selected, rc)
-        if ledger and ledger.get("evidence") and rc.link_check and self.link_checker:
-            # открываем каждую ссылку: мёртвая не подтверждает (бесплатно, модели не нужны)
-            try:
-                found = await self.link_checker([e["url"] for e in ledger["evidence"] if e.get("url")])
-            except Exception as e:  # noqa: BLE001 — проверка ссылок не должна ронять исследование
-                log.warning("проверка ссылок не удалась: %s", e)
-                found = {}
-            R.apply_links(ledger, found)
-            if ledger.get("links"):
-                self._emit("links", **ledger["links"])
+                results = await self._search(R, refined, as_of, scope, selected, rc, "arbitration")
+                ledger = self._ledger(R, selected, results, rc, deferred)
+                unclear = [c for c in selected for x in ledger["claims"]
+                           if x["id"] == c["id"] and x["status"] == "unclear"][:rc.recheck_unclear]
+                if unclear:  # второй поиск — другими запросами
+                    results += await self._search(R, refined, as_of, scope, unclear, rc, "arbitration", recheck=True)
+                    ledger = self._ledger(R, selected, results, rc, deferred)
+                self._emit("ledger", ledger=ledger)
+            elif deferred:
+                ledger = self._ledger(R, [], [], rc, deferred)
+        await self._links(R, ledger, rc)
         ledger_txt = R.ledger_text(ledger)
 
         # 4. Доработка по реестру и выжимкам чужих вариантов
@@ -1018,19 +1081,36 @@ class Council:
             jobs[m.name] = self._ask(
                 m, "revision",
                 R.revision(rhead, criteria, own, proposals[own], feedback, others(m.name), ledger_txt,
-                           lens_of.get(m.name, ""), rc.max_words, rc.max_claims, full_others=not rc.revision_digest),
+                           lens_of.get(m.name, ""), rc.max_words, rc.max_claims, full_others=not rc.revision_digest,
+                           table_rows=rc.digest_table_rows),
                 R.ResearchRevision,
                 # сокращение слишком длинного варианта до заданной длины — не «потеря содержания»
                 check=lambda r, prev=(None if rc.shorten_long and len(proposals[own].summary.split())
                                       > rc.max_words * rc.long_factor else proposals[own]), n=m.name: fit(
                     check_substance(_normalize_revision(r), previous=prev), "revision", n),
-                meta={"label": own, **rmeta})
+                meta={"label": own, **rmeta}, max_tokens=self.author_tokens(m))
         revised = await self._parallel("revision", jobs)
         known_urls = {e["url"] for e in (ledger or {}).get("evidence", [])}
         for name, rev in revised.items():
             rev = rev if name in scouts else R.mark_memory_urls(rev, known_urls)
             proposals[label_of[name]] = R.number_claims(label_of[name], rev)
         self._emit("revisions", revised={label_of[n]: proposals[label_of[n]] for n in revised})
+        if rc.arbitration and rc.post_revision_claims and ledger:
+            old = {R._claim_key(c["text"])[0] for c in selected}
+            fresh = {l: p.model_copy(update={"claims": [c for c in p.claims if R._claim_key(c.text)[0] not in old]})
+                     for l, p in proposals.items()}
+            new_sel, new_def = R.prepare_claims(fresh, {}, rc.post_revision_claims, n_subq=len(subq),  # type: ignore[arg-type]
+                                                dedupe=rc.dedupe_claims, defer_private=rc.defer_private,
+                                                coverage_first=rc.coverage_first)
+            if new_sel:
+                self._emit("stage", stage="recheck", title=f"Проверка новых утверждений после доработки: {len(new_sel)}")
+                results += await self._search(R, refined, as_of, scope, new_sel, rc, "recheck", missions=1)
+                selected = selected + new_sel
+                deferred = deferred + new_def
+                ledger = self._ledger(R, selected, results, rc, deferred)
+                await self._links(R, ledger, rc)
+                self._emit("ledger", ledger=ledger)
+                ledger_txt = R.ledger_text(ledger)
 
         # 5. Голосование: общий порядок и лучший вариант по каждому подвопросу
         self._emit("stage", stage="vote", title="Голосование: каркас по подвопросам")
@@ -1045,7 +1125,8 @@ class Council:
                 best = {q: lab for q, lab in b.best_by_subquestion.items() if lab in e}
                 return b.model_copy(update={"ranking": normalize_ranking(b.ranking, e), "best_by_subquestion": best})
 
-            jobs[m.name] = self._ask(m, "vote", R.vote(rhead, criteria, target, subq, req, rc.section_vote),
+            jobs[m.name] = self._ask(m, "vote", R.vote(rhead, criteria, target, subq, req, rc.section_vote,
+                                                        R.ledger_digest(ledger) if rc.vote_ledger else ""),
                                      R.ResearchBallot, check=check_ballot,
                                      meta={"labels": expected, "subquestions": len(subq), **rmeta})
         ballots = await self._parallel("vote", jobs)
@@ -1096,7 +1177,7 @@ class Council:
             if _letters(v.final_answer) < 3 or _is_placeholder(v.final_answer):
                 raise ValueError('"final_answer" is empty or a placeholder ("...") — write the research synthesis')
             moved = len(v.known)
-            v = R.check_verdict(v, ledger=ledger, n_subq=len(subq), strict=strict)
+            v = R.check_verdict(v, ledger=ledger, n_subq=len(subq), strict=strict, mark=rc.mark_unconfirmed)
             moved -= len(v.known)
             if moved:
                 self._emit("warning", stage="verdict", member=chair.name,
@@ -1115,8 +1196,8 @@ class Council:
                 R.verdict(rhead, criteria, proposals_txt, ledger_txt, R.section_text(subq, sections), tally_text(rows),
                           _critique_notes(critiques), ideas_text, leader, valid,
                           (f"{agree['level']} (mean Kendall tau = {agree['tau']:.2f})") if agree else "", ballot_notes,
-                          req, tied if len(tied) > 1 else None, subq),
-                R.ResearchVerdict, check=check_verdict,
+                          req, tied if len(tied) > 1 else None, subq, card=rc.decision_card),
+                R.ResearchVerdict, check=check_verdict, max_tokens=self.verdict_tokens(chair),
                 meta={"labels": valid, "leader": leader, "ideas": idea_ids, "subquestions": len(subq),
                       "evidence_ok": sorted(R.confirmed_ids(ledger)), **rmeta})
         except (ProviderError, InvalidResponse) as e:
@@ -1146,40 +1227,64 @@ class Council:
                       "ledger": ledger, "sections": sections, "settings": rc.model_dump()},
         )
 
-    async def _arbitrate(self, R: Any, question: str, as_of: str, scope: str, selected: list[dict[str, Any]],
-                         rc: Any) -> dict[str, Any]:
-        """Два поисковых вызова с противоположными заданиями; сбой поиска не прерывает исследование."""
+    def _ledger(self, R: Any, selected: list[dict[str, Any]], results: list[Any], rc: Any,
+                deferred: list[dict[str, Any]]) -> dict[str, Any]:
+        fc = self.cfg.fact_check
+        if not results:
+            return {"model": fc.model, "missions": 0, "evidence": [], "gaps": [], "deferred": deferred,
+                    "claims": [{**c, "status": "search_unavailable" if selected else "not_checked", "notes": [],
+                                "evidence": []} for c in selected]}
+        return R.build_ledger(selected, results, fc.model, snippet_rule=rc.snippet_rule, deferred=deferred)
+
+    async def _links(self, R: Any, ledger: dict[str, Any], rc: Any) -> None:
+        """Открыть каждую ссылку реестра: мёртвая не подтверждает (бесплатно, модели не нужны)."""
+        if not (ledger and ledger.get("evidence") and rc.link_check and self.link_checker):
+            return
+        todo = [e["url"] for e in ledger["evidence"] if e.get("url") and not e.get("link")]
+        try:
+            found = await self.link_checker(todo) if todo else {}
+        except Exception as e:  # noqa: BLE001 — проверка ссылок не должна ронять исследование
+            log.warning("проверка ссылок не удалась: %s", e)
+            found = {}
+        R.apply_links(ledger, found)
+        if ledger.get("links"):
+            self._emit("links", **ledger["links"])
+
+    async def _search(self, R: Any, question: str, as_of: str, scope: str, selected: list[dict[str, Any]], rc: Any,
+                      stage: str, *, recheck: bool = False, missions: int | None = None) -> list[Any]:
+        """Поисковые вызовы по пачкам утверждений: подтвердить и опровергнуть (второй поиск — другими запросами).
+        Сбой поиска не прерывает исследование."""
         fc = self.cfg.fact_check
         checker = MemberConfig(name=FACT_CHECKER, model=fc.model, max_tokens=max(fc.max_tokens, 6000),
                                temperature=0.1, reasoning_effort="none")
         self.stats.setdefault(FACT_CHECKER, MemberStats())
-        self._emit("stage", stage="arbitration",
-                   title=f"Арбитраж доказательств: {len(selected)} утверждений, поиск {fc.model}",
-                   claims=[c["id"] for c in selected], model=fc.model)
+        if stage == "arbitration" and not recheck:
+            self._emit("stage", stage="arbitration",
+                       title=f"Арбитраж доказательств: {len(selected)} утверждений, поиск {fc.model}",
+                       claims=[c["id"] for c in selected], model=fc.model)
         size = R.ARBITRATION_BATCH
         chunks = [selected[k:k + size] for k in range(0, len(selected), size)]
         per_chunk = max(5, rc.max_evidence // max(1, len(chunks)))
-        plan = [(i, chunk) for chunk in chunks for i in range(rc.missions)]
-        jobs = [self._ask(checker, "arbitration", R.arbitration(question, as_of, scope, R.MISSIONS[i],
-                                                                 R.claims_batch(chunk), per_chunk),
-                          R.EvidenceResult, meta={"mission": i + 1, "claims": [c["id"] for c in chunk], "research": True},
+        n_missions = 1 if recheck else (missions or rc.missions)
+        plan = [(i, chunk) for chunk in chunks for i in range(n_missions)]
+        snippet = rc.snippet_rule != "off"
+        jobs = [self._ask(checker, stage, R.arbitration(question, as_of, scope, R.MISSIONS[i], R.claims_batch(chunk),
+                                                        per_chunk, snippet=snippet, recheck=recheck),
+                          R.EvidenceResult, meta={"mission": i + 1, "claims": [c["id"] for c in chunk], "research": True,
+                                                  "recheck": recheck},
                           web_search=True)
                 for i, chunk in plan]
-        results = await asyncio.gather(*jobs, return_exceptions=True)
+        found = await asyncio.gather(*jobs, return_exceptions=True)
         ok = []
-        for i, res in enumerate(results, 1):
+        for i, res in enumerate(found, 1):
             if isinstance(res, (BudgetExceeded, OutOfCredits)):
                 raise res
             if isinstance(res, BaseException):
-                self.stats[FACT_CHECKER].failures.append(f"arbitration: задание {i}: {res}")
-                self._emit("member_failed", stage="arbitration", member=f"{FACT_CHECKER} (задание {i})", error=str(res))
+                self.stats[FACT_CHECKER].failures.append(f"{stage}: задание {i}: {res}")
+                self._emit("member_failed", stage=stage, member=f"{FACT_CHECKER} (задание {i})", error=str(res))
                 continue
             ok.append(res)
-        ledger = R.build_ledger(selected, ok, fc.model) if ok else {
-            "model": fc.model, "missions": 0, "evidence": [], "gaps": [],
-            "claims": [{**c, "status": "search_unavailable", "notes": [], "evidence": []} for c in selected]}
-        self._emit("ledger", ledger=ledger)
-        return ledger
+        return ok
 
     async def _fact_check(self, question: str, proposals: dict[str, Proposal], rows: list[TallyRow]) -> dict[str, dict]:
         """Проверяет ключевые факты в лидирующих вариантах (топ-N голосования). Сбой проверки не прерывает заседание."""
@@ -1296,6 +1401,23 @@ IDEAS_MAX = 15
 
 def _idea_key(text: str) -> str:
     return re.sub(r"\W+", " ", text.lower()).strip()
+
+
+def ideas_from_ballots(ballots: dict[str, Ballot], exclude: set[str], valid: set[str]) -> list[dict[str, Any]]:
+    """«Быстрый ответ»: критики нет — ценное из вариантов не на первом месте называют голосующие."""
+    picked: dict[str, dict[str, Any]] = {}
+    for voter, b in sorted(ballots.items()):
+        for k in b.keep_from_others:
+            label = k.get("label") or ""
+            if label in exclude or (label and label not in valid):
+                continue
+            key = _idea_key(k["idea"])
+            if key in picked:
+                picked[key]["by"].append(voter)
+            elif len(picked) < IDEAS_MAX:
+                picked[key] = {"label": label or "?", "idea": k["idea"], "by": [voter]}
+    out = list(picked.values())
+    return [{"id": f"I{n}", **i} for n, i in enumerate(out, 1)]
 
 
 def collect_ideas(critiques: dict[str, CritiqueSet], exclude: set[str] = frozenset()) -> list[dict[str, Any]]:

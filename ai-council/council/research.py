@@ -62,13 +62,14 @@ class ResearchFraming(Framing):
     scope: str = ""
     subquestions: list[str] = Field(default_factory=list)
     lenses: list[str] = Field(default_factory=list)
+    input_gaps: list[str] = Field(default_factory=list)
 
     @field_validator("as_of", "scope", mode="before")
     @classmethod
     def _txt(cls, v: Any) -> str:
         return to_text(v)
 
-    @field_validator("subquestions", "lenses", mode="before")
+    @field_validator("subquestions", "lenses", "input_gaps", mode="before")
     @classmethod
     def _lst(cls, v: Any) -> list[str]:
         out = []
@@ -90,6 +91,9 @@ class RClaim(BaseModel):
     volatility: str = "unknown"
     source_leads: list[str] = Field(default_factory=list)
     why_it_matters: str = ""
+    subquestions: list[str] = Field(default_factory=list)  # к каким подвопросам относится: ["Q2"]
+    checkability: str = "public"   # public | registry | private — можно ли проверить открытым поиском
+    check_path: str = ""           # где проверять (реестр, документ, правообладатель)
 
     @model_validator(mode="before")
     @classmethod
@@ -100,7 +104,17 @@ class RClaim(BaseModel):
             data = {**data, "text": _pick(data, "claim", "statement", "fact") or ""}
         return data
 
-    @field_validator("text", "scope", "why_it_matters", "id", mode="before")
+    @field_validator("subquestions", mode="before")
+    @classmethod
+    def _sq(cls, v: Any) -> list[str]:
+        return [t.upper() for t in re.findall(r"[Qq]\d+", " ".join(to_list(v)))]
+
+    @field_validator("checkability", mode="before")
+    @classmethod
+    def _chk(cls, v: Any) -> str:
+        return _norm(v, ("public", "registry", "private"), "public")
+
+    @field_validator("text", "scope", "why_it_matters", "id", "check_path", mode="before")
     @classmethod
     def _txt(cls, v: Any) -> str:
         return to_text(v)
@@ -149,8 +163,9 @@ class ResearchProposal(Proposal):
     coverage: list[CoverageItem] = Field(default_factory=list)
     unknowns: list[str] = Field(default_factory=list)
     what_would_change: list[str] = Field(default_factory=list)
+    omitted_for_length: list[str] = Field(default_factory=list)  # что автор опустил ради длины
 
-    @field_validator("unknowns", "what_would_change", mode="before")
+    @field_validator("unknowns", "what_would_change", "omitted_for_length", mode="before")
     @classmethod
     def _lst(cls, v: Any) -> list[str]:
         out = []
@@ -216,6 +231,14 @@ class CheckedClaim(BaseModel):
     status: str = "unclear"
     note: str = ""
     sources: list[ESource] = Field(default_factory=list)
+    verified_parts: list[str] = Field(default_factory=list)    # какие части утверждения подтверждены
+    unverified_parts: list[str] = Field(default_factory=list)  # какие — нет
+    queries_used: list[str] = Field(default_factory=list)      # каким запросами искали (для второго поиска)
+
+    @field_validator("verified_parts", "unverified_parts", "queries_used", mode="before")
+    @classmethod
+    def _parts(cls, v: Any) -> list[str]:
+        return to_list(v)
 
     @field_validator("claim_id", "note", mode="before")
     @classmethod
@@ -257,6 +280,7 @@ class ResearchBallot(Ballot):
 
 class KnownItem(BaseModel):
     statement: str
+    claim_ids: list[str] = Field(default_factory=list)   # на какие проверенные утверждения реестра опирается
     evidence_ids: list[str] = Field(default_factory=list)
     scope: str = ""
     volatility: str = "unknown"
@@ -277,6 +301,11 @@ class KnownItem(BaseModel):
     @classmethod
     def _ids(cls, v: Any) -> list[str]:
         return [("DOC" if "DOC" in str(x).upper() else str(x).strip().strip("[]").upper()) for x in to_list(v)]
+
+    @field_validator("claim_ids", mode="before")
+    @classmethod
+    def _cids(cls, v: Any) -> list[str]:
+        return [str(x).strip().strip("[]").upper() for x in to_list(v) if str(x).strip()]
 
 
 class ContestedItem(BaseModel):
@@ -323,11 +352,31 @@ class UnknownItem(BaseModel):
         return to_text(v)
 
 
+class DecisionCard(BaseModel):
+    """Карточка решения на одну страницу — первой в итоге исследования."""
+
+    summary_decision: str = ""
+    top_known: list[str] = Field(default_factory=list)
+    key_unknowns: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+
+    @field_validator("summary_decision", mode="before")
+    @classmethod
+    def _t(cls, v: Any) -> str:
+        return to_text(v)
+
+    @field_validator("top_known", "key_unknowns", "next_steps", mode="before")
+    @classmethod
+    def _l(cls, v: Any) -> list[str]:
+        return to_list(v)[:5]
+
+
 class ResearchVerdict(Verdict):
     """Этап 6: синтез исследования. «winner» необязателен: итог собирается по подвопросам."""
 
     winner: str = ""
     why: str = ""
+    decision_card: DecisionCard = Field(default_factory=DecisionCard)
 
     section_backbone: dict[str, str] = Field(default_factory=dict)
     known: list[KnownItem] = Field(default_factory=list)
@@ -379,7 +428,7 @@ def research_head(question: str, original: str | None, req: list[str] | None, sc
             + f"Subquestions the research must cover:\n{subq_block(subquestions)}\n")
 
 
-def framing(question: str, context: str | None, members: int) -> str:
+def framing(question: str, context: str | None, members: int, max_req: int = 20) -> str:
     lenses = max(2, members)
     return f"""Before the council starts, prepare a RESEARCH task (not a choice between options).
 
@@ -390,7 +439,8 @@ User question:
 2. Define 3-5 short evaluation criteria (1-4 words each). For research the defaults are: coverage completeness,
    quality of evidence, calibration of uncertainty, practical value — adapt them to the question if needed.
 3. List the HARD REQUIREMENTS the user stated explicitly (structure, sections, length, language, constraints),
-   faithfully, one per item, without inventing new ones (at most 10; an empty list if none).
+   faithfully, one per item, without inventing new ones (at most {max_req}, merging only exact duplicates; an
+   empty list if none). If any input looks truncated or unavailable, say so in "input_gaps".
 4. "as_of": the date or period the facts must be current for (e.g. "2026-11" or "2023-2025").
    "scope": geography, period, units, definitions and what is out of scope, in one or two sentences.
 5. "subquestions": 3-5 subquestions that together cover the research question (a checklist, not separate tasks).
@@ -399,7 +449,7 @@ User question:
 
 JSON format:
 {{"refined_question": "...", "criteria": ["..."], "requirements": ["..."], "as_of": "...", "scope": "...",
-  "subquestions": ["...", "..."], "lenses": ["...", "..."]}}"""
+  "subquestions": ["...", "..."], "lenses": ["...", "..."], "input_gaps": ["..."]}}"""
 
 
 def _claims_rule(max_claims: int) -> str:
@@ -411,14 +461,33 @@ def _claims_rule(max_claims: int) -> str:
 - State period, geography and units for every number. Separate facts, estimates and recommendations.
 - If a subquestion cannot be answered, say so in "unknowns" instead of filling the gap. For every major conclusion
   state what evidence would change it.
-List up to {max_claims} decision-critical, checkable atomic claims in "claims": POSITIVE statements that public
+List up to {max_claims} decision-critical, checkable claims in "claims": POSITIVE statements that public
 sources (registries of FDA/EMA/PMDA, official sites, publications) can confirm or refute — not absence claims like
-"X is not registered anywhere". Mark fast-changing ones (prices, market shares, regulation, versions) as "changes_fast"."""
+"X is not registered anywhere" (put those in "unknowns"). Mark fast-changing ones (prices, market shares, regulation,
+versions) as "changes_fast".
+Make every claim ATOMIC: one entity, one fact or number, one period, one geography — if a sentence holds several
+facts, write several claims. Name the subquestions each claim supports ("subquestions": ["Q2"]). Set "checkability":
+public (a primary or reputable public source can confirm it), registry (only a named registry or database can; name
+it in "check_path"), private (needs the rights holder, a contract or an internal document)."""
 
 
 CLAIM_JSON = ('{"text": "one atomic checkable statement", "basis": "user_doc|calc|memory|search_reported", '
               '"scope": "period, geography, units", "volatility": "stable|changes_fast|unknown", '
+              '"subquestions": ["Q1"], "checkability": "public|registry|private", "check_path": "", '
               '"source_leads": ["..."], "why_it_matters": "..."}')
+
+
+DOSSIER_RULE = ("IMPORTANT: your output is working material for the council chair, NOT the final formatted "
+                "deliverable. The chair applies the user's final structure and format. Do not write generic "
+                "introductions, conclusions or decorative prose.")
+
+
+def dossier_rule(max_words: int) -> str:
+    return (DOSSIER_RULE + f"\nHard budget: the \"summary\" is at most {max_words} words; \"claims\", \"coverage\" and "
+            "\"unknowns\" are separate fields and do NOT count toward it. Put the most decision-critical claims in "
+            "\"claims\" first and do not repeat their text in the summary beyond the claim. Present catalogues and "
+            "comparisons as compact Markdown tables only when a table replaces at least three sentences. If you run out "
+            "of space, drop background, never claims or unknowns; list anything you left out in \"omitted_for_length\".")
 
 
 def proposal(rhead: str, criteria: list[str], context: str | None, lens: str, max_words: int, max_claims: int,
@@ -432,9 +501,10 @@ Evaluation criteria:
 {_criteria(criteria)}
 
 Work independently; you have not seen other answers. {access}
-Cover ALL subquestions in about {max_words} words at most: dense substance, no generic introductions.{lens_txt}
+Cover ALL subquestions: dense substance, no generic introductions.{lens_txt}
+{dossier_rule(max_words)}
 {_claims_rule(max_claims)}
-{FORMAT_RULE} The "summary" field holds the research answer itself.
+The "summary" field holds your research findings (the chair writes the final report).
 
 JSON format:
 {{"title": "short descriptive angle",
@@ -445,6 +515,7 @@ JSON format:
  "coverage": [{{"subquestion_id": "Q1", "status": "covered|partial|unknown", "note": "..."}}],
  "unknowns": ["what is not known and why it matters"],
  "what_would_change": ["evidence that would change the main conclusions"],
+ "omitted_for_length": ["what you left out to keep the budget"],
  "confidence": 0.0-1.0}}"""
 
 
@@ -460,6 +531,9 @@ def proposal_block(label: str, p: Proposal, claim_ids: bool = True) -> str:
     unknowns = getattr(p, "unknowns", None) or []
     if unknowns:
         lines.append("Unknowns: " + "; ".join(unknowns))
+    added = getattr(p, "new_after_ledger", None) or []
+    if added:
+        lines.append("Added after the evidence ledger (UNVERIFIED): " + "; ".join(added))
     if p.risks:
         lines.append("Risks: " + "; ".join(p.risks))
     return "\n".join(lines)
@@ -508,7 +582,15 @@ MISSIONS = [
 ]
 
 
-def arbitration(question: str, as_of: str, scope: str, mission: str, claims_batch: str, max_evidence: int) -> str:
+SNIPPET_RULE = ("For a claim marked CRITICAL do NOT return \"confirmed\" solely from a snippet or a search answer: open "
+                "and read the page; if you could not, return \"unclear\" and name the missing part. ")
+RECHECK_NOTE = ("SECOND PASS: these claims were \"unclear\" after a first search. Do NOT repeat obvious queries: write 2-3 "
+                "new ones in other wording or languages (legal entity name, brand, regulator or registry, official site) "
+                "and list them in \"queries_used\". ")
+
+
+def arbitration(question: str, as_of: str, scope: str, mission: str, claims_batch: str, max_evidence: int,
+                snippet: bool = True, recheck: bool = False) -> str:
     return f"""Question (as of {as_of or 'today'}): {question}
 Required scope: {scope or 'as stated in the question'}
 Assigned mission: {mission}
@@ -517,11 +599,14 @@ Claims selected from anonymous proposals (contradictions, key numbers, fast-chan
 fixed — use them exactly:
 {claims_batch}
 
-Investigate EVERY claim. Look for evidence both for and against. Prefer primary sources for numbers, dates, laws and
+{RECHECK_NOTE if recheck else ""}Investigate EVERY claim. Look for evidence both for and against. Prefer primary sources for numbers, dates, laws and
 technical facts; check dates, geography, units and definitions. Where estimates differ, find the reason. Two articles
 restating one underlying report count as ONE source (mark the later one "secondary"). Record only sources your search
 actually returned; never invent a URL, date or quotation. If you saw only a snippet or a search summary, say so in
-"material_seen". A related page is not a confirmation. Absence of a found source is not a refutation.
+"material_seen" — a snippet or a search answer is a lead, not a reading of the document. A live URL proves only
+availability. A related page is not a confirmation. Absence of a found source is not a refutation.
+{SNIPPET_RULE if snippet else ""}Test subject, value, date, geography, units and every qualifier separately; list
+them in "verified_parts" and "unverified_parts".
 Statuses: confirmed (a source directly supports EVERY part of the claim in its stated scope — each number, date,
 age, dose, name and owner; if only some parts are supported, use unclear and list in "notes" which parts are
 confirmed and which are not); refuted (a reliable source directly
@@ -532,18 +617,33 @@ Return at most {max_evidence} sources in total.
 JSON format:
 {{"checked_claims": [{{"claim_id": "A-C1", "status": "confirmed|refuted|contested_in_sources|unclear|user_doc|search_unavailable",
    "note": "what the sources state, with exact figures, scope and caveats",
+   "verified_parts": ["..."], "unverified_parts": ["..."], "queries_used": ["..."],
    "sources": [{{"url": "https://...", "title": "...", "publisher": "...", "date": "YYYY-MM-DD or empty",
                 "source_type": "primary|secondary|unknown", "material_seen": "page|snippet|search_answer",
                 "relation": "supports|contradicts|context"}}]}}],
  "gaps": [{{"question": "...", "searched_for": "...", "why_unresolved": "..."}}]}}"""
 
 
-def digest(label: str, p: Proposal) -> str:
-    """Выжимка чужого варианта для доработки: тезисы и утверждения, без полного текста."""
+def _table_rows(md: str, limit: int) -> list[str]:
+    """Строки таблиц Markdown из текста варианта (каталоги кандидатов, сравнения) — до limit строк."""
+    rows = [ln.strip() for ln in md.splitlines() if ln.strip().startswith("|") and not re.fullmatch(r"\|[\s:|-]+\|?", ln.strip())]
+    return rows[:limit]
+
+
+def digest(label: str, p: Proposal, table_rows: int = 12) -> str:
+    """Выжимка чужого варианта для доработки: утверждения, покрытие подвопросов, строки таблиц — без полного текста."""
     lines = [f"### Proposal {label}: {p.title}"]
     claims = getattr(p, "claims", None) or []
     if claims:
         lines += [f"- {c.id} [{c.basis}] {c.text}" for c in claims]
+    cov = getattr(p, "coverage", None) or []
+    if cov:
+        lines.append("Coverage: " + "; ".join(f"{c.subquestion_id} {c.status}" + (f" ({c.note[:80]})" if c.note else "")
+                                              for c in cov))
+    rows = _table_rows(p.summary, table_rows) if table_rows else []
+    if rows:
+        lines.append("Table rows from this proposal (first ones):")
+        lines += rows
     if p.pros:
         lines.append("Strengths claimed by the author: " + "; ".join(p.pros[:5]))
     unknowns = getattr(p, "unknowns", None) or []
@@ -554,13 +654,13 @@ def digest(label: str, p: Proposal) -> str:
 
 def revision(rhead: str, criteria: list[str], own_label: str, own: Proposal, feedback: list[dict],
              others: dict[str, Proposal], ledger: str, lens: str, max_words: int, max_claims: int,
-             full_others: bool) -> str:
+             full_others: bool, table_rows: int = 12) -> str:
     fb = json.dumps(feedback, ensure_ascii=False, indent=1) if feedback else "(no feedback received)"
     if full_others:
         others_txt = "Other proposals, in full (anonymous):\n\n" + "\n\n".join(proposal_block(l, p) for l, p in others.items())
     else:
-        others_txt = ("Other proposals, as digests (claims and strengths only — keep your own line of reasoning):\n\n"
-                      + "\n\n".join(digest(l, p) for l, p in others.items()))
+        others_txt = ("Other proposals, as digests (claims, coverage and table rows — keep your own line of reasoning):\n\n"
+                      + "\n\n".join(digest(l, p, table_rows) for l, p in others.items()))
     lens_txt = f"\nYour lens remains: {lens}\n" if lens else ""
     return f"""{rhead}
 Criteria:
@@ -583,7 +683,8 @@ Do this in order:
 3. Change your core approach only for a specific evidence id or argument — name it. Agreement of others is not a
    reason by itself. List criticism you do not accept in "not_accepted".
 4. Any claim you ADD or CHANGE that is not covered by the ledger goes to "new_after_ledger" (by its text).
-About {max_words} words at most. {_claims_rule(max_claims)}
+{dossier_rule(max_words)}
+{_claims_rule(max_claims)}
 
 JSON format:
 {{"title": "...", "summary": "the full revised research answer with [E#]/[DOC]/[CALC]/[MEM] tags",
@@ -592,11 +693,19 @@ JSON format:
  "unknowns": ["..."], "what_would_change": ["..."], "confidence": 0.0-1.0,
  "comparison": "where other proposals are stronger and where yours is", "borrowed": ["idea (label)"],
  "not_accepted": ["critique not accepted and why"], "position": "kept | improved | switched",
- "changes": "what you changed and why", "new_after_ledger": ["claim text"]}}"""
+ "changes": "what you changed and why", "new_after_ledger": ["claim text"],
+ "omitted_for_length": ["..."]}}"""
+
+
+VOTE_LEDGER_NOTE = ("A compact evidence digest follows (claim id, status, evidence ids, material seen). It is evidence about "
+                    "claims, not a vote for a proposal. Claims added after the ledger and memory-only claims are unverified "
+                    "however persuasive they read. Prefer coverage supported by the ledger and honestly labelled "
+                    "uncertainty; do not penalise an unknown that no public source can resolve. Agreement between authors "
+                    "is not evidence.")
 
 
 def vote(rhead: str, criteria: list[str], proposals: dict[str, Proposal], subq: list[str], req: list[str] | None,
-         section_vote: bool) -> str:
+         section_vote: bool, ledger_digest: str = "") -> str:
     labels = ", ".join(proposals)
     blocks = "\n\n".join(proposal_block(l, p) for l, p in proposals.items())
     qids = ", ".join(f"Q{i}" for i in range(1, len(subq) + 1))
@@ -610,7 +719,7 @@ Criteria:
 Final research proposals (anonymous):
 
 {blocks}
-
+{f"{chr(10)}{VOTE_LEDGER_NOTE}{chr(10)}Evidence digest:{chr(10)}{ledger_digest}{chr(10)}" if ledger_digest else ""}
 Rank ALL of these proposals from best to worst as research: coverage, quality of evidence, honest uncertainty,
 practical value — not length or style. Include every label exactly once: {labels}.{REQ_VOTE if req else ""}{sec}
 
@@ -618,9 +727,16 @@ JSON format:
 {{"ranking": ["best label", "...", "worst label"], "rationale": "why the top choice wins"{sec_json}}}"""
 
 
+DECISION_CARD_NOTE = ("\n- \"decision_card\": a one-page executive brief shown FIRST to the user: summary_decision (at most 60 "
+                      "words), top_known (at most 5 known facts with E-ids), key_unknowns (at most 5, with how to check), "
+                      "next_steps (at most 5).")
+DECISION_CARD_JSON = ('\n "decision_card": {{"summary_decision": "...", "top_known": ["... [E1]"], '
+                      '"key_unknowns": ["..."], "next_steps": ["..."]}},').replace("{{", "{").replace("}}", "}")
+
+
 def verdict(rhead: str, criteria: list[str], proposals_txt: str, ledger: str, section_tally: str, overall_tally: str,
             critique_notes: str, ideas: str, leader: str, labels: list[str], agreement: str, ballot_notes: str,
-            req: list[str] | None, co_leaders: list[str] | None, subq: list[str]) -> str:
+            req: list[str] | None, co_leaders: list[str] | None, subq: list[str], card: bool = True) -> str:
     qids = ", ".join(f"Q{i}" for i in range(1, len(subq) + 1))
     tie = (f"\nTie for first place overall: {', '.join(co_leaders)} — you may name any of them as \"winner\".\n"
            if co_leaders and len(co_leaders) > 1 else "")
@@ -646,9 +762,13 @@ Write a RESEARCH SYNTHESIS, not a defence of one winner.
 - Build "final_answer" over {qids} using each subquestion's backbone leader; integrate verified findings and kept ideas
   of all proposals. "winner": the overall backbone label ({', '.join(labels)}); the overall voting leader is {leader or "—"}.
   If you choose another winner or override a section leader, fill "deviation" as "<fact|risk|process>: reason".
-- "known": ONLY claims with status confirmed in the ledger (cite the E-ids) or direct user-document data (evidence id
-  "DOC"; it is user data, not independent verification). Model agreement and [MEM] claims NEVER qualify as known.
-  Claims added after the ledger (new_after_ledger) cannot be known.
+- "known": ONLY claims with status confirmed in the ledger whose text and scope entail the statement — cite their
+  claim ids in "claim_ids" and their E-ids in "evidence_ids" — or direct user-document data (evidence id "DOC", name
+  the file and place; it is user data, not independent verification). Model agreement and [MEM] claims NEVER qualify
+  as known. Claims added after the ledger (new_after_ledger) cannot be known unless the ledger re-checked them.
+- In "final_answer" itself, label memory-only, new_after_ledger and unresolved statements as uncertain; a vote or
+  agreement is not evidence. Claims the ledger lists as "not checkable by public search" go to "unknown" with how
+  to check them.{DECISION_CARD_NOTE if card else ""}
 - "contested": conflicting sources or genuine methodological splits; give both positions, E-ids, why they differ
   (definitions, dates, methods, sources, values) and what would resolve it.
 - "unknown": memory-only claims, unresolved gaps, data not found; a subquestion without an answer goes here with the reason.
@@ -656,14 +776,15 @@ Write a RESEARCH SYNTHESIS, not a defence of one winner.
 - Never repeat refuted claims as true. Do not introduce facts, numbers or sources absent from the proposals, documents
   and ledger; if essential, mark "(добавлено председателем)".
 - For recommendations state assumptions, risks and what would change them. End with the highest-value next research
-  steps in "next_questions". Keep the report concise (about 6-12 pages); do not reproduce the transcript.
+  steps in "next_questions". The final_answer follows the structure and length the user's request demands; do
+  not drop requested items and do not reproduce the transcript.
 - If hard requirements R1, R2, … are listed, "final_answer" must satisfy every one of them. {FORMAT_RULE}
 - Decide on EVERY idea worth keeping listed above, in "ideas".
 
 JSON format:
 {{"winner": "{labels[0] if labels else 'A'}", "section_backbone": {{"Q1": "B"}},
  "final_answer": "concise structured Markdown with [E1]/[DOC]/[CALC]/[MEM] tags and a Sources list with URLs",
- "why": "how the synthesis was built", "known": [{{"statement": "...", "evidence_ids": ["E1"], "scope": "...", "volatility": "stable|changes_fast|unknown"}}],
+ "why": "how the synthesis was built", "known": [{{"statement": "...", "claim_ids": ["A-C1"], "evidence_ids": ["E1"], "scope": "...", "volatility": "stable|changes_fast|unknown"}}],{DECISION_CARD_JSON if card else ""}
  "contested": [{{"issue": "...", "positions": ["..."], "evidence_ids": ["E2"], "why_they_differ": "...", "what_would_resolve": "..."}}],
  "unknown": [{{"gap": "...", "reason": "unverified_memory|no_public_data|not_checked", "how_to_check": "..."}}],
  "coverage_audit": [{{"subquestion_id": "Q1", "status": "covered|partial|unknown", "note": "where"}}],
@@ -744,11 +865,87 @@ def select_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, A
     return out[:limit]
 
 
+def _claim_key(text: str) -> tuple[str, frozenset[str], frozenset[str]]:
+    """Ключ для поиска дублей: слова без пунктуации, числа отдельно (числа должны совпасть)."""
+    t = re.sub(r"[«»\"'“”„(),;:.!?]", " ", text.lower().replace("ё", "е"))
+    nums = frozenset(re.findall(r"\d+(?:[.,]\d+)?", t))
+    words = frozenset(w for w in t.split() if len(w) > 2 and not re.fullmatch(r"\d+(?:[.,]\d+)?", w))
+    return " ".join(t.split()), nums, words
+
+
+def _same_claim(a: tuple, b: tuple) -> bool:
+    """Дубль: тот же текст или почти те же слова при тех же числах (разные даты, дозы, территории — не дубль)."""
+    if a[0] == b[0]:
+        return True
+    if a[1] != b[1] or not a[2] or not b[2]:
+        return False
+    return len(a[2] & b[2]) / len(a[2] | b[2]) >= 0.8
+
+
+def prepare_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, Any], limit: int, *, n_subq: int = 0,
+                   dedupe: bool = True, defer_private: bool = True, coverage_first: bool = True
+                   ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Что проверять поиском — и что сразу в «неизвестно».
+
+    1. Дубли разных авторов склеиваются (проверяются один раз; статус получат все копии — «dup_ids»).
+    2. Непубличное (права, внутренние цены — checkability private) и утверждения об отсутствии («нигде нет») поиском
+       не решить — они уходят в «неизвестно» с тем, где проверять («deferred»), и не тратят проверки.
+    3. Отбор: сначала по утверждению на каждый подвопрос, затем по одному от каждого автора, затем самые важные
+       (спорные по мнению критиков, быстро меняющиеся, числа «из памяти»)."""
+    base = select_claims(proposals, critiques, 10 ** 6)  # все кандидаты, по важности
+    by_id = {c.id.upper(): c for p in proposals.values() for c in p.claims}
+    deferred: list[dict[str, Any]] = []
+    pool: list[dict[str, Any]] = []
+    keys: list[tuple] = []
+    for c in base:
+        rc = by_id.get(c["id"].upper())
+        c = {**c, "subquestions": list(rc.subquestions) if rc else [], "checkability": rc.checkability if rc else "public",
+             "check_path": rc.check_path if rc else "", "dup_ids": [],
+             "critical": bool(c.get("disputed")) or c.get("volatility") == "changes_fast"}
+        if defer_private and (c["checkability"] == "private" or NEGATIVE_RE.search(c["text"])):
+            deferred.append({"ids": [c["id"]], "text": c["text"], "reason": "absence" if NEGATIVE_RE.search(c["text"]) else "private",
+                             "how_to_check": c["check_path"] or ("запрос правообладателю" if c["checkability"] == "private"
+                                                                 else "проверка по реестрам и запрос — отсутствие поиском не доказать")})
+            continue
+        k = _claim_key(c["text"])
+        dup = next((i for i, kk in enumerate(keys) if _same_claim(kk, k)), None) if dedupe else None
+        if dup is not None:
+            keep = pool[dup]
+            keep["dup_ids"].append(c["id"])
+            keep["disputed"] = keep.get("disputed", 0) + c.get("disputed", 0)
+            keep["critical"] = keep["critical"] or c["critical"]
+            keep["subquestions"] = sorted(set(keep["subquestions"]) | set(c["subquestions"]))
+            continue
+        keys.append(k)
+        pool.append(c)
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def take(c: dict[str, Any]) -> None:
+        if c["id"] not in seen and len(out) < limit:
+            out.append(c)
+            seen.add(c["id"])
+    if coverage_first:
+        for q in [f"Q{i}" for i in range(1, n_subq + 1)]:  # по утверждению на подвопрос
+            c = next((c for c in pool if q in c["subquestions"] and c["id"] not in seen), None)
+            if c:
+                take(c)
+    for label in proposals:  # по одному от каждого автора
+        if label not in {x["label"] for x in out}:
+            c = next((c for c in pool if c["label"] == label and c["id"] not in seen), None)
+            if c:
+                take(c)
+    for c in pool:
+        take(c)
+    return out, deferred
+
+
 def claims_batch(selected: list[dict[str, Any]]) -> str:
     lines = []
     for c in selected:
         why = f" | critics: {'; '.join(c['reasons'])}" if c.get("reasons") else ""
-        lines.append(f"{c['id']}: {c['text']}" + (f" (scope: {c['scope']})" if c.get("scope") else "")
+        lines.append(f"{c['id']}{' CRITICAL' if c.get('critical') else ''}: {c['text']}"
+                     + (f" (scope: {c['scope']})" if c.get("scope") else "")
                      + f" [basis {c['basis']}, {c['volatility']}]{why}")
     return "\n".join(lines)
 
@@ -770,7 +967,8 @@ def merge_status(statuses: list[str]) -> str:
     return "search_unavailable"
 
 
-def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], model: str) -> dict[str, Any]:
+def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], model: str, *,
+                 snippet_rule: str = "off", deferred: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """Склеивает ответы поисковых вызовов в реестр: статус по каждому утверждению и источники E1..En.
 
     Защита от выдуманных ссылок: если поиск вернул список найденных ссылок (citations), источник, которого в нём
@@ -790,6 +988,7 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
                 continue
             status = cc.status
             supported = False
+            read_page = False
             for src in cc.sources:
                 if not src.url.startswith("http"):
                     continue
@@ -809,9 +1008,16 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
                     claim_ev[cid].append(k)
                 if src.relation != "contradicts" and returned is not False:
                     supported = True
+                    read_page = read_page or src.material_seen == "page"
             if status == "confirmed" and not supported:
                 status = "unclear"  # «подтверждено» без ссылки из результатов поиска не принимается
                 notes[cid].append("подтверждение без ссылки из результатов поиска — не засчитано")
+            elif status == "confirmed" and not read_page and (
+                    snippet_rule == "all" or (snippet_rule == "critical" and by_id[cid].get("critical"))):
+                status = "unclear"  # для важного утверждения фрагмент страницы — не подтверждение
+                notes[cid].append("видели только фрагмент или ответ поиска, а не саму страницу — не засчитано")
+            if cc.unverified_parts:
+                notes[cid].append("не подтверждено: " + "; ".join(cc.unverified_parts[:3]))
             statuses[cid].append(status)
             if cc.note:
                 notes[cid].append(cc.note)
@@ -820,17 +1026,20 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
     key_to_id = {k: e["id"] for k, e in evid.items()}
     claims = []
     for cid, c in by_id.items():
-        claims.append({**c, "status": merge_status(statuses[cid]), "notes": list(dict.fromkeys(notes[cid]))[:3],
-                       "evidence": [key_to_id[k] for k in claim_ev[cid]]})
+        row = {**c, "status": merge_status(statuses[cid]), "notes": list(dict.fromkeys(notes[cid]))[:4],
+               "evidence": [key_to_id[k] for k in claim_ev[cid]]}
+        claims.append(row)
+        for dup in c.get("dup_ids") or []:  # копии того же утверждения у других авторов — тот же статус
+            claims.append({**row, "id": dup, "duplicate_of": c["id"], "dup_ids": []})
     for e in evid.values():
         e["claims"] = [x for x in e["claims"]]
         e.pop("relations", None)
     return {"model": model, "missions": len(results), "claims": claims, "evidence": list(evid.values()),
-            "gaps": gaps[:10]}
+            "gaps": gaps[:10], "deferred": list(deferred or [])}
 
 
 LINK_TEXT = {"ok": "открывается", "dead": "страница не найдена", "blocked": "сайт не пускает автоматическую проверку",
-             "error": "не удалось открыть"}
+             "error": "не удалось открыть", "refused": "адрес внутри сети — не открывался"}
 
 
 def apply_links(ledger: dict[str, Any], results: dict[str, dict[str, Any]]) -> dict[str, Any]:
@@ -877,7 +1086,28 @@ def ledger_text(ledger: dict[str, Any] | None) -> str:
             lines.append(f"- {e['id']}: {e['url']} — {e.get('title') or ''} ({meta}){flag}")
     if ledger.get("gaps"):
         lines.append("Unresolved by search: " + "; ".join(to_text(g.get("question") or g) for g in ledger["gaps"][:6]))
+    if ledger.get("deferred"):
+        lines.append("Not checkable by public search (put into \"unknown\" with how to check): "
+                     + "; ".join(f"{', '.join(d['ids'])} {d['text']} — {d['how_to_check']}" for d in ledger["deferred"][:10]))
     return "\n".join(lines)
+
+
+def ledger_digest(ledger: dict[str, Any] | None) -> str:
+    """Краткий реестр для голосующих: статус каждого проверенного утверждения и что видел поиск."""
+    if not ledger or not ledger.get("claims"):
+        return ""
+    seen = {e["id"]: e.get("material_seen", "") for e in ledger.get("evidence", [])}
+    out = []
+    for c in ledger["claims"]:
+        if c.get("duplicate_of"):
+            continue
+        ev = ", ".join(c.get("evidence") or [])
+        mat = ", ".join(sorted({seen.get(i, "") for i in c.get("evidence") or []} - {""}))
+        dups = f" (= {', '.join(c['dup_ids'])})" if c.get("dup_ids") else ""
+        out.append(f"- {c['id']}{dups} {c['status'].upper()}" + (f" [{ev}; seen: {mat}]" if ev else ""))
+    for d in ledger.get("deferred") or []:
+        out.append(f"- {', '.join(d['ids'])} NOT CHECKABLE PUBLICLY")
+    return "\n".join(out)
 
 
 def confirmed_ids(ledger: dict[str, Any] | None) -> set[str]:
@@ -924,16 +1154,24 @@ def check_length(p: Proposal, max_words: int, factor: float) -> Proposal:
     return p
 
 
-def check_verdict(v: ResearchVerdict, *, ledger: dict[str, Any] | None, n_subq: int, strict: bool) -> ResearchVerdict:
+def check_verdict(v: ResearchVerdict, *, ledger: dict[str, Any] | None, n_subq: int, strict: bool,
+                  mark: bool = False) -> ResearchVerdict:
     """«Известно» — только с опорой на подтверждённые источники реестра или документы пользователя.
     Ошибка — ответ возвращается председателю; на последней попытке неподкреплённое переносится в «неизвестно»."""
     ok_ids = confirmed_ids(ledger)
     all_ids = {e["id"] for e in (ledger or {}).get("evidence", [])}
+    claim_by = {c["id"].upper(): c for c in (ledger or {}).get("claims", [])}
     bad, known = [], []
     unknown = list(v.unknown)
     for k in v.known:
         ids = [i for i in k.evidence_ids if i]
-        if "DOC" in ids or (ids and all(i in ok_ids for i in ids)):
+        ok = "DOC" in ids or (ids and all(i in ok_ids for i in ids))
+        if ok and k.claim_ids and "DOC" not in ids:
+            # опора названа: все утверждения подтверждены, и источники — из их подтверждений
+            cl = [claim_by.get(c) for c in k.claim_ids]
+            ok = all(c and c.get("status") == "confirmed" for c in cl) and \
+                set(ids) <= {e for c in cl if c for e in c.get("evidence") or []}
+        if ok:
             known.append(k)
         else:
             bad.append(k)
@@ -953,7 +1191,13 @@ def check_verdict(v: ResearchVerdict, *, ledger: dict[str, Any] | None, n_subq: 
                             how_to_check="нет подтверждения в реестре источников") for k in bad]
     audit = list(v.coverage_audit) + [CoverageItem(subquestion_id=q, status="unknown", note="председатель не указал")
                                       for q in missing]
-    return v.model_copy(update={"known": known, "unknown": unknown, "contested": contested, "coverage_audit": audit})
+    answer = v.final_answer
+    if bad and mark:  # «известно» без источника перенесено — читатель текста итога должен это видеть
+        answer += ("\n\n> ⚠ **Не подтверждено источниками** — эти утверждения председатель указал как известные, но в "
+                   "реестре проверенных источников опоры для них нет (перенесены в «неизвестно»):\n"
+                   + "\n".join(f"> - {k.statement}" for k in bad[:10]))
+    return v.model_copy(update={"known": known, "unknown": unknown, "contested": contested, "coverage_audit": audit,
+                                "final_answer": answer})
 
 
 def fallback_verdict(leader: str, proposals: dict[str, Proposal], ledger: dict[str, Any] | None,

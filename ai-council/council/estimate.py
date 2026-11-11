@@ -126,7 +126,9 @@ def plan_calls(
     if mode == "research":  # вместо проверки лидеров — арбитраж доказательств по утверждениям всех вариантов
         if cfg.research.arbitration:
             chunks = -(-cfg.research.arbitration_claims // 5)  # пачки по 5 утверждений (research.ARBITRATION_BATCH)
-            plan[FACT_CHECKER] = [("arbitration", 5)] * (cfg.research.missions * chunks)
+            rc = cfg.research
+            extra = -(-rc.recheck_unclear // 5) + -(-rc.post_revision_claims // 5)  # второй поиск и новые после доработки
+            plan[FACT_CHECKER] = [("arbitration", 5)] * (rc.missions * chunks + extra)
     elif cfg.fact_check.enabled:
         plan[FACT_CHECKER] = [("factcheck", 1)] * min(cfg.fact_check.top, n)
     return plan

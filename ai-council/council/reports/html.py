@@ -401,6 +401,8 @@ def _keyfacts(v: View, *, full: bool) -> str:
 
 def _callouts(v: View) -> str:
     out = []
+    if v.unacceptable:
+        out.append(("bad", "Ни один вариант не подходит", "; ".join(v.unacceptable)))
     if v.tie_line:
         out.append(("", "Ничья за первое место", v.tie_line))
     if v.deviation_line:
@@ -414,10 +416,22 @@ def _callouts(v: View) -> str:
     return "".join(f'<div class="callout {k}"><b class="t">{_e(t)}</b>{_e(x)}</div>' for k, t, x in out)
 
 
+def _card(v: View) -> str:
+    """Карточка решения на одну страницу — первой в итоге исследования."""
+    c = v.decision_card
+    if not c:
+        return ""
+    block = lambda t, xs: (f'<h3>{t}</h3>{_list(xs)}' if xs else "")  # noqa: E731
+    return ('<div class="callout card-decision"><b class="t">Карточка решения</b>'
+            + (f'<p>{_inline(c.get("summary_decision", ""))}</p>' if c.get("summary_decision") else "")
+            + block("Известно", c.get("top_known")) + block("Главные пробелы", c.get("key_unknowns"))
+            + block("Следующие шаги", c.get("next_steps")) + "</div>")
+
+
 def _decision(v: View, *, first: bool = True) -> str:
     vd = v.verdict
     return (f'<section class="decision" id="verdict"><h2 class="{"first" if first else ""}"><span class="mark"></span>{"Итог исследования" if v.is_research else "Решение совета"}</h2>'
-            f'{_callouts(v)}<div class="answer md">{md_to_html(vd.get("final_answer", ""))}</div></section>')
+            f'{_callouts(v)}{_card(v)}<div class="answer md">{md_to_html(vd.get("final_answer", ""))}</div></section>')
 
 
 def _rationale(v: View) -> str:
@@ -548,7 +562,8 @@ def _sources(v: View) -> str:
                 if e.get("search_returned") is False else "")
         link = {"dead": ("var(--bad)", "ссылка не открывается — страница не найдена"),
                 "blocked": ("var(--muted)", "сайт не пускает автоматическую проверку"),
-                "error": ("var(--muted)", "ссылка не открылась при проверке")}.get(e.get("link", ""))
+                "error": ("var(--muted)", "ссылка не открылась при проверке"),
+                "refused": ("var(--bad)", "внутренний адрес — не открывался")}.get(e.get("link", ""))
         if link:
             flag += f'<div class="small" style="color:{link[0]}">{link[1]}</div>'
         url = v.safe_url(e.get("url", ""))
@@ -772,6 +787,16 @@ def _members(v: View) -> str:
              f'<tr class="total"><td colspan="3">Итого</td><td class="num">${v.cost:.4f}</td></tr></tbody></table>']
     if v.cache_line:
         parts.append(f'<p class="muted small">{_e(v.cache_line)}.</p>')
+    sc = v.stage_costs
+    if sc["stages"]:
+        parts.append('<h3>Расходы по этапам</h3><table><thead><tr><th>Этап</th><th class="num">Обращений</th>'
+                     '<th class="num">Повторы и продолжения</th><th class="num">Вход из кэша</th><th class="num">Стоимость</th>'
+                     '<th class="num">Доля</th></tr></thead><tbody>'
+                     + "".join(f'<tr><td>{_e(r["stage_name"])}</td><td class="num">{r["requests"]}</td><td class="num">{r["extra"]}</td>'
+                               f'<td class="num">{r["cache_share"]:.0%}</td><td class="num">${r["cost"]:.4f}</td>'
+                               f'<td class="num">{r["share"]:.0%}</td></tr>' for r in sc["stages"])
+                     + "</tbody></table>"
+                     + (f'<p class="muted small">На повторы и продолжения ушло ${sc["extra_cost"]:.4f}.</p>' if sc["extra_cost"] else ""))
     fails = v.failures()
     if fails:
         parts.append('<h3>Сбои</h3><table><thead><tr><th style="width:18%">Участник</th><th style="width:18%">Этап</th>'

@@ -122,6 +122,7 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
 class RatingRequest(BaseModel):
     rating: int = Field(ge=0, le=5)
     note: str = ""
+    kind: str = ""  # "solo" — оценка ответа одной модели (пилот)
 
 
 class RunRequest(BaseModel):
@@ -385,8 +386,76 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         from ..ratings import save
         if not archive().exists(sid):
             raise HTTPException(404, "заседание не найдено")
-        item = await asyncio.to_thread(save, runs_dir(base_config()), sid, body.rating or None, body.note)
+        key = f"{sid}#solo" if body.kind == "solo" else sid
+        item = await asyncio.to_thread(save, runs_dir(base_config()), key, body.rating or None, body.note)
         return {"rating": item}
+
+    @app.get("/api/sessions/{sid}/pilot")
+    async def pilot_get(sid: str) -> dict[str, Any]:
+        """Пилот по заседанию: ответ одной модели с поиском и переигранный арбитраж (если делались)."""
+        from .. import pilot
+        from ..ratings import load
+        d = runs_dir(base_config())
+        data = await asyncio.to_thread(pilot.load, d, sid)
+        data.get("replay", {}).pop("ledger", None)
+        ratings = await asyncio.to_thread(load, d)
+        return {**data, "solo_rating": (ratings.get(f"{sid}#solo") or {}).get("rating"),
+                "solo_model": pilot.solo_model(base_config())}
+
+    @app.post("/api/sessions/{sid}/solo")
+    async def pilot_solo(sid: str) -> dict[str, Any]:
+        """Контрольная группа: одна модель с поиском отвечает на тот же вопрос (обычно $0,2–0,5)."""
+        from .. import pilot
+        from ..attachments import documents_block, load_from_dir
+        arch = archive()
+        if not arch.exists(sid):
+            raise HTTPException(404, "заседание не найдено")
+        d = await asyncio.to_thread(arch.load, sid)
+        cfg = base_config()
+        mock = bool((d.get("request") or {}).get("mock")) or not os.environ.get("OPENROUTER_API_KEY")
+        atts = await asyncio.to_thread(load_from_dir, arch.files_dir(sid), d.get("attachments") or [])
+        client = None if mock else OpenRouterClient(os.environ["OPENROUTER_API_KEY"], timeout=cfg.timeout_s, max_retries=1)
+        try:
+            res = await pilot.solo_answer(cfg, client, d, documents_block(atts), mock=mock)
+        except ProviderError as e:
+            raise HTTPException(502, f"модель не ответила: {e}") from e
+        finally:
+            if client:
+                await client.aclose()
+        await asyncio.to_thread(pilot.save, runs_dir(cfg), sid, "solo", res)
+        return res
+
+    @app.post("/api/sessions/{sid}/replay")
+    async def pilot_replay(sid: str) -> dict[str, Any]:
+        """Переиграть арбитраж исследования с текущими настройками на сохранённых вариантах (центы)."""
+        from .. import pilot
+        arch = archive()
+        if not arch.exists(sid):
+            raise HTTPException(404, "заседание не найдено")
+        d = await asyncio.to_thread(arch.load, sid)
+        if d.get("mode") != "research":
+            raise HTTPException(400, "переиграть арбитраж можно только у исследования")
+        cfg = base_config()
+        mock = bool((d.get("request") or {}).get("mock")) or not os.environ.get("OPENROUTER_API_KEY")
+        client = make_client(cfg, mock)
+        try:
+            res = await pilot.replay_arbitration(cfg, client, d, None if mock else check_links)
+        except (ProviderError, ValueError) as e:
+            raise HTTPException(400, str(e)) from e
+        finally:
+            await client.aclose()
+        await asyncio.to_thread(pilot.save, runs_dir(cfg), sid, "replay", res)
+        return {k: v for k, v in res.items() if k != "ledger"}
+
+    @app.get("/api/sessions/{sid}/costs")
+    async def session_costs(sid: str) -> dict[str, Any]:
+        """Куда ушли деньги заседания: по этапам и участникам, повторы, доля входа из кэша."""
+        from ..costs import stage_costs
+        arch = archive()
+        if not arch.exists(sid):
+            raise HTTPException(404, "заседание не найдено")
+        d = await asyncio.to_thread(arch.load, sid)
+        return stage_costs(d.get("transcript") or [])
 
     @app.get("/api/sessions/{sid}/request")
     async def session_request(sid: str) -> dict[str, Any]:
@@ -475,13 +544,14 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         if force or time.time() - (balance_cache["at"] or 0) > 60:
             bc = OpenRouterClient(key, timeout=15)
             try:
-                value = await bc.balance()
+                value, lim = await asyncio.gather(bc.balance(), bc.key_limit())
             finally:
                 await bc.aclose()
             if value is not None or balance_cache["value"] is None:
                 balance_cache["value"] = value
+            balance_cache["key"] = lim
             balance_cache["at"] = time.time()
-        return {"has_key": True, "balance": balance_cache["value"]}
+        return {"has_key": True, "balance": balance_cache["value"], "key_limit": balance_cache.get("key")}
 
     @app.post("/api/estimate")
     async def post_estimate(req: RunRequest) -> dict[str, Any]:
@@ -525,7 +595,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         return {
             "basis": est.basis,
             "similar": similar_actual(lengths, mode_eff, len(cfg.active_members)),
-            "balance": balance,
+            "balance": balance, "key_limit": balance_cache.get("key"),
             "members": [dataclasses.asdict(m) for m in est.members],
             "calls": est.calls,
             "low": est.low if pricing else None,
@@ -579,6 +649,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                   "att_warnings": att_warnings})
         launch(cp, client)
         return {"id": sid}
+
+    os.environ.setdefault("COUNCIL_REPORTS_MEM_MB", str(base_config().reports_memory_mb))
 
     def make_client(cfg: CouncilConfig, mock: bool):
         if mock:

@@ -96,6 +96,7 @@ class Framing(BaseModel):
     refined_question: str
     criteria: list[str] = Field(min_length=1, max_length=7)
     requirements: list[str] = Field(default_factory=list)  # жёсткие требования запроса пользователя
+    input_gaps: list[str] = Field(default_factory=list)    # что во входе обрезано или недоступно (по мнению председателя)
 
     @model_validator(mode="before")
     @classmethod
@@ -117,7 +118,8 @@ class Framing(BaseModel):
             reqs = data.get("requirements")
             if reqs is None:
                 reqs = _pick(data, "hard_requirements", "must_have", "constraints")
-            data["requirements"] = [r for r in to_list(reqs) if r.strip()][:10]
+            data["requirements"] = [r for r in to_list(reqs) if r.strip()][:40]  # предел — max_requirements в оркестраторе
+            data["input_gaps"] = [g for g in to_list(data.get("input_gaps")) if g.strip()][:10]
         return data
 
 
@@ -295,6 +297,20 @@ class Ballot(BaseModel):
 
     ranking: list[str]
     rationale: str = ""
+    keep_from_others: list[dict[str, str]] = Field(default_factory=list)  # «Быстрый ответ»: ценное из других вариантов
+
+    @field_validator("keep_from_others", mode="before")
+    @classmethod
+    def _keep(cls, v: Any) -> list[dict[str, str]]:
+        out = []
+        for x in v if isinstance(v, list) else ([v] if v else []):
+            if isinstance(x, dict):
+                idea = to_text(_pick(x, "idea", "text", "keep") or "").strip()
+                if idea:
+                    out.append({"label": to_text(x.get("label") or "").strip().upper()[:1], "idea": idea})
+            elif to_text(x).strip():
+                out.append({"label": "", "idea": to_text(x).strip()})
+        return out[:3]
 
     @field_validator("ranking", mode="before")
     @classmethod
@@ -392,6 +408,8 @@ class Verdict(BaseModel):
     risks: list[str] = Field(default_factory=list)
     deviation: str = ""   # если победитель не лидер голосования — причина (fact | risk | process) и пояснение
     ideas: list[IdeaDecision] = Field(default_factory=list)  # по каждой идее «стоит сохранить» — взята или нет
+    acceptable: bool = True  # «Выбор из вариантов»: false — ни один вариант не подходит
+    decisive_defects: list[str] = Field(default_factory=list)  # почему не подходит (с цитатой)
 
     @model_validator(mode="before")
     @classmethod

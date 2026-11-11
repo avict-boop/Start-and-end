@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .catalog import created, date, family, is_light, is_text_model, modalities, provider, sort_newest
 from .config import CouncilConfig
@@ -67,6 +67,7 @@ class Pick(BaseModel):
     web_search: bool = False
     why: str = ""
     basis: list[str] = Field(default_factory=list)
+    confidence: str = ""    # low | medium | high — насколько советник уверен
 
 
 class Avoid(BaseModel):
@@ -84,6 +85,19 @@ class Advice(BaseModel):
     research_words: int | None = None
     research_settings: dict[str, Any] = Field(default_factory=dict)  # настройки исследования под этот вопрос
     research_why: dict[str, str] = Field(default_factory=dict)       # почему — по каждой настройке
+    research_cost: dict[str, float] = Field(default_factory=dict)    # оценка добавки к цене заседания, $ — по настройке
+    baseline: str = ""     # исходная точка: текущий состав и почему от него отклоняемся
+
+    @field_validator("research_cost", mode="before")
+    @classmethod
+    def _cost(cls, v: Any) -> dict[str, float]:
+        out = {}
+        for k, x in (v or {}).items() if isinstance(v, dict) else []:
+            try:
+                out[str(k)] = round(float(str(x).replace("$", "").replace(",", ".")), 3)
+            except ValueError:
+                continue
+        return out
     caveats: list[str] = Field(default_factory=list)
 
 
@@ -221,7 +235,8 @@ def clean_dossiers(ds: DossierSet, ids: list[str], citations: list[str], ts: flo
 def advise_prompt(*, question: str, mode: str, attachments: list[dict[str, Any]], followup: bool, budget: float,
                   current: dict[str, Any], cands: list[dict[str, Any]], history: dict[str, dict[str, Any]],
                   dossiers: dict[str, dict[str, Any]], language: str, research_words: int, search_model: str,
-                  research_now: dict[str, Any] | None = None) -> str:
+                  research_now: dict[str, Any] | None = None, question_chars: int = 30000,
+                  max_claims_cap: int = 30, max_words_cap: int = 2500, history_min: int = 5) -> str:
     rows = []
     for c in cands:
         r = {k: v for k, v in c.items() if k != "description"}
@@ -236,7 +251,7 @@ def advise_prompt(*, question: str, mode: str, attachments: list[dict[str, Any]]
         rows.append(r)
     modes = "\n".join(f"- {k}: {v}" for k, v in MODE_ROLES.items())
     atts = "; ".join(f"{a.get('name', '')} ({a.get('kind', '')}, ~{a.get('chars', 0)} chars)" for a in attachments) or "none"
-    q = question if len(question) <= 7000 else question[:7000] + " …[truncated]"
+    q = question if len(question) <= question_chars else question[:question_chars] + " …[truncated]"
     return f"""You advise a user of an "AI council" app: several AI models answer one question, critique each other and vote;
 a chair frames the task and writes the final answer. Recommend the best lineup and mode for THIS question.
 
@@ -253,12 +268,12 @@ Research mode details: proposal length target {research_words} words; claims are
 ({search_model}) in the arbitration step, so web search for authors is optional (useful for fresh numbers).
 
 Research settings you can tune for THIS question (current values: {json.dumps(research_now or {}, ensure_ascii=False)}):
-- arbitration_claims (3-20): how many key claims of all proposals the search model checks. More = more confirmed facts
+- arbitration_claims (3-{max_claims_cap}): how many key claims of all proposals the search model checks. More = more confirmed facts
   in "known", cost about $0.02-0.05 per 5 claims. Raise for questions with many entities, numbers, dates, regulations.
 - missions (1-2): 2 = one search to confirm and one to refute each batch (stricter), 1 = cheaper.
 - fresh_scouts (0-2): authors who search the web already while writing proposals — for current prices, markets,
   regulations, recent releases; proposals may become more similar. 0 for timeless or reasoning-only questions.
-- max_words (300-5000): target proposal length. Proposals are material for the chair, who writes the full report;
+- max_words (300-{max_words_cap}): target proposal length. Proposals are material for the chair, who writes the full report;
   raise to 2000-2500 only for catalogue-like tasks with big tables; lower (700-1000) for narrow questions.
 - shorten_long (true/false): send far-too-long proposals back once to be shortened (some models ignore length).
 - max_claims (3-15): claims per proposal.
@@ -266,7 +281,8 @@ Research settings you can tune for THIS question (current values: {json.dumps(re
   question has one narrow angle.
 - section_vote (true/false): vote for the best proposal per subquestion — useful for multi-part questions.
 - revision_digest (true/false): authors revise from digests of other proposals (cheaper) instead of full texts.
-Suggest ONLY settings that should differ from the current values for this question, each with a short reason.
+Suggest ONLY settings that should differ from the current values for this question, each with a short reason and
+an estimated extra cost of the session in USD in "research_cost" (negative if it saves money). Keep shorten_long on.
 Mind the budget.
 
 Web search for participants: any participant can get web search in the proposal and revision steps (about $0.02 per
@@ -293,13 +309,20 @@ Rules:
 6. If the mode is research, put tuned settings into "research_settings" and a reason per setting into
    "research_why" (same keys). Leave both empty for other modes or when the current values fit.
 7. "caveats": what you are unsure about (little data on a model, no history yet, etc.).
+8. First state a baseline in "baseline": the current lineup if it is valid; every deviation needs a benefit for this
+   question. "your_history" is shown only for models with at least {history_min} of the user's sessions. Basis
+   "knowledge" alone is allowed only with "confidence": "low" and must be mentioned in caveats. General benchmarks
+   are not evidence of length compliance, strict JSON or evidence-citation behaviour in this app. Never prefer a model
+   because it comes from your own developer. If the question text was truncated, say so in caveats.
 Write all texts in {language}. Reply with ONE JSON object:
 {{"task": {{"kind": "...", "summary": "...", "size": "small|medium|large", "needs": ["..."]}},
  "mode": "debate|quick|evaluate|research", "mode_why": "...",
+ "baseline": "...",
  "picks": [{{"model": "provider/model", "role": "chair|member|devil", "web_search": false, "why": "...",
-            "basis": ["catalog", "history"]}}],
+            "basis": ["catalog", "history"], "confidence": "low|medium|high"}}],
  "avoid": [{{"model": "provider/model", "why": "...", "basis": ["reviews"]}}],
  "research_settings": {{"arbitration_claims": 20}}, "research_why": {{"arbitration_claims": "..."}},
+ "research_cost": {{"arbitration_claims": 0.1}},
  "caveats": ["..."]}}"""
 
 
@@ -345,7 +368,8 @@ def finalize(advice: Advice, cands: list[dict[str, Any]], cfg: CouncilConfig, mo
         rs["max_words"] = words
     return advice.model_copy(update={"picks": picks, "avoid": avoid, "caveats": notes, "mode": final_mode,
                                      "research_words": rs.get("max_words"), "research_settings": rs,
-                                     "research_why": why})
+                                     "research_why": why,
+                                     "research_cost": {k: v for k, v in advice.research_cost.items() if k in rs}})
 
 
 def clean_research(settings: dict[str, Any], why: dict[str, str], cfg: CouncilConfig) -> tuple[dict[str, Any], dict[str, str]]:
@@ -362,6 +386,10 @@ def clean_research(settings: dict[str, Any], why: dict[str, str], cfg: CouncilCo
             val = getattr(ResearchConfig.model_validate({**cur, k: v}), k)
         except ValidationError:
             continue
+        if k == "arbitration_claims":
+            val = min(val, cfg.advisor.max_arbitration_claims)
+        if k == "max_words":
+            val = min(val, cfg.advisor.max_words_cap)
         if val != cur.get(k):
             out[k] = val
     return out, {k: str(why.get(k, "")).strip() for k in out}
@@ -467,13 +495,16 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
         caveats.append("Ваших заседаний ещё мало — история моделей не учитывалась.")
     rs: dict[str, Any] = {}
     rwhy: dict[str, str] = {}
+    rcost: dict[str, float] = {}
     if rec_mode == "research":
-        if big and cfg.research.arbitration_claims < 20:
-            rs["arbitration_claims"] = 20
-            rwhy["arbitration_claims"] = "большая задача с множеством фактов — проверить вдвое больше утверждений (≈ +$0,2)"
+        if big and cfg.research.arbitration_claims < 25:
+            rs["arbitration_claims"] = 25
+            rwhy["arbitration_claims"] = "большая задача-каталог с множеством фактов — проверить больше утверждений"
+            rcost["arbitration_claims"] = round((25 - cfg.research.arbitration_claims) / 5 * 0.04, 2)
         if "свежие данные из интернета" in task.needs and cfg.research.fresh_scouts < 1:
             rs["fresh_scouts"] = 1
             rwhy["fresh_scouts"] = "нужны актуальные данные — один автор ищет в интернете уже при написании варианта"
+            rcost["fresh_scouts"] = 0.1
         if big and not cfg.research.shorten_long:
             rs["shorten_long"] = True
             rwhy["shorten_long"] = "в больших задачах модели часто сильно превышают длину — длинные варианты на сокращение"
@@ -482,7 +513,7 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
             rwhy["max_words"] = "вопрос узкий — короткие варианты дешевле и не теряют сути"
     return Advice(task=task, mode=rec_mode, mode_why=("большая задача на поиск и сравнение — режим «Исследование»"
                                                       if rec_mode == "research" and mode != "research" else "режим оставлен как выбран"),
-                  picks=picks, caveats=caveats, research_settings=rs, research_why=rwhy,
+                  picks=picks, caveats=caveats, research_settings=rs, research_why=rwhy, research_cost=rcost,
                   research_words=rs.get("max_words"))
 
 

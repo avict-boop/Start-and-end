@@ -866,3 +866,13 @@ a.brand:hover .brand-name { color: var(--accent); }
 .rs-row input { width: 18px; height: 18px; margin: .15rem 0 0; accent-color: var(--accent); }
 .rs-body { min-width: 0; line-height: 1.4; }
 .rs-why { display: block; color: var(--muted); font-size: .84rem; margin-top: .15rem; }
+
+/* карточка решения (исследование) */
+.decision-card { border: 1px solid var(--dec-line); background: var(--dec-soft); border-radius: var(--radius); padding: .9rem 1rem; margin: 0 0 1rem; }
+.dc-title { font-weight: 800; color: var(--dec); font-size: .85rem; text-transform: uppercase; letter-spacing: .04em; }
+.dc-sum { font-size: 1.05rem; font-weight: 600; margin: .4rem 0 .2rem; }
+.dc-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: .2rem 1rem; }
+.dc-grid h4 { margin: .5rem 0 .2rem; font-size: .85rem; }
+.dc-grid ul { margin: 0; padding-left: 1.1rem; font-size: .92rem; }
+
+.solo-answer { max-height: 32rem; overflow: auto; padding: .7rem .9rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }

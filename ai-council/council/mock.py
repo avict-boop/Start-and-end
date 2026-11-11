@@ -182,6 +182,7 @@ def _research(stage: str, who: str, meta: dict[str, Any]) -> dict[str, Any]:
     if stage == "vote":
         labels = sorted(meta["labels"], key=lambda l: _h(l) % 100)
         return {"ranking": labels, "rationale": f"{labels[0]} лучше подкреплён источниками (демо).",
+                "keep_from_others": [{"label": labels[-1], "idea": "учесть летний спад спроса (демо)"}],
                 "best_by_subquestion": {f"Q{i}": labels[(i - 1) % len(labels)] for i in range(1, (meta.get("subquestions") or 3) + 1)}}
     if stage == "verdict":
         ok = meta.get("evidence_ok") or []
@@ -191,6 +192,10 @@ def _research(stage: str, who: str, meta: dict[str, Any]) -> dict[str, Any]:
                                  "### Q2. Экономика\nОкупаемость 14–20 месяцев [CALC].\n\n### Q3. Риски\nЛетний спад [MEM].\n\n"
                                  "**Источники:** [E1] https://example.com/stat"),
                 "why": "Синтез по подвопросам: каркас — варианты-лидеры разделов (демо).",
+                "decision_card": {"summary_decision": "Открывать стоит при аренде до 150 тыс. ₽ и потоке от 400 гостей в день (демо).",
+                                  "top_known": [f"Средний чек 250–350 ₽ [{ok[0]}]" if ok else "Подтверждённых фактов нет"],
+                                  "key_unknowns": ["Выручка конкретных точек у вузов — запросить у арендодателя"],
+                                  "next_steps": ["Узнать аренду у трёх ближайших вузов", "Посчитать поток в часы пик"]},
                 "known": [{"statement": "Средний чек кофейни у вуза — 250–350 ₽", "evidence_ids": ok[:1], "scope": "Россия, 2025",
                            "volatility": "changes_fast"}] if ok else [],
                 "contested": [{"issue": "Насколько падает спрос летом", "positions": ["на 30%", "на 50%"],

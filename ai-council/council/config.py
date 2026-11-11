@@ -50,7 +50,7 @@ class ResearchConfig(BaseModel):
     lenses: bool = True            # у каждого автора свой угол зрения (линза)
     arbitration: bool = True       # арбитраж доказательств после критики: поиск по утверждениям всех вариантов
     missions: int = Field(default=2, ge=1, le=2)        # поисковых вызовов: подтверждения и опровержения
-    arbitration_claims: int = Field(default=10, ge=3, le=20)  # сколько утверждений проверять
+    arbitration_claims: int = Field(default=20, ge=3, le=30)  # сколько утверждений проверять (после объединения дублей)
     max_claims: int = Field(default=8, ge=3, le=15)     # утверждений в варианте
     max_evidence: int = Field(default=20, ge=5, le=40)  # источников в ответе поиска
     revision_digest: bool = True   # доработка по реестру и выжимкам чужих вариантов, а не по их полным текстам
@@ -60,8 +60,26 @@ class ResearchConfig(BaseModel):
     link_check: bool = True        # после арбитража открыть каждую ссылку реестра: мёртвые не подтверждают
     # Слишком длинный вариант (длиннее max_words × long_factor) возвращается автору на сокращение: длинные
     # варианты дорого читать председателю и участникам. Последняя попытка принимается как есть.
-    shorten_long: bool = False
-    long_factor: float = Field(default=2.0, ge=1.2, le=5.0)
+    shorten_long: bool = True
+    long_factor: float = Field(default=1.5, ge=1.2, le=5.0)
+    # Предел ответа автора (предложение и доработка) = max_words × author_tokens_per_word, но не меньше
+    # author_min_tokens (думающим моделям нужно место на рассуждения). 0 — общий max_tokens. Личный max_tokens
+    # участника в настройках важнее.
+    author_tokens_per_word: float = Field(default=3.0, ge=0, le=20)
+    author_min_tokens: int = Field(default=6000, ge=1000, le=64000)
+    # Подготовка утверждений перед поиском
+    dedupe_claims: bool = True     # одинаковые утверждения разных авторов проверяются один раз
+    defer_private: bool = True     # непубличное (права, внутренние цены) и «нигде нет» — сразу в «неизвестно», без поиска
+    coverage_first: bool = True    # сначала по утверждению на каждый подвопрос, потом по автору, потом самые важные
+    # Найденный фрагмент страницы (не сама страница) — не подтверждение: critical — для спорных и быстро
+    # меняющихся утверждений, all — для всех, off — не применять
+    snippet_rule: Literal["critical", "all", "off"] = "critical"
+    recheck_unclear: int = Field(default=5, ge=0, le=15)        # «не удалось проверить» — второй поиск другими запросами
+    post_revision_claims: int = Field(default=4, ge=0, le=10)   # новые утверждения после доработки — проверить до N
+    vote_ledger: bool = True       # голосующие видят краткий реестр: что подтверждено, что «из памяти»
+    decision_card: bool = True     # председатель пишет карточку решения на одну страницу — она первой в итоге
+    mark_unconfirmed: bool = True  # пункт «известно» без источника перенесён — пометить это и в тексте итога
+    digest_table_rows: int = Field(default=12, ge=0, le=40)     # строк таблиц чужого варианта в выжимке для доработки
 
 
 class AdvisorConfig(BaseModel):
@@ -70,7 +88,11 @@ class AdvisorConfig(BaseModel):
     model: str = ""            # модель-советник; пусто — модель председателя (сильная, рассуждает)
     dossier: bool = True       # собирать «досье» моделей поиском в интернете (обзоры, бенчмарки, известные проблемы)
     dossier_days: int = Field(default=21, ge=1, le=180)  # сколько дней досье считается свежим
-    max_candidates: int = Field(default=28, ge=6, le=60)  # сколько моделей каталога рассматривать
+    max_candidates: int = Field(default=20, ge=6, le=60)  # сколько моделей каталога рассматривать
+    question_chars: int = Field(default=30000, ge=2000, le=200000)  # сколько знаков вопроса видит советник
+    history_min_sessions: int = Field(default=5, ge=1, le=100)  # ваша история модели — довод, только с N заседаний
+    max_arbitration_claims: int = Field(default=30, ge=3, le=30)   # потолок «утверждений на проверку»
+    max_words_cap: int = Field(default=2500, ge=300, le=5000)      # потолок длины варианта исследования
 
 
 class CouncilConfig(BaseModel):
@@ -86,7 +108,27 @@ class CouncilConfig(BaseModel):
     timeout_s: float = 180
     max_retries: int = 3
     json_retries: int = 2
-    max_concurrency: int = 8
+    max_concurrency: int = 5
+    # Температура «судейских» этапов (постановка, критика, голосование, итог): меньше случайности в оценках.
+    # Авторы (предложение и доработка) пишут с temperature. None — везде temperature.
+    judge_temperature: float | None = Field(default=0.3, ge=0, le=2)
+    # Предел ответа председателя на итоге (длинный синтез без склеек из продолжений); 0 — общий max_tokens.
+    verdict_max_tokens: int = Field(default=20000, ge=0, le=64000)
+    # Сколько обязательных требований запроса выписывает постановка (длинные ТЗ бывают с 10+ требованиями).
+    max_requirements: int = Field(default=20, ge=1, le=40)
+    # «Быстрый ответ»: голосующие называют ценные идеи из вариантов не на первом месте — их не теряем
+    quick_keep: bool = True
+    # «Выбор из вариантов»: председатель может честно сказать «ни один вариант не подходит» (с причиной и цитатой)
+    evaluate_allow_none: bool = True
+    # Резерв бюджета на запросы «в полёте»: новый запрос не уходит, если потраченное + ожидаемая цена уже
+    # отправленных запросов достигает лимита (возможна чуть более ранняя пауза, зато без перерасхода)
+    budget_reserve: bool = True
+    # Кворум для обсуждения и исследования при 4+ авторах: при двух вариантах выбор по сути делает председатель
+    quorum_large: int = Field(default=3, ge=2, le=10)
+    # Предел памяти процесса, собирающего отчёты (МБ; 0 — без предела): защита слабого сервера от зависания
+    reports_memory_mb: int = Field(default=1500, ge=0, le=16000)
+    # Пилот: модель для «ответа одной модели с поиском» — контрольная группа к совету; пусто — модель председателя
+    pilot_solo_model: str = ""
     chair: str
     # Предлагает ли председатель свой вариант. False — председатель только ставит задачу, критикует,
     # голосует и пишет итог (нет конфликта «автор и судья»). Если без него вариантов меньше кворума — предлагает.
@@ -159,7 +201,8 @@ def load_dotenv(path: str | Path = ".env") -> None:
 
 # какие настройки исследования можно менять для одного заседания (советник и «Параметры» вопроса)
 RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "max_claims", "revision_digest",
-                    "section_vote", "fresh_scouts", "max_words", "shorten_long", "long_factor", "link_check")
+                    "section_vote", "fresh_scouts", "max_words", "shorten_long", "long_factor", "link_check",
+                    "recheck_unclear", "post_revision_claims", "vote_ledger", "snippet_rule")
 
 
 class OverrideError(ValueError):

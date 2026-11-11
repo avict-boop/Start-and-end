@@ -230,7 +230,8 @@ def test_research_settings_are_suggested_cleaned_and_applied_per_session():
     q = "Проведи актуальное исследование мирового рынка и найди производителей средств от гипергидроза, цены 2026. " * 20
     adv = A.finalize(A.rule_advice(q, "research", c, cands, {}, []), cands, c, "research")
     rs = adv.research_settings
-    assert rs["arbitration_claims"] == 20 and rs["fresh_scouts"] == 1 and rs["shorten_long"] is True
+    assert rs["arbitration_claims"] == 25 and rs["fresh_scouts"] == 1 and "shorten_long" not in rs  # уже включено
+    assert adv.research_cost["arbitration_claims"] > 0
     assert all(adv.research_why[k] for k in rs)
     raw = A.Advice(mode="research", research_settings={"arbitration_claims": 99, "missions": 1, "max_words": 1400,
                                                      "runs_dir": "/etc", "lenses": False},
@@ -238,8 +239,8 @@ def test_research_settings_are_suggested_cleaned_and_applied_per_session():
     out = A.finalize(raw, cands, c, "research")
     assert out.research_settings == {"missions": 1, "lenses": False}  # вне пределов, чужие и неизменные — отброшены
     assert A.finalize(raw.model_copy(update={"mode": "debate"}), cands, c, "debate").research_settings == {}
-    s = with_overrides(c, research={"arbitration_claims": 20, "fresh_scouts": 1})
-    assert s.research.arbitration_claims == 20 and c.research.arbitration_claims == 10
+    s = with_overrides(c, research={"arbitration_claims": 25, "fresh_scouts": 1})
+    assert s.research.arbitration_claims == 25 and c.research.arbitration_claims == 20
     with pytest.raises(OverrideError):
         with_overrides(c, research={"runs_dir": "x"})
 

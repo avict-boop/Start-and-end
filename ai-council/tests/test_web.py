@@ -309,3 +309,21 @@ def test_rating_and_pilot_table(client):
     assert row["id"] == ids[0] and row["rating"] == 4 and row["checked"] > 0 and row["subq"] == 3
     assert len(s["pairs"]) == 1 and {r["mode"] for r in s["pairs"][0]["runs"]} == {"research", "debate"}
     assert client.post(f"/api/sessions/{ids[0]}/rating", json={"rating": 0}).json()["rating"] is None
+
+
+def test_costs_pilot_solo_and_replay_in_demo(client):
+    r = client.post("/api/sessions", json={"question": "Рынок кофеен у вузов?", "mock": True, "mode": "research",
+                                           "members": ["a", "b", "c"]})
+    sid = r.json()["id"]
+    assert read_events(client, sid)[-1]["type"] == "done"
+    c = client.get(f"/api/sessions/{sid}/costs").json()
+    assert c["total"] > 0 and {s["stage"] for s in c["stages"]} >= {"proposal", "arbitration", "verdict"}
+    solo = client.post(f"/api/sessions/{sid}/solo").json()
+    assert solo["mock"] and solo["answer"]
+    rep = client.post(f"/api/sessions/{sid}/replay").json()
+    assert rep["after"]["checked"] > 0 and "ledger" not in rep
+    assert client.post(f"/api/sessions/{sid}/rating", json={"rating": 3, "kind": "solo"}).status_code == 200
+    p = client.get(f"/api/sessions/{sid}/pilot").json()
+    assert p["solo"]["answer"] and p["replay"]["after"]["checked"] and p["solo_rating"] == 3
+    s = client.get("/api/stats").json()
+    assert s["stages"] and s["research"][-1]["solo_rating"] == 3

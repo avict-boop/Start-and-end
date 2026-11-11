@@ -72,8 +72,23 @@ def _keyfacts(v: View) -> list[str]:
             f"| {dec} | {agree} | {first} | {len(v.members)} моделей, {_cell(v.mode)} |", ""]
 
 
+def _card(v: View) -> list[str]:
+    c = v.decision_card
+    if not c:
+        return []
+    out = ["> **Карточка решения**", ">"]
+    if c.get("summary_decision"):
+        out += [f"> {c['summary_decision']}", ">"]
+    for t, k in (("Известно", "top_known"), ("Главные пробелы", "key_unknowns"), ("Следующие шаги", "next_steps")):
+        if c.get(k):
+            out += [f"> **{t}:**", *[f"> - {x}" for x in c[k]], ">"]
+    return out[:-1] + [""]
+
+
 def _callouts(v: View) -> list[str]:
     out = []
+    if v.unacceptable:
+        out += [f"> ⛔ **Ни один вариант не подходит:** {'; '.join(v.unacceptable)}", ""]
     if v.tie_line:
         out += [f"> **Ничья за первое место.** {v.tie_line}", ""]
     if v.deviation_line:
@@ -172,7 +187,7 @@ def _sources(v: View, full: bool) -> list[str]:
         meta = ", ".join(x for x in (e.get("publisher"), e.get("date")) if x)
         flag = " — ⚠ нет в результатах поиска" if e.get("search_returned") is False else ""
         flag += {"dead": " — ⚠ ссылка не открывается (страница не найдена)", "blocked": " — сайт не пускает автоматическую проверку",
-                 "error": " — ссылка не открылась при проверке"}.get(e.get("link", ""), "")
+                 "error": " — ссылка не открылась при проверке", "refused": " — внутренний адрес — не открывался"}.get(e.get("link", ""), "")
         out.append(f"- **{e['id']}** [{e.get('title') or e['url']}](<{e['url']}>)" + (f" — {meta}" if meta else "")
                    + f" · утверждения: {', '.join(e.get('claims') or [])}{flag}")
     out.append("")
@@ -239,7 +254,7 @@ def render_decision_md(view: View) -> str:
     """Только решение совета: сам ответ, без вопроса."""
     from . import brand
     v = view
-    out = [f"# {KIND['decision']}", "", f"*{v.date} · {brand.current().title}*", "",
+    out = [f"# {KIND['decision']}", "", f"*{v.date} · {brand.current().title}*", "", *_callouts(v), *_card(v),
            demote(v.verdict.get("final_answer", ""), 2), "",
            "---", f"*{v.date} · участники: {', '.join(v.members)}*"]
     return "\n".join(out).rstrip() + "\n"
@@ -252,7 +267,7 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
     v = view
     w = v.winner
     out = _head(v, "summary" if summary else "full") + _keyfacts(v)
-    out += [f"## {'Итог исследования' if v.is_research else 'Решение совета'}", "", *_callouts(v),
+    out += [f"## {'Итог исследования' if v.is_research else 'Решение совета'}", "", *_callouts(v), *_card(v),
             demote(v.verdict.get("final_answer", ""), 3), ""]
     out += _kcu(v) + _rationale(v) + _ideas(v) + _sources(v, full=not summary) + _facts(v)
     if summary:
@@ -357,8 +372,13 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
         out += [f"| {n} | {st} | {_cell(err)} |" for n, st, err in fails]
     if v.cache_line:
         out += ["", f"*{v.cache_line}.*"]
-    fails = v.failures()
-    if fails:
-        out += ["", "### Сбои", "", *[f"- **{n}** ({st}): {err}" for n, st, err in fails]]
+    sc = v.stage_costs
+    if sc["stages"]:
+        out += ["", "### Расходы по этапам", "", "| Этап | Обращений (из них повторы и продолжения) | Вход из кэша | Стоимость | Доля |",
+                "|---|---|---|---|---|"]
+        out += [f"| {r['stage_name']} | {r['requests']} ({r['extra']}) | {r['cache_share']:.0%} | ${r['cost']:.4f} | {r['share']:.0%} |"
+                for r in sc["stages"]]
+        if sc["extra_cost"]:
+            out += ["", f"*На повторы и продолжения ушло ${sc['extra_cost']:.4f}.*"]
     out += [""] + _request(v, False)
     return "\n".join(out).rstrip() + "\n"

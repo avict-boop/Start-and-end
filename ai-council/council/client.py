@@ -497,6 +497,21 @@ class OpenRouterClient:
         except (httpx.HTTPError, ValueError, TypeError):
             return None
 
+    async def key_limit(self) -> dict[str, float] | None:
+        """Лимит расходов ключа OpenRouter (если задан): {"limit", "remaining", "usage"} в $; None — не задан или
+        не удалось узнать. Недельный лимит ключа кончается раньше баланса — заседание тогда встаёт на паузу."""
+        try:
+            resp = await self._http.get("/key")
+            if resp.status_code != 200:
+                return None
+            d = resp.json().get("data") or {}
+            if d.get("limit") in (None, 0) or d.get("limit_remaining") is None:
+                return None
+            return {"limit": round(float(d["limit"]), 2), "remaining": round(float(d["limit_remaining"]), 4),
+                    "usage": round(float(d.get("usage") or 0), 4), "reset": str(d.get("limit_reset") or "")}
+        except (httpx.HTTPError, ValueError, TypeError):
+            return None
+
     async def list_models(self) -> list[dict[str, Any]]:
         resp = await self._http.get("/models")
         resp.raise_for_status()

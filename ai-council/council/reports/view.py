@@ -15,7 +15,7 @@ import markdown as _markdown
 
 MODE_NAME = {"debate": "Дебаты", "quick": "Быстрый", "evaluate": "Оценка вариантов", "research": "Исследование"}
 STAGE_NAME = {"framing": "Постановка", "proposal": "Предложения", "critique": "Критика",
-              "revision": "Доработка", "vote": "Голосование", "verdict": "Вердикт", "arbitration": "Арбитраж доказательств"}
+              "revision": "Доработка", "vote": "Голосование", "verdict": "Вердикт", "arbitration": "Арбитраж доказательств", "recheck": "Проверка новых утверждений"}
 
 
 @dataclass
@@ -306,9 +306,10 @@ class View:
     # ------------------------------------------------------------ режим «Исследование»
     CLAIM_WORD = {"confirmed": "Подтверждено", "refuted": "Опровергнуто", "contested_in_sources": "Спорно в источниках",
                   "unclear": "Не удалось проверить", "user_doc": "Из документов пользователя",
-                  "search_unavailable": "Поиск недоступен", "not_checked": "Не проверялось"}
+                  "search_unavailable": "Поиск недоступен", "not_checked": "Не проверялось",
+                  "not_public": "Поиском не проверить"}
     CLAIM_SIGN = {"confirmed": "✓", "refuted": "✗", "contested_in_sources": "⇄", "unclear": "?", "user_doc": "📄",
-                  "search_unavailable": "—", "not_checked": "—"}
+                  "search_unavailable": "—", "not_checked": "—", "not_public": "🔒"}
     BASIS_WORD = {"memory": "из памяти модели", "calc": "расчёт", "user_doc": "из документов", "search_reported": "из поиска"}
     COVER_WORD = {"covered": "раскрыт", "partial": "частично", "unknown": "без ответа"}
     GAP_WORD = {"unverified_memory": "только по памяти моделей", "no_public_data": "нет открытых данных",
@@ -359,7 +360,30 @@ class View:
 
     @property
     def checked_claims(self) -> list[dict[str, Any]]:
-        return list(self.ledger.get("claims") or [])
+        """Проверенные утверждения; копии того же утверждения у других авторов — с пометкой; непубличное, которое
+        поиском не проверялось, — отдельными строками в конце."""
+        out = []
+        for c in self.ledger.get("claims") or []:
+            if c.get("duplicate_of"):
+                c = {**c, "notes": [f"то же утверждение, что {c['duplicate_of']} — проверено вместе", *(c.get("notes") or [])]}
+            out.append(c)
+        for d in self.ledger.get("deferred") or []:
+            out.append({"id": ", ".join(d.get("ids") or []), "text": d.get("text", ""), "status": "not_public",
+                        "notes": [d.get("how_to_check", "")], "evidence": []})
+        return out
+
+    @property
+    def decision_card(self) -> dict[str, Any] | None:
+        """Карточка решения на одну страницу (исследование) — или None."""
+        c = self.verdict.get("decision_card") or {}
+        return c if any(c.get(k) for k in ("summary_decision", "top_known", "key_unknowns", "next_steps")) else None
+
+    @property
+    def unacceptable(self) -> list[str] | None:
+        """«Выбор из вариантов»: председатель счёл непригодными все варианты — причины; иначе None."""
+        if self.verdict.get("acceptable", True) is not False:
+            return None
+        return list(self.verdict.get("decisive_defects") or []) or ["председатель не назвал причины"]
 
     @property
     def claim_counts(self) -> dict[str, int]:
@@ -556,6 +580,12 @@ class View:
             return f"{x:,}".replace(",", " ")
         return (f"Из кэша провайдеров прочитано {n(cached)} из {n(total)} входных токенов ({cached / total:.0%}) — "
                 "повторно прочитанные вопрос и вложения стоят дешевле")
+
+    @property
+    def stage_costs(self) -> dict[str, Any]:
+        """Куда ушли деньги: по этапам (из стенограммы)."""
+        from ..costs import stage_costs
+        return stage_costs(self.d.get("transcript") or [])
 
     @property
     def compact_note(self) -> str:

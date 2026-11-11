@@ -21,6 +21,11 @@ def _month(d: dict[str, Any], stem: str) -> str:
         return f"{stem[:4]}-{stem[4:6]}" if stem[:6].isdigit() else "—"
 
 
+def _stages(sessions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from .costs import stage_summary
+    return stage_summary(sessions)
+
+
 def _qkey(q: str) -> str:
     """Один и тот же вопрос в разных режимах — для сравнения пилота."""
     return re.sub(r"\s+", " ", str(q or "").lower()).strip()[:400]
@@ -110,6 +115,7 @@ def compute(archive: Archive, ratings: dict[str, dict[str, Any]] | None = None) 
                 models[e["member"]]["model"][e["model"]] += 1
         _chair_stats(chairs, stem, d, v)
         pilot.append(research_metrics(stem, d, v, ratings.get(stem)))
+        pilot[-1]["solo_rating"] = (ratings.get(f"{stem}#solo") or {}).get("rating")
         pilot_q[_qkey(d.get("question", ""))].append(pilot[-1])
 
     model_rows = []
@@ -164,6 +170,7 @@ def compute(archive: Archive, ratings: dict[str, dict[str, Any]] | None = None) 
         "pairs": [{"title": rows[-1]["title"], "runs": rows} for rows in pilot_q.values()
                   if len({r["mode"] for r in rows}) > 1 and any(r["mode"] == "research" for r in rows)][-15:],
         "rated": sum(1 for r in pilot if r["rating"]),
+        "stages": _stages([d for _, d in sessions]),
     }
 
 

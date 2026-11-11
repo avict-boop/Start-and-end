@@ -21,7 +21,9 @@ def test_research_session_end_to_end():
     assert res.mode == "research" and len(r["subquestions"]) == 3 and r["scope"]
     assert all(lab in r["lens_of"] for lab in res.authors)  # у каждого автора своя линза
     led = r["ledger"]
-    assert led["missions"] == 4 and led["evidence"]  # 10 утверждений: 2 пачки по 5 × 2 задания and {c["status"] for c in led["claims"]} >= {"confirmed"}
+    # одинаковые утверждения разных авторов проверены один раз; «не удалось проверить» — второй поиск
+    assert led["missions"] == 3 and led["evidence"] and any(c.get("duplicate_of") for c in led["claims"])
+    assert {c["status"] for c in led["claims"]} >= {"confirmed"}
     ok = R.confirmed_ids(led)
     assert res.verdict.known and all(set(k.evidence_ids) <= ok | {"DOC"} for k in res.verdict.known)
     assert set(r["sections"]) == {"Q1", "Q2", "Q3"} and all(s["leader"] for s in r["sections"].values())
@@ -287,7 +289,7 @@ def test_too_long_proposal_is_sent_back_when_enabled_and_length_is_per_session()
     res = run(Council(cfg, Wordy(delay=0), seed=3).run("Вопрос?"))
     assert all(n == 2 for n in Wordy.asks.values())  # каждого автора попросили сократить один раз
     assert all(len(p.summary.split()) < 600 for p in res.initial_proposals.values())
-    assert not make_cfg(mode="research").research.shorten_long  # по умолчанию выключено
+    assert make_cfg(mode="research").research.shorten_long  # по рекомендации аудита — включено по умолчанию
 
 
 def test_dead_links_do_not_confirm_and_are_reported():

@@ -388,6 +388,14 @@ main:focus { outline: none; }
         </div>
       </section>
 
+      <details id="pilotSec" class="card fold" hidden>
+        <summary><span><b>Пилот: окупается ли совет</b><small id="pilotSum">сравнить с одной моделью, переиграть проверку</small></span><svg class="ic chev" aria-hidden="true"><use href="#i-down"/></svg></summary>
+        <div class="fold-body" id="pilotBody"></div>
+      </details>
+      <details id="costSec" class="card fold" hidden>
+        <summary><span><b>Куда ушли деньги</b><small id="costSum"></small></span><svg class="ic chev" aria-hidden="true"><use href="#i-down"/></svg></summary>
+        <div class="fold-body" id="costBody"></div>
+      </details>
       <details id="whySec" class="card fold" hidden>
         <summary><span><b>Почему так, риски и особые мнения</b><small id="whySum"></small></span><svg class="ic chev" aria-hidden="true"><use href="#i-down"/></svg></summary>
         <div class="fold-body">

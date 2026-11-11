@@ -15,9 +15,10 @@ const STAGES = [
 const ARB_STAGE = ["arbitration", "Арбитраж доказательств"];
 // проверка ссылок реестра: открывается ли страница
 const LINK_BADGE = { dead: ' <span class="badge bad">ссылка не открывается</span>', blocked: ' <span class="badge plain" title="Сайт не пускает автоматическую проверку — сама ссылка может быть верной">сайт не пускает проверку</span>',
-  error: ' <span class="badge plain">не открылась при проверке</span>' };
+  error: ' <span class="badge plain">не открылась при проверке</span>',
+  refused: ' <span class="badge bad" title="Ссылка ведёт внутрь сети сервера — такие адреса не открываются">внутренний адрес</span>' };
 const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения",
-  factcheck: "Проверка фактов", arbitration: "Арбитраж доказательств" };
+  factcheck: "Проверка фактов", arbitration: "Арбитраж доказательств", recheck: "Проверка новых утверждений" };
 // что происходит на этапе — простыми словами
 const STAGE_HINT = {
   framing: "председатель уточняет вопрос и критерии",
@@ -27,6 +28,7 @@ const STAGE_HINT = {
   vote: "модели ранжируют чужие решения",
   factcheck: "модель с поиском проверяет факты лидеров",
   arbitration: "поиск проверяет утверждения всех вариантов: подтверждения и опровержения",
+  recheck: "поиск проверяет утверждения, которые авторы добавили после доработки",
   verdict: "председатель пишет итоговое решение",
 };
 // исследование: этапы те же по смыслу, но работа на них другая — свои названия и пояснения
@@ -397,7 +399,9 @@ function estimateSummary(e) {
   if (e.low == null) return [$("mock").checked ? `Демо-режим: бесплатно · ${e.calls} обращений к моделям` : `${e.calls} обращений · цены неизвестны`, ""];
   let txt = `Оценка: $${e.low.toFixed(2)} – $${e.high.toFixed(2)}`;
   let kind = "";
+  const kl = e.key_limit;
   if (e.balance != null && e.balance < e.high) { txt += " · баланса может не хватить"; kind = "bad"; }
+  else if (kl && kl.remaining < e.high) { txt += ` · лимита ключа может не хватить (осталось $${kl.remaining.toFixed(2)})`; kind = "bad"; }
   else if (e.high > e.budget) { txt += ` · выше лимита $${e.budget}`; kind = "warn"; }
   else if (e.balance != null) txt += " · баланса хватит";
   return [txt, kind];
@@ -764,7 +768,13 @@ async function refreshBalance(force = false) {
       ks.innerHTML = `<span class="hide-sm">Баланс </span>$${b.toFixed(2)}`;
       ks.className = `pill clickable ${b < 0.5 ? "bad" : b < 3 ? "warn" : "ok"}`;
       ks.disabled = false;
-      ks.title = "Остаток на балансе OpenRouter. Нажмите, чтобы пополнить.";
+      const kl = r.key_limit;
+      ks.title = "Остаток на балансе OpenRouter. Нажмите, чтобы пополнить."
+        + (kl ? ` Лимит ключа: осталось $${kl.remaining.toFixed(2)} из $${kl.limit}.` : "");
+      if (kl) {
+        ks.innerHTML += ` <span class="hide-sm">· ключ $${kl.remaining.toFixed(2)}</span>`;
+        if (kl.remaining < 3 && !ks.className.includes("bad")) ks.className = "pill clickable warn";
+      }
       ks.setAttribute("aria-label", `Баланс OpenRouter: ${b.toFixed(2)} долларов. Открыть пополнение`);
     }
   } catch { /* оставляем прежнее значение */ }
@@ -1299,6 +1309,8 @@ function stagePlan(s) {
   const plan = STAGES.filter(([k]) => !skip.has(k));
   if (s.mode === "research") {  // свой арбитраж доказательств вместо отдельной проверки фактов
     plan.splice(plan.findIndex(([k]) => k === "revision"), 0, ARB_STAGE);
+    if (s.stageTitle.recheck || s.doneStages.has("recheck"))  // проверка новых утверждений после доработки
+      plan.splice(plan.findIndex(([k]) => k === "revision") + 1, 0, ["recheck", "Проверка новых утверждений"]);
     return plan.map(([k, t]) => [k, RESEARCH_STAGE[k] ? RESEARCH_STAGE[k][0] : t]);
   }
   if (s.stageTitle.factcheck || s.facts || s.factPlanned) plan.splice(plan.length - 1, 0, ["factcheck", STAGE_NAME.factcheck]);
@@ -1315,8 +1327,8 @@ function render(s) {
   $("sParent").hidden = !s.parent;
   if (s.parent) $("sParent").innerHTML = `↳ Уточнение к заседанию <a href="#/s/${encodeURIComponent(s.parent.id)}">${esc(s.parent.title || "…")}</a>`;
   $("nextActions").hidden = !s.done;
-  if (!s.done) $("rateRow").hidden = true;
-  else if (!s.rateLoaded) { s.rateLoaded = true; loadRating(s.id); }
+  if (!s.done) { $("rateRow").hidden = true; $("costSec").hidden = true; $("pilotSec").hidden = true; }
+  else if (!s.rateLoaded) { s.rateLoaded = true; loadRating(s.id); loadCosts(s.id); loadPilot(s); }
   const title = shortTitle(s.question);
   $("sQuestion").textContent = title;
   const longQuery = !!s.question && s.question.trim() !== title;
@@ -1421,7 +1433,8 @@ async function raiseBudget() {
 
 // итог исследования: известно / спорно / неизвестно, подвопросы с каркасом, источники
 const CLAIM_BADGE = { confirmed: ["ok", "подтверждено"], refuted: ["bad", "опровергнуто"], contested_in_sources: ["warn", "спорно в источниках"],
-  unclear: ["plain", "не удалось проверить"], user_doc: ["plain", "из документов"], search_unavailable: ["plain", "поиск недоступен"], not_checked: ["plain", "не проверялось"] };
+  unclear: ["plain", "не удалось проверить"], user_doc: ["plain", "из документов"], search_unavailable: ["plain", "поиск недоступен"], not_checked: ["plain", "не проверялось"],
+  not_public: ["plain", "поиском не проверить"] };
 const COVER_WORD = { covered: "раскрыт", partial: "частично", unknown: "без ответа" };
 const GAP_WORD = { unverified_memory: "только по памяти моделей", no_public_data: "нет открытых данных", not_checked: "не проверено" };
 function renderResearch(s) {
@@ -1433,7 +1446,12 @@ function renderResearch(s) {
   const ev = Object.fromEntries(((s.ledger && s.ledger.evidence) || []).map((e) => [e.id, e]));
   const refs = (ids) => (ids || []).map((i) => i === "DOC" ? '<span class="lbl">DOC</span>'
     : ev[i] ? `<a href="${esc(ev[i].url)}" target="_blank" rel="noopener" title="${esc(ev[i].title || ev[i].url)}">[${esc(i)}]</a>` : "").join(" ");
-  let h = `<h3>Что известно, что спорно, чего не знает никто</h3><p class="muted small">«Известно» — только то, что подтвердили найденные источники или ваши документы; согласие моделей сюда не попадает.</p>`;
+  const card = v.decision_card || {};
+  const cardList = (t, xs) => ((xs || []).length ? `<div><h4>${t}</h4><ul>${xs.map((x) => `<li>${inline(x)}</li>`).join("")}</ul></div>` : "");
+  let h = card.summary_decision || (card.top_known || []).length
+    ? `<div class="decision-card"><div class="dc-title">Карточка решения</div>${card.summary_decision ? `<p class="dc-sum">${inline(card.summary_decision)}</p>` : ""}
+      <div class="dc-grid">${cardList("Известно", card.top_known)}${cardList("Главные пробелы", card.key_unknowns)}${cardList("Следующие шаги", card.next_steps)}</div></div>` : "";
+  h += `<h3>Что известно, что спорно, чего не знает никто</h3><p class="muted small">«Известно» — только то, что подтвердили найденные источники или ваши документы; согласие моделей сюда не попадает.</p>`;
   h += `<div class="kcu"><div class="kcu-col ok"><h4>Известно</h4>${(v.known || []).length ? `<ul>${v.known.map((k) => `<li>${inline(k.statement)} ${refs(k.evidence_ids)}${k.volatility === "changes_fast" ? ' <span class="muted small">· быстро меняется</span>' : ""}</li>`).join("")}</ul>` : '<p class="muted small">Подтверждённых источниками утверждений нет.</p>'}</div>`;
   h += `<div class="kcu-col warn"><h4>Спорно</h4>${(v.contested || []).length ? `<ul>${v.contested.map((c) => `<li><b>${inline(c.issue)}</b>${(c.positions || []).length ? `<div class="small">${c.positions.map(inline).join(" · ")}</div>` : ""}${c.why_they_differ ? `<div class="muted small">почему: ${inline(c.why_they_differ)}</div>` : ""} ${refs(c.evidence_ids)}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div>`;
   h += `<div class="kcu-col bad"><h4>Неизвестно</h4>${(v.unknown || []).length ? `<ul>${v.unknown.map((u) => `<li>${inline(u.gap)}${u.reason ? ` <span class="muted small">· ${esc(GAP_WORD[u.reason] || u.reason)}</span>` : ""}${u.how_to_check ? `<div class="muted small">как узнать: ${inline(u.how_to_check)}</div>` : ""}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div></div>`;
@@ -1448,7 +1466,9 @@ function renderResearch(s) {
     }).join("")}</ul>`;
   }
   if ((v.next_questions || []).length) h += `<h4>Что исследовать дальше</h4><ul>${v.next_questions.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`;
-  const claims = (s.ledger && s.ledger.claims) || [];
+  const claims = [...((s.ledger && s.ledger.claims) || []).map((c) => (c.duplicate_of
+    ? { ...c, notes: [`то же утверждение, что ${c.duplicate_of} — проверено вместе`, ...(c.notes || [])] } : c)),
+    ...((s.ledger && s.ledger.deferred) || []).map((d) => ({ id: (d.ids || []).join(", "), text: d.text, status: "not_public", notes: [d.how_to_check], evidence: [] }))];
   if (claims.length) {
     h += `<details class="sources"><summary>Проверка утверждений и источники (${claims.length} утв., ${Object.keys(ev).length} источн.)</summary><ul class="claims">${claims.map((c) => {
       const [k, t] = CLAIM_BADGE[c.status] || CLAIM_BADGE.not_checked;
@@ -1701,6 +1721,7 @@ function renderVerdict(s) {
   const badges = [];
   if (s.agreement) { const [k, t] = AGREE_BADGE[s.agreement.level]; badges.push(`<span class="badge ${k}" title="${esc(AGREE_HINT[s.agreement.level])}">${t}</span>`); }
   if (tie) badges.push(`<span class="badge warn">Ничья за первое место</span>`);
+  if (v.acceptable === false) badges.push(`<span class="badge bad" title="${esc((v.decisive_defects || []).join("; "))}">Ни один вариант не подходит</span>`);
   if (deviated) badges.push(`<span class="badge bad">Председатель выбрал не лидера</span>`);
   if (s.facts && Object.values(s.facts).some((r) => (r.claims || []).some((c) => c.status === "refuted"))) badges.push(`<span class="badge bad">Есть опровергнутые факты</span>`);
   if (s.mock) badges.push(`<span class="badge plain">демо-режим</span>`);
@@ -2126,6 +2147,9 @@ async function openStats() {
           Согласие — насколько одинаково модели ранжировали варианты (τ: 1 — полностью, 0 — никак).</p>` : ""}
       </div>
     </div>
+    ${(d.stages || []).length ? `<h2 style="margin-top:1.4rem">Куда уходят деньги</h2>
+      <p class="muted small">По всем заседаниям: доля каждого этапа в расходах, повторы и продолжения, вход из кэша.</p>
+      ${costTable(d.stages)}` : ""}
     ${pilotHtml(d)}`;
 }
 $("statsBtn").addEventListener("click", async () => { await openStats(); markAllScroll($("statsBody")); });
@@ -2145,9 +2169,9 @@ function pilotHtml(d) {
       <td class="num">${r.subq ? `${r.covered} из ${r.subq}${r.partial ? ` <span class="muted small">(+${r.partial} частично)</span>` : ""}` : "—"}</td>
       <td class="num">${money(r.cost)}</td>
       <td class="num" style="${r.failures ? "color:var(--bad)" : ""}">${r.failures}</td>
-      <td class="stars-cell" title="${esc(r.note || "")}">${stars(r.rating)}</td></tr>`;
+      <td class="stars-cell" title="${esc(r.note || "")}">${stars(r.rating)}</td><td class="stars-cell">${stars(r.solo_rating)}</td></tr>`;
   const head = `<thead><tr><th>Заседание</th><th>Подтверждено</th><th>Известно · спорно · неизвестно</th><th>Живые ссылки</th>
-      <th>Подвопросы раскрыты</th><th>Цена</th><th>Сбои</th><th>Ваша оценка</th></tr></thead>`;
+      <th>Подвопросы раскрыты</th><th>Цена</th><th>Сбои</th><th>Ваша оценка</th><th title="оценка ответа одной модели с поиском на тот же вопрос">Одна модель</th></tr></thead>`;
   const pairs = (d.pairs || []).map((p) => `<h3 class="pair-title">${esc(p.title)}</h3>
       <div class="table-wrap"><table class="table pilot">${head}<tbody>${p.runs.map(runRow).join("")}</tbody></table></div>`).join("");
   return `<section class="pilot-sec"><h2 style="margin-top:1.4rem">Пилот: исследования</h2>
@@ -2158,6 +2182,79 @@ function pilotHtml(d) {
     ${pairs ? `<h2 style="margin-top:1.2rem">Один вопрос — разные режимы</h2>
       <p class="muted small">Заседания с тем же текстом вопроса в разных режимах — для прямого сравнения.</p>${pairs}`
       : '<p class="muted small">Чтобы сравнить режимы, задайте тот же вопрос в «Подробном обсуждении» и в «Исследовании» — кнопка «Повторить» под решением.</p>'}</section>`;
+}
+
+// пилот: ответ одной модели с поиском (контрольная группа) и переигранный арбитраж
+async function loadPilot(s) {
+  let p;
+  try { p = await api(`/api/sessions/${encodeURIComponent(s.id)}/pilot`); } catch { return; }
+  $("pilotSec").hidden = false;
+  renderPilot(s, p);
+}
+
+function renderPilot(s, p) {
+  const solo = p.solo, rep = p.replay;
+  const row = (k, a, b) => `<tr><td>${k}</td><td class="num">${a ?? "—"}</td><td class="num">${b ?? "—"}</td></tr>`;
+  const stars = (val) => [1, 2, 3, 4, 5].map((n) => `<button type="button" class="star${n <= (val || 0) ? " on" : ""}" data-srate="${n}" aria-label="${n} из 5">${n <= (val || 0) ? "★" : "☆"}</button>`).join("");
+  $("pilotSum").textContent = [solo ? "есть ответ одной модели" : "", rep ? `арбитраж: подтверждено ${rep.after.confirmed} из ${rep.after.checked}` : ""].filter(Boolean).join(" · ")
+    || "сравнить с одной моделью, переиграть проверку";
+  $("pilotBody").innerHTML = `
+    <h4>Ответ одной модели с поиском</h4>
+    <p class="muted small">Контрольная группа: тот же вопрос — одной модели (${esc(p.solo_model || "")}) с поиском. Если её ответ не хуже решения совета,
+      совет не окупается. Сравните и поставьте оценку обоим (решению совета — звёздами выше).</p>
+    ${solo ? `<div class="solo-answer md">${md(solo.answer)}</div>
+      <p class="muted small">${esc(solo.model)} · ${money(solo.cost)}${solo.mock ? " · демо" : ""}</p>
+      <div class="rate-row"><span class="muted small">Оценка ответа одной модели:</span><span class="stars" id="soloStars">${stars(p.solo_rating)}</span></div>`
+      : `<button type="button" class="btn" id="soloBtn">Получить ответ одной модели</button> <span class="muted small">обычно $0,2–0,5</span>`}
+    ${s.mode === "research" ? `<h4>Переиграть проверку утверждений</h4>
+      <p class="muted small">Отбор утверждений и поиск заново — с текущими настройками исследования, на сохранённых вариантах и критике. Варианты не
+        пишутся заново, поэтому это центы, а не новое заседание.</p>
+      ${rep ? `<div class="table-wrap"><table class="table"><thead><tr><th></th><th class="num">Было</th><th class="num">Стало</th></tr></thead><tbody>
+        ${row("Проверено утверждений", rep.before.checked, rep.after.checked)}${row("Подтверждено", rep.before.confirmed, rep.after.confirmed)}
+        ${row("Не удалось проверить", rep.before.unclear, rep.after.unclear)}${row("Опровергнуто", rep.before.refuted, rep.after.refuted)}
+        ${row("Непубличное — сразу в «неизвестно»", rep.before.deferred, rep.after.deferred)}${row("Источников", rep.before.sources, rep.after.sources)}
+        ${row("Живых ссылок", rep.before.links_ok, rep.after.links_ok)}</tbody></table></div>
+        <p class="muted small">Стоило ${money(rep.cost)} · настройки: ${esc(Object.entries(rep.settings || {}).map(([k, v]) => `${k}=${v}`).join(", "))}</p>` : ""}
+      <button type="button" class="btn" id="replayBtn">${rep ? "Переиграть ещё раз" : "Переиграть проверку"}</button> <span class="muted small">обычно $0,2–0,8</span>` : ""}`;
+  const sb = document.getElementById("soloBtn");
+  if (sb) sb.addEventListener("click", async () => {
+    sb.disabled = true; sb.textContent = "Модель отвечает — до пары минут…";
+    try { await api(`/api/sessions/${encodeURIComponent(s.id)}/solo`, { method: "POST" }); loadPilot(s); }
+    catch (e) { toast(e.message); sb.disabled = false; sb.textContent = "Получить ответ одной модели"; }
+  });
+  const rb = document.getElementById("replayBtn");
+  if (rb) rb.addEventListener("click", async () => {
+    rb.disabled = true; rb.textContent = "Ищу заново…";
+    try { await api(`/api/sessions/${encodeURIComponent(s.id)}/replay`, { method: "POST" }); loadPilot(s); }
+    catch (e) { toast(e.message); rb.disabled = false; rb.textContent = "Переиграть проверку"; }
+  });
+  for (const b of $("pilotBody").querySelectorAll("[data-srate]")) b.addEventListener("click", async () => {
+    const n = +b.dataset.srate === p.solo_rating ? 0 : +b.dataset.srate;
+    try { await api(`/api/sessions/${encodeURIComponent(s.id)}/rating`, { method: "POST", body: { rating: n, kind: "solo" } }); p.solo_rating = n || null; renderPilot(s, p); }
+    catch (e) { toast(e.message); }
+  });
+}
+
+// куда ушли деньги: этапы, повторы и продолжения, доля входа из кэша
+const costTable = (rows, total) => `<div class="table-wrap"><table class="table cost-table"><thead><tr><th>Этап</th>
+  <th class="num">Обращений</th><th class="num" title="Ответ не по схеме, обрезан или дописывался продолжением">Повторы</th>
+  <th class="num" title="Какая часть входных токенов прочитана из кэша провайдера (дешевле)">Из кэша</th><th class="num">Стоимость</th><th>Доля</th></tr></thead>
+  <tbody>${rows.map((r) => `<tr><td>${esc(r.stage_name)}${r.member ? ` <span class="muted small">${esc(r.member)}</span>` : ""}</td>
+    <td class="num">${r.requests}</td><td class="num" style="${r.extra ? "color:var(--warn)" : ""}">${r.extra}</td>
+    <td class="num">${Math.round(r.cache_share * 100)}%</td><td class="num">${money(r.cost)}</td>
+    <td><div class="win-cell"><div class="bar"><i style="width:${Math.round(r.share * 100)}%"></i></div>${Math.round(r.share * 100)}%</div></td></tr>`).join("")}</tbody></table></div>`;
+
+async function loadCosts(sid) {
+  let c;
+  try { c = await api(`/api/sessions/${encodeURIComponent(sid)}/costs`); } catch { return; }
+  if (!c.stages || !c.stages.length) return;
+  $("costSec").hidden = false;
+  $("costSum").textContent = `${money(c.total)} · из кэша ${Math.round(c.cache_share * 100)}% входа${c.extra_cost ? ` · на повторы ${money(c.extra_cost)}` : ""}`;
+  const top = c.members.slice(0, 8);
+  $("costBody").innerHTML = `<h4>По этапам</h4>${costTable(c.stages)}
+    <h4>Самые дорогие участники на этапах</h4>${costTable(top)}
+    <p class="muted small">Повторы — ответы не по схеме, обрезанные или дописанные продолжением. Из кэша — какая часть
+      входа прочитана повторно и стоила дешевле.</p>`;
 }
 
 // оценка пользы под решением
@@ -2460,7 +2557,7 @@ function renderAdvice(r) {
         <div class="adv-name"><b>${esc(rest.join("/") || p.model)}</b> <span class="muted small">${esc(prov)}</span>
           <button type="button" class="link small adv-card" data-card="${esc(p.model)}">О модели</button></div>
         <div class="adv-meta">${esc(meta)}</div>
-        <p class="adv-why">${esc(p.why)} ${basis(p.basis)}</p>${rev}
+        <p class="adv-why">${esc(p.why)} ${basis(p.basis)}${p.confidence ? ` <span class="basis" title="насколько советник уверен">уверенность: ${esc({ low: "низкая", medium: "средняя", high: "высокая" }[p.confidence] || p.confidence)}</span>` : ""}</p>${rev}
       </div></li>`;
   }).join("");
   const drops = selectedMembers().filter((n) => !(r.plan.members || []).includes(n));
@@ -2478,8 +2575,9 @@ function renderAdvice(r) {
     ${Object.keys(a.research_settings || {}).length ? `<h4>Настройки исследования для этого вопроса</h4>
       <ul class="adv-rs">${Object.entries(a.research_settings).map(([k, v]) => `<li><label class="rs-row"><input type="checkbox" data-rs="${esc(k)}" checked>
         <span class="rs-body"><span class="rs-name">${esc(RS_NAME[k] || k)}:</span> <b>${esc(rsVal(v))}</b>
-          <span class="muted small">(сейчас ${esc(rsVal((config.research_all || {})[k]))})</span>
+          <span class="muted small">(сейчас ${esc(rsVal((config.research_all || {})[k]))}${(a.research_cost || {})[k] != null ? ` · ${a.research_cost[k] >= 0 ? "+" : "−"}$${Math.abs(a.research_cost[k]).toFixed(2)} к цене` : ""})</span>
           ${(a.research_why || {})[k] ? `<span class="rs-why">${esc(a.research_why[k])}</span>` : ""}</span></label></li>`).join("")}</ul>` : ""}
+    ${a.baseline ? `<p class="muted small adv-base"><b>Исходная точка:</b> ${esc(a.baseline)}</p>` : ""}
     <h4>Состав</h4><ol class="adv-picks">${picks}</ol>
     ${drops.length ? `<label class="adv-take adv-drop"><input type="checkbox" id="advDrop" checked> Убрать из текущего состава: <b>${drops.map(esc).join(", ")}</b>
       <span class="muted small">— их нет в рекомендации</span></label>` : ""}

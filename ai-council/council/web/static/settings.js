@@ -170,7 +170,22 @@ function renderSettings() {
       <label class="switch"><input type="checkbox" id="sCompact" ${d.compact_proposals ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span>
         <span><b>Компактные варианты по умолчанию</b><small>Участники пишут суть сжато, полный ответ — только председатель. Примерно в 2–3 раза дешевле; в «Параметрах» вопроса можно поменять для отдельного заседания.</small></span></label>
       <label class="field" style="max-width:20rem;margin-top:.6rem"><span>Длина компактного варианта, слов</span>
-        <input type="number" id="sCompactWords" min="150" max="5000" step="50" value="${d.compact_words}" ${ro}></label>`;
+        <input type="number" id="sCompactWords" min="150" max="5000" step="50" value="${d.compact_words}" ${ro}></label>
+      <h2 style="margin-top:1rem">Надёжность и пределы</h2>
+      <p class="muted small">Значения по умолчанию — по рекомендациям аудита совета. Менять стоит, если видно, что мешают.</p>
+      ${[["quick_keep", "Идеи проигравших в «Быстром ответе»", "голосующие называют ценное из вариантов не на первом месте — его не теряем"],
+         ["evaluate_allow_none", "«Ни один вариант не подходит» в «Выборе из вариантов»", "председатель может честно сказать, что все варианты непригодны, с причиной и цитатой"],
+         ["budget_reserve", "Резерв бюджета на запросы в работе", "новый запрос не уходит, если вместе с уже отправленными бюджет будет превышен; пауза — чуть раньше, но без перерасхода"]].map(([k, t, h]) =>
+        `<label class="switch"><input type="checkbox" data-kb="${k}" ${d[k] ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>${t}</b><small>${h}</small></span></label>`).join("")}
+      <div class="row2" style="margin-top:.6rem">
+        ${[["judge_temperature", "Температура оценок и итога", "0", "2", "0.1", "постановка, критика, голосование, итог; пусто — как у авторов"],
+           ["verdict_max_tokens", "Предел ответа председателя на итоге, токенов", "0", "64000", "1000", "длинный итог одним ответом, без склеек; 0 — общий предел"],
+           ["max_requirements", "Обязательных требований из запроса, до", "1", "40", "1", "длинные ТЗ бывают с 10+ требованиями"],
+           ["quorum_large", "Кворум при 4+ авторах", "2", "10", "1", "в обсуждении и исследовании; при двух вариантах выбор по сути делает председатель"],
+           ["max_concurrency", "Запросов к моделям одновременно", "1", "16", "1", "меньше — меньше перерасход у границы бюджета, но дольше"],
+           ["reports_memory_mb", "Память для сборки отчётов, МБ", "0", "16000", "100", "защита слабого сервера; 0 — без предела"]].map(([k, t, mn, mx, st, h]) =>
+          `<label class="field"><span>${t}</span><input type="number" data-k="${k}" min="${mn}" max="${mx}" step="${st}" value="${d[k] ?? ""}" ${ro}><small class="hint">${h}</small></label>`).join("")}
+      </div>`;
   } else if (SET.tab === "facts") {
     const fc = d.fact_check;
     html = `
@@ -191,16 +206,48 @@ function renderSettings() {
          ["rArb", "arbitration", "Арбитраж доказательств", "после критики модель с поиском проверяет утверждения всех вариантов"],
          ["rDigest", "revision_digest", "Доработка по выжимкам", "авторы видят реестр источников и тезисы чужих вариантов, а не их полные тексты"],
          ["rSection", "section_vote", "Голосование по подвопросам", "участники выбирают лучший вариант для каждого подвопроса"],
-         ["rShorten", "shorten_long", "Сокращать слишком длинные варианты", "вариант намного длиннее заданного возвращается автору на сокращение (по умолчанию; можно поменять для отдельного вопроса)"]].map(([id, k, t, h]) =>
+         ["rShorten", "shorten_long", "Сокращать слишком длинные варианты", "вариант намного длиннее заданного возвращается автору на сокращение (по умолчанию; можно поменять для отдельного вопроса)"],
+         ["rDedupe", "dedupe_claims", "Объединять одинаковые утверждения", "одно и то же утверждение разных авторов проверяется поиском один раз"],
+         ["rDefer", "defer_private", "Непубличное — сразу в «неизвестно»", "права, внутренние цены и «нигде нет» поиском не решить: не тратим на них проверки, пишем, где узнать"],
+         ["rCover", "coverage_first", "Сначала покрыть подвопросы", "на проверку — по утверждению на каждый подвопрос, потом по автору, потом самые важные"],
+         ["rVoteLedger", "vote_ledger", "Голосующие видят реестр источников", "что подтверждено, а что «из памяти» — при выборе лучшего варианта"],
+         ["rCard", "decision_card", "Карточка решения", "председатель пишет решение на одну страницу — оно первым в итоге"],
+         ["rMark", "mark_unconfirmed", "Помечать неподтверждённое в тексте итога", "если «известно» без источника перенесено в «неизвестно» — видно и в тексте"],
+         ["rLinks", "link_check", "Проверять ссылки", "открыть каждую ссылку реестра: мёртвая ничего не подтверждает"]].map(([id, k, t, h]) =>
         `<label class="switch"><input type="checkbox" id="${id}" data-r="${k}" ${d.research[k] ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>${t}</b><small>${h}</small></span></label>`).join("")}
       <div class="row2" style="margin-top:.6rem">
         <label class="field"><span>Поисковых заданий (подтвердить / опровергнуть)</span><input type="number" id="rMissions" data-rn="missions" min="1" max="2" value="${d.research.missions}" ${ro}></label>
-        <label class="field"><span>Утверждений на проверку</span><input type="number" id="rClaims" data-rn="arbitration_claims" min="3" max="20" value="${d.research.arbitration_claims}" ${ro}></label>
+        <label class="field"><span>Утверждений на проверку</span><input type="number" id="rClaims" data-rn="arbitration_claims" min="3" max="30" value="${d.research.arbitration_claims}" ${ro}></label>
         <label class="field"><span>Авторов с поиском уже в предложениях</span><input type="number" id="rScouts" data-rn="fresh_scouts" min="0" max="2" value="${d.research.fresh_scouts}" ${ro}>
           <div class="muted small">0 — независимо и дешевле; 1–2 — для свежих цифр (цены, рынки), но варианты могут стать похожими</div></label>
         <label class="field"><span>Длина варианта, слов</span><input type="number" id="rWords" data-rn="max_words" min="300" max="5000" step="100" value="${d.research.max_words}" ${ro}>
           <div class="muted small">по умолчанию; в «Параметрах» вопроса можно поменять для отдельного исследования</div></label>
         <label class="field"><span>«Слишком длинный» — во сколько раз длиннее</span><input type="number" id="rFactor" data-rn="long_factor" min="1.2" max="5" step="0.1" value="${d.research.long_factor}" ${ro}></label>
+        <label class="field"><span>«Не удалось проверить» — второй поиск, до</span><input type="number" data-rn="recheck_unclear" min="0" max="15" value="${d.research.recheck_unclear}" ${ro}>
+          <div class="muted small">утверждений; ищутся другими запросами; 0 — без второго поиска</div></label>
+        <label class="field"><span>Новые утверждения после доработки — проверить, до</span><input type="number" data-rn="post_revision_claims" min="0" max="10" value="${d.research.post_revision_claims}" ${ro}></label>
+        <label class="field"><span>Фрагмент страницы — не подтверждение</span>
+          <select data-rs="snippet_rule" ${ro}>${[["critical", "для спорных и быстро меняющихся"], ["all", "для всех утверждений"], ["off", "не применять"]].map(([v, t]) => `<option value="${v}" ${d.research.snippet_rule === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+        <label class="field"><span>Утверждений в варианте, до</span><input type="number" data-rn="max_claims" min="3" max="15" value="${d.research.max_claims}" ${ro}></label>
+        <label class="field"><span>Строк таблиц в выжимке для доработки</span><input type="number" data-rn="digest_table_rows" min="0" max="40" value="${d.research.digest_table_rows}" ${ro}></label>
+        <label class="field"><span>Предел ответа автора: токенов на слово</span><input type="number" data-rn="author_tokens_per_word" min="0" max="20" step="0.5" value="${d.research.author_tokens_per_word}" ${ro}>
+          <div class="muted small">× длина варианта; 0 — общий предел</div></label>
+        <label class="field"><span>…но не меньше, токенов</span><input type="number" data-rn="author_min_tokens" min="1000" max="64000" step="500" value="${d.research.author_min_tokens}" ${ro}>
+          <div class="muted small">думающим моделям нужно место на скрытые рассуждения</div></label>
+      </div>
+      <h2 style="margin-top:1.2rem">Пилот</h2>
+      <label class="field"><span>Модель для «ответа одной модели с поиском»</span><input type="text" list="modelList" id="pSolo" value="${esc(d.pilot_solo_model || "")}" ${ro}>
+        <div class="muted small">контрольная группа к совету: если одиночный ответ не хуже — совет не окупается; пусто — модель председателя</div></label>
+      <h2 style="margin-top:1.2rem">Подбор состава</h2>
+      <p class="muted small">Кнопка «✨ Подобрать состав» в форме вопроса.</p>
+      <label class="switch"><input type="checkbox" data-ab="dossier" ${d.advisor.dossier ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span>
+        <span><b>Обзоры моделей из интернета</b><small>советник опирается на найденные обзоры и известные проблемы моделей</small></span></label>
+      <div class="row2" style="margin-top:.6rem">
+        <label class="field"><span>Модель-советник</span><input type="text" list="modelList" data-as="model" value="${esc(d.advisor.model)}" ${ro}><div class="muted small">пусто — модель председателя</div></label>
+        ${[["dossier_days", "Обзор свежий, дней", "1", "180"], ["max_candidates", "Моделей каталога на выбор", "6", "60"],
+           ["question_chars", "Знаков вопроса видит советник", "2000", "200000"], ["history_min_sessions", "Ваша история — довод, с заседаний", "1", "100"],
+           ["max_arbitration_claims", "Потолок «утверждений на проверку»", "3", "30"], ["max_words_cap", "Потолок длины варианта, слов", "300", "5000"]].map(([k, t, mn, mx]) =>
+          `<label class="field"><span>${t}</span><input type="number" data-an="${k}" min="${mn}" max="${mx}" value="${d.advisor[k]}" ${ro}></label>`).join("")}
       </div>
       <h2 style="margin-top:1.2rem">Голосовые сообщения</h2>
       <label class="field"><span>Модель для расшифровки речи <em>(должна понимать звук — 🎤 в подсказке)</em></span>
@@ -283,8 +330,15 @@ function bindSettings() {
   bindVal("fTop", (t) => { d.fact_check.top = num(t.value); });
   bindVal("fClaims", (t) => { d.fact_check.max_claims = num(t.value); });
   bindVal("tModel", (t) => { d.transcribe_model = t.value.trim(); });
+  bindVal("pSolo", (t) => { d.pilot_solo_model = t.value.trim(); });
   for (const el of $("setBody").querySelectorAll("[data-r]")) el.addEventListener("change", () => { d.research[el.dataset.r] = el.checked; setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-rn]")) el.addEventListener("input", () => { d.research[el.dataset.rn] = num(el.value); setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-rs]")) el.addEventListener("change", () => { d.research[el.dataset.rs] = el.value; setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-kb]")) el.addEventListener("change", () => { d[el.dataset.kb] = el.checked; setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-k]")) el.addEventListener("input", () => { d[el.dataset.k] = num(el.value); setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-ab]")) el.addEventListener("change", () => { d.advisor[el.dataset.ab] = el.checked; setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-an]")) el.addEventListener("input", () => { d.advisor[el.dataset.an] = num(el.value); setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-as]")) el.addEventListener("input", () => { d.advisor[el.dataset.as] = el.value.trim(); setDirty(); });
   on("searchTest", "click", async () => {
     const out = $("searchTestOut");
     out.textContent = "Проверяю…";

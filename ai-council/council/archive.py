@@ -25,7 +25,7 @@ from .reports.view import MODE_NAME, View
 
 log = logging.getLogger("council.archive")
 
-REPORT_VERSION = "12"  # 12 — пометки «нарушает требование» по-русски; 11 — «Только решение» без вопроса; 10 — новое оформление: решение первым, стили Word, PDF/UA  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
+REPORT_VERSION = "13"  # 13 — расходы по этапам, карточка решения, «ни один не подходит»; 12 — пометки «нарушает требование» по-русски; 11 — «Только решение» без вопроса; 10 — новое оформление: решение первым, стили Word, PDF/UA  # увеличить, когда меняется вид отчётов: старые пересоберутся при запуске
 MARKER = ".reports-version"  # номер версии; время изменения файла — момент смены версии
 LOCK = ".reports-lock"  # фоновую пересборку ведёт один процесс (сайт и бот делят папку архива)
 URGENT = ".reports-urgent-"  # пока такие файлы есть, фоновая пересборка ждёт: человек ждёт свой отчёт
@@ -216,7 +216,7 @@ class Archive:
         """Как build(), но при isolate — в отдельном процессе; фоновая сборка — с низким приоритетом."""
         if not self.isolate:
             return self.build(stem, formats)
-        nice = (lambda: os.nice(15)) if background and hasattr(os, "nice") else None
+        nice = _worker_limits(background)
         pkg_root = str(Path(__file__).resolve().parent.parent)
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [pkg_root, os.environ.get("PYTHONPATH")]))}
         try:
@@ -417,6 +417,28 @@ class _ProcessLock:
     def __exit__(self, *exc: object) -> None:
         if self.fh:
             self.fh.close()  # закрытие файла снимает блокировку
+
+
+def _worker_limits(background: bool) -> Any:
+    """Для процесса сборки отчётов: низкий приоритет в фоне и предел памяти (reports_memory_mb в config.yaml;
+    сайт и бот передают его в COUNCIL_REPORTS_MEM_MB) — чтобы большой отчёт не «повесил» сервер на 1 ГБ."""
+    try:
+        mb = int(os.environ.get("COUNCIL_REPORTS_MEM_MB") or 0)
+    except ValueError:
+        mb = 0
+    if not (background and hasattr(os, "nice")) and not mb:
+        return None
+
+    def apply() -> None:
+        if background and hasattr(os, "nice"):
+            os.nice(15)
+        if mb:
+            try:
+                import resource
+                resource.setrlimit(resource.RLIMIT_AS, (mb * 1024 * 1024, mb * 1024 * 1024))
+            except (ImportError, ValueError, OSError):
+                pass
+    return apply
 
 
 class _WaitLock:

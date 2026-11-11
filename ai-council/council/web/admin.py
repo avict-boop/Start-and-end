@@ -313,7 +313,9 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         cands = A.candidates(cfg, models)
         hist_all = await asyncio.to_thread(model_history)
         from ..model_notes import history_for
-        hist = {c["id"]: h for c in cands if (h := history_for(hist_all, c["id"]))}
+        lim = cfg.advisor
+        # история — довод советника, только если заседаний с моделью достаточно (иначе это шум)
+        hist = {c["id"]: h for c in cands if (h := history_for(hist_all, c["id"])) and h.get("sessions", 0) >= lim.history_min_sessions}
         rdir = runs_dir(cfg)
         key = os.environ.get("OPENROUTER_API_KEY")
         cost, info = 0.0, {"dossiers_built": 0, "dossiers_cached": 0, "source": "rules"}
@@ -366,7 +368,9 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
                                      cands=cands, history=hist, dossiers=dossiers, language=cfg.language,
                                      research_words=cfg.research.max_words, search_model=cfg.fact_check.model,
                                      research_now={k: v for k, v in cfg.research.model_dump().items()
-                                                   if k in RESEARCH_TUNABLE})
+                                                   if k in RESEARCH_TUNABLE},
+                                     question_chars=lim.question_chars, max_claims_cap=lim.max_arbitration_claims,
+                                     max_words_cap=lim.max_words_cap, history_min=lim.history_min_sessions)
             model = cfg.advisor.model or next((m.model for m in cfg.members if m.name == cfg.chair), cfg.members[0].model)
             messages = [{"role": "user", "content": prompt}]
             adv = None

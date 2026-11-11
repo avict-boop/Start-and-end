@@ -37,8 +37,8 @@ log = logging.getLogger("council.telegram")
 from ..diagnostics import bundle, save_events, save_failed, setup_logging, stamp  # noqa: E402
 
 STAGES = [("framing", "Постановка"), ("proposal", "Предложения"), ("critique", "Критика"),
-          ("arbitration", "Арбитраж доказательств"), ("revision", "Доработка"), ("vote", "Голосование"),
-          ("factcheck", "Факты"), ("verdict", "Вердикт")]
+          ("arbitration", "Арбитраж доказательств"), ("revision", "Доработка"),
+          ("recheck", "Проверка новых утверждений"), ("vote", "Голосование"), ("factcheck", "Факты"), ("verdict", "Вердикт")]
 MODE_NAME = {"debate": "Дебаты", "quick": "Быстро", "evaluate": "Оценка вариантов", "research": "Исследование"}
 MODE_FULL = {"debate": "Подробное обсуждение", "quick": "Быстрый ответ", "evaluate": "Выбор из ваших вариантов",
              "research": "Исследование: подвопросы, проверка фактов поиском, «известно / спорно / неизвестно»"}
@@ -207,9 +207,9 @@ class Progress:
 
     def skipped(self) -> set[str]:
         skip = {"quick": {"critique", "revision"}, "evaluate": {"proposal", "revision"}}.get(self.mode, set())
-        if self.mode == "research":
-            return skip | {"factcheck"}  # в исследовании вместо проверки лидеров — арбитраж доказательств
-        skip = skip | {"arbitration"}
+        if self.mode == "research":  # вместо проверки лидеров — арбитраж; проверка новых — если была
+            return skip | {"factcheck"} | (set() if "recheck" in self.done_stages or self.stage == "recheck" else {"recheck"})
+        skip = skip | {"arbitration", "recheck"}
         return skip if self.fact_check else skip | {"factcheck"}
 
     def render(self, *, final: str | None = None) -> str:
