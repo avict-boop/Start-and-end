@@ -875,4 +875,9 @@ a.brand:hover .brand-name { color: var(--accent); }
 .dc-grid h4 { margin: .5rem 0 .2rem; font-size: .85rem; }
 .dc-grid ul { margin: 0; padding-left: 1.1rem; font-size: .92rem; }
 
-.solo-answer { max-height: 32rem; overflow: auto; padding: .7rem .9rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
+.solo-answer { padding: .7rem .9rem; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); overflow-wrap: anywhere; }
+.solo-answer .table-wrap, .solo-answer table { max-width: 100%; }
+.solo-src { margin: .5rem 0; font-size: .875rem; }
+.solo-src ol { margin: .4rem 0 0 1.2rem; padding: 0; }
+.solo-src a { overflow-wrap: anywhere; }
+.solo-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .3rem 0 .6rem; }

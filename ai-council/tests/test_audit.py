@@ -180,3 +180,24 @@ def test_pilot_replay_and_solo_in_demo(tmp_path):
     assert solo["mock"] and "одной модели" in solo["answer"]
     pilot.save(tmp_path, "s1", "solo", solo)
     assert pilot.load(tmp_path, "s1")["solo"]["answer"] == solo["answer"]
+
+
+def test_solo_answer_is_continued_when_cut_by_the_length_limit():
+    """Ответ одной модели, упёршийся в лимит, дописывается продолжениями (поиск — только в первой части)."""
+    from council import pilot
+    from council.client import Completion
+
+    class Cut:
+        def __init__(self):
+            self.calls = []
+
+        async def complete(self, model, messages, **kw):
+            self.calls.append(kw.get("web_search"))
+            n = len(self.calls)
+            return Completion(text=f"часть {n} ", prompt_tokens=10, completion_tokens=10, cost=0.01, model=model,
+                              finish_reason="length" if n < 3 else "stop", citations=[f"https://e.example/{n}"])
+
+    c = Cut()
+    res = run(pilot.solo_answer(make_cfg(), c, {"question": "Вопрос?"}))
+    assert res["answer"] == "часть 1 часть 2 часть 3" and res["parts"] == 3 and not res["truncated"]
+    assert c.calls == [True, False, False] and res["cost"] == 0.03 and len(res["citations"]) == 3

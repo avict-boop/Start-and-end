@@ -2202,8 +2202,15 @@ function renderPilot(s, p) {
     <h4>Ответ одной модели с поиском</h4>
     <p class="muted small">Контрольная группа: тот же вопрос — одной модели (${esc(p.solo_model || "")}) с поиском. Если её ответ не хуже решения совета,
       совет не окупается. Сравните и поставьте оценку обоим (решению совета — звёздами выше).</p>
-    ${solo ? `<div class="solo-answer md">${md(solo.answer)}</div>
-      <p class="muted small">${esc(solo.model)} · ${money(solo.cost)}${solo.mock ? " · демо" : ""}</p>
+    ${solo ? `${solo.truncated ? `<div class="alert warn small">Ответ упёрся в предел длины даже после продолжений и может быть оборван в конце.
+        «Спросить заново» запросит его ещё раз.</div>` : ""}
+      <div class="solo-answer md" id="soloAnswer">${md(solo.answer)}</div>
+      ${(solo.citations || []).length ? `<details class="solo-src"><summary>Источники поиска (${solo.citations.length})</summary><ol>
+        ${solo.citations.map((u) => `<li><a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a></li>`).join("")}</ol></details>` : ""}
+      <p class="muted small">${esc(solo.model)} · ${money(solo.cost)} · ${(solo.answer || "").split(/\s+/).filter(Boolean).length} слов${solo.parts > 1 ? ` · дописан в ${solo.parts} частях` : ""}${solo.mock ? " · демо" : ""}</p>
+      <div class="solo-actions"><button type="button" class="btn small" id="soloCopy">Скопировать</button>
+        <button type="button" class="btn small" id="soloSave">Скачать .md</button>
+        <button type="button" class="btn small" id="soloAgain">Спросить заново</button></div>
       <div class="rate-row"><span class="muted small">Оценка ответа одной модели:</span><span class="stars" id="soloStars">${stars(p.solo_rating)}</span></div>`
       : `<button type="button" class="btn" id="soloBtn">Получить ответ одной модели</button> <span class="muted small">обычно $0,2–0,5</span>`}
     ${s.mode === "research" ? `<h4>Переиграть проверку утверждений</h4>
@@ -2216,11 +2223,28 @@ function renderPilot(s, p) {
         ${row("Живых ссылок", rep.before.links_ok, rep.after.links_ok)}</tbody></table></div>
         <p class="muted small">Стоило ${money(rep.cost)} · настройки: ${esc(Object.entries(rep.settings || {}).map(([k, v]) => `${k}=${v}`).join(", "))}</p>` : ""}
       <button type="button" class="btn" id="replayBtn">${rep ? "Переиграть ещё раз" : "Переиграть проверку"}</button> <span class="muted small">обычно $0,2–0,8</span>` : ""}`;
-  const sb = document.getElementById("soloBtn");
-  if (sb) sb.addEventListener("click", async () => {
-    sb.disabled = true; sb.textContent = "Модель отвечает — до пары минут…";
-    try { await api(`/api/sessions/${encodeURIComponent(s.id)}/solo`, { method: "POST" }); loadPilot(s); }
-    catch (e) { toast(e.message); sb.disabled = false; sb.textContent = "Получить ответ одной модели"; }
+  for (const id of ["soloBtn", "soloAgain"]) {
+    const sb = document.getElementById(id);
+    if (!sb) continue;
+    const label = sb.textContent;
+    sb.addEventListener("click", async () => {
+      if (id === "soloAgain" && !confirm("Запросить ответ одной модели заново? Это снова оплачивается (обычно $0,2–0,5), прежний ответ заменится.")) return;
+      sb.disabled = true; sb.textContent = "Модель отвечает — до нескольких минут…";
+      try { await api(`/api/sessions/${encodeURIComponent(s.id)}/solo`, { method: "POST" }); loadPilot(s); }
+      catch (e) { toast(e.message); sb.disabled = false; sb.textContent = label; }
+    });
+  }
+  const sc = document.getElementById("soloCopy");
+  if (sc) sc.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(solo.answer); toast("Ответ скопирован"); } catch { toast("Не удалось скопировать"); }
+  });
+  const ss = document.getElementById("soloSave");
+  if (ss) ss.addEventListener("click", () => {
+    const src = (solo.citations || []).length ? "\n\n## Источники поиска\n\n" + solo.citations.map((u, i) => `${i + 1}. ${u}`).join("\n") : "";
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([solo.answer + src + "\n"], { type: "text/markdown;charset=utf-8" }));
+    a.download = `${s.id}-odna-model.md`; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
   });
   const rb = document.getElementById("replayBtn");
   if (rb) rb.addEventListener("click", async () => {
