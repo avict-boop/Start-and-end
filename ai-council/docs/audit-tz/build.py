@@ -42,7 +42,8 @@ def main() -> None:
     logic = (ROOT / "docs/logic.md").read_text(encoding="utf-8")
     secs = sections(logic)
     first = [s for s in secs if re.match(r"## [1-7]\.|## 4а\.", s[0])]
-    rest = [s for s in secs if s not in first and not s[0].startswith("## Содержание")]
+    # голосовой ввод — не по теме аудита; «известные ограничения» устарели — актуальные в 04
+    rest = [s for s in secs if s not in first and not s[0].startswith(("## Содержание", "## 10.", "## 16."))]
     head = "Выдержка из docs/logic.md — как устроен совет. Часть 1: принципы, архитектура, роли, этапы, режимы, подсчёт голосов, надёжность.\n\n"
     (OUT / "01-logika-chast-1.md").write_text("# Логика совета, часть 1\n\n" + head + "".join(h + b for h, b in first),
                                               encoding="utf-8")

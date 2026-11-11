@@ -47,8 +47,8 @@ def test_requirements_flow_through_all_stages():
 def test_framing_requirements_parsing():
     f = Framing.model_validate({"refined_question": "Q", "criteria": ["a"], "must_have": "таблица"})
     assert f.requirements == ["таблица"]
-    f = Framing.model_validate({"refined_question": "Q", "criteria": ["a"], "requirements": [f"r{i}" for i in range(15)]})
-    assert len(f.requirements) == 10
+    f = Framing.model_validate({"refined_question": "Q", "criteria": ["a"], "requirements": [f"r{i}" for i in range(50)]})
+    assert len(f.requirements) == 40  # предел схемы; рабочий предел — max_requirements
     assert Framing.model_validate({"refined_question": "Q", "criteria": ["a"]}).requirements == []
 
 

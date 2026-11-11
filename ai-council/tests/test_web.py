@@ -218,7 +218,7 @@ def test_balance_endpoint(client, monkeypatch):
         return 12.5
 
     monkeypatch.setattr("council.web.app.OpenRouterClient.balance", fake_balance)
-    assert client.get("/api/balance").json() == {"has_key": True, "balance": 12.5}
+    assert client.get("/api/balance").json() == {"has_key": True, "balance": 12.5, "key_limit": None}
     client.get("/api/balance")
     assert len(calls) == 1  # кэш на минуту
     client.get("/api/balance?force=1")
@@ -285,13 +285,13 @@ def test_redo_archived_session_with_failures(client, monkeypatch):
 def test_research_length_is_set_per_question_and_compact_ignored(client):
     r = client.post("/api/sessions", json={"question": "Рынок кофеен у вузов?", "mock": True, "mode": "research",
                                            "members": ["a", "b", "c"], "compact": True,
-                                           "research_words": 2200, "research_shorten": True})
+                                           "research_words": 2200, "research_shorten": False})
     sid = r.json()["id"]
     assert read_events(client, sid)[-1]["type"] == "done"
     req = client.post(f"/api/sessions/{sid}/repeat").json()["request"]
-    assert req["research_words"] == 2200 and req["research_shorten"] is True and req["compact_proposals"] is False
+    assert req["research_words"] == 2200 and req["research_shorten"] is False and req["compact_proposals"] is False
     cfg = client.get("/api/config").json()["research"]
-    assert cfg["words"] == 1400 and cfg["shorten"] is False  # общие настройки не изменились
+    assert cfg["words"] == 1400 and cfg["shorten"] is True  # общие настройки не изменились
 
 
 def test_rating_and_pilot_table(client):
