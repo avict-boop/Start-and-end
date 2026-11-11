@@ -827,3 +827,11 @@ a.brand:hover .brand-name { color: var(--accent); }
 
 .label-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .3rem .8rem; margin-bottom: .35rem; }
 .label-row .label { margin: 0; }
+
+/* выбор модели участника на этот вопрос */
+.member-cell { position: relative; min-width: 0; }
+.member-cell .member { height: 100%; padding-right: 1.75rem; }
+.m-pick { position: absolute; top: .3rem; right: .3rem; width: 26px; height: 26px; min-height: 0; padding: 0; line-height: 1;
+  border-radius: 7px; border: 1px solid transparent; background: transparent; color: var(--muted); font-size: .8rem; cursor: pointer; }
+.m-pick::after { content: ""; position: absolute; inset: -9px; }  /* палец попадает, хотя значок маленький */
+.m-pick:hover { color: var(--accent); border-color: var(--accent); }

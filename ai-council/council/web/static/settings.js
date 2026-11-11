@@ -352,23 +352,22 @@ async function uploadLogo(e) {
 }
 
 // выбор любой доступной модели того же разработчика: линейки, новые сверху, цены, контекст, рассуждения
-async function pickFromFamily(i) {
-  const m = SET.data.members[i];
+// выбор любой модели того же разработчика (по линейкам, с описаниями) — для настроек и для отдельного вопроса
+async function chooseFamilyModel(current, title, note = "") {
   let r;
-  try { r = await api(`/api/models/family?model=${encodeURIComponent(m.model)}`); } catch (e) { toast(e.message); return; }
-  if (!r.available) { toast("Каталог OpenRouter сейчас недоступен"); return; }
+  try { r = await api(`/api/models/family?model=${encodeURIComponent(current)}`); } catch (e) { toast(e.message); return null; }
+  if (!r.available) { toast("Каталог OpenRouter сейчас недоступен"); return null; }
   const k = (n) => (n == null ? "—" : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
-  const row = (x) => `<li class="fam-item${x.id === m.model ? " cur" : ""}" data-text="${esc((x.id + " " + x.name).toLowerCase())}">
-      <div class="fam-main"><code>${esc(x.id)}</code>${x.id === m.model ? ' <span class="badge plain">сейчас</span>' : ""}
+  const row = (x) => `<li class="fam-item${x.id === current ? " cur" : ""}" data-text="${esc((x.id + " " + x.name).toLowerCase())}">
+      <div class="fam-main"><code>${esc(x.id)}</code>${x.id === current ? ' <span class="badge plain">сейчас</span>' : ""}
         <div class="muted small">${esc(x.date)} · $${x.prompt} / $${x.completion} за 1M · контекст ${k(x.context)}${x.max_out ? ` · ответ до ${k(x.max_out)}` : ""}</div>
         <div class="m-tags">${tagChips(x.tags)}</div>${x.desc ? `<div class="small fam-desc" data-desc="${esc(x.id)}">${esc(x.desc_tr || x.desc)}</div>` : ""}</div>
-      ${x.id === m.model ? "" : `<button type="button" class="secondary small-btn" data-pick="${esc(x.id)}">Выбрать</button>`}</li>`;
-  const html = `<p class="muted small">Все модели <b>${esc(r.provider)}</b>, доступные сейчас на OpenRouter, по линейкам, новые сверху.
-      🧠 — умеет рассуждать (глубину задайте в столбце «Глубина рассуждений»).</p>
+      ${x.id === current ? "" : `<button type="button" class="secondary small-btn" data-pick="${esc(x.id)}">Выбрать</button>`}</li>`;
+  const html = `<p class="muted small">Все модели <b>${esc(r.provider)}</b>, доступные сейчас на OpenRouter, по линейкам, новые сверху.${note ? " " + note : ""}</p>
     <div class="fam-search"><input type="search" id="famSearch" placeholder="Поиск: pro, flash, r1…" aria-label="Поиск модели"></div>
     <div class="fam-list">${r.groups.map((g) => `<h4>${esc(g.family)}</h4><ul>${g.items.map(row).join("")}</ul>`).join("")}</div>`;
   let chosen = null;
-  const done = ask({ title: `Модель для «${m.name}»`, html, ok: "Закрыть", cancel: null, wide: true });
+  const done = ask({ title, html, ok: "Закрыть", cancel: null, wide: true });
   const untranslated = r.groups.flatMap((g) => g.items).filter((x) => x.desc && !x.desc_tr).map((x) => x.id);
   if (untranslated.length) {
     api("/api/models/translate", { method: "POST", body: { ids: untranslated } }).then((t) => {
@@ -384,8 +383,15 @@ async function pickFromFamily(i) {
     for (const li of body.querySelectorAll(".fam-item")) li.hidden = !!q && !li.dataset.text.includes(q);
     for (const h of body.querySelectorAll(".fam-list h4")) h.hidden = ![...h.nextElementSibling.children].some((li) => !li.hidden);
   });
-  for (const b of body.querySelectorAll("[data-pick]")) b.addEventListener("click", () => { chosen = b.dataset.pick; $("dOk").click(); });
+  for (const btn of body.querySelectorAll("[data-pick]")) btn.addEventListener("click", () => { chosen = btn.dataset.pick; $("dOk").click(); });
   await done;
+  return chosen;
+}
+
+async function pickFromFamily(i) {
+  const m = SET.data.members[i];
+  const chosen = await chooseFamilyModel(m.model, `Модель для «${m.name}»`,
+    "🧠 — умеет рассуждать (глубину задайте в столбце «Глубина рассуждений»).");
   if (!chosen) return;
   m.model = chosen;
   renderSettings(); setDirty();

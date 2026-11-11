@@ -262,8 +262,9 @@ function renderMembers(checked) {
     const model = lineup.models[m.name] || m.model;
     const changed = !!lineup.models[m.name] && lineup.models[m.name] !== m.model;
     const mark = m.extra ? "новый участник — только для этого вопроса" : changed ? `подобрано для этого вопроса (в настройках: ${m.model})` : "";
-    return `<label class="member${mark ? " picked" : ""}" title="${esc(model)}${mark ? ` — ${esc(mark)}` : ""}"><input type="checkbox" value="${esc(m.name)}" ${sel.has(m.name) ? "checked" : ""}>
-      <span><b>${esc(m.name)}</b><code>${mark ? "✦ " : ""}${esc(model.split("/").pop())}</code></span></label>`;
+    return `<div class="member-cell"><label class="member${mark ? " picked" : ""}" title="${esc(model)}${mark ? ` — ${esc(mark)}` : ""}"><input type="checkbox" value="${esc(m.name)}" ${sel.has(m.name) ? "checked" : ""}>
+      <span><b>${esc(m.name)}</b><code>${mark ? "✦ " : ""}${esc(model.split("/").pop())}</code></span></label>
+      <button type="button" class="m-pick" data-pick-model="${esc(m.name)}" title="Выбрать модель из линейки ${esc(model.split("/")[0])} — для этого вопроса" aria-label="Другая модель для ${esc(m.name)}">▾</button></div>`;
   }).join("");
   renderWebMembers();
 }
@@ -277,6 +278,26 @@ function updateResetBtn() {
     || selectedMembers().sort().join() !== def || [...lineup.web].sort().join() !== defWeb
     || ($("chair").value && $("chair").value !== config.chair) || ($("devil").value || "") !== (config.devil_advocate || "");
   $("lineupReset").hidden = !changed;
+}
+
+// другая модель того же разработчика для участника — только на этот вопрос (с описаниями моделей)
+async function pickMemberModel(name) {
+  const m = memberList().find((x) => x.name === name);
+  if (!m) return;
+  const cur = lineup.models[name] || m.model;
+  const chosen = await chooseFamilyModel(cur, `Модель для «${name}» — на этот вопрос`,
+    "Выбор действует только для этого вопроса; постоянно — «Настройки → Модели».");
+  if (!chosen) return;
+  const sel = new Set(selectedMembers());
+  sel.add(name);
+  const extra = lineup.extra.find((x) => x.name === name);
+  if (extra) extra.model = chosen;
+  else if (chosen === m.model) delete lineup.models[name];
+  else lineup.models[name] = chosen;
+  renderMembers(sel);
+  refreshRoleSelects();
+  formChanged();
+  toast(`${name}: ${chosen.split("/").pop()} — для этого вопроса`);
 }
 
 // сбросить только модели и роли (режим, вопрос и остальные параметры не трогаем)
@@ -677,6 +698,10 @@ async function initForm() {
       renderWebMembers(); formChanged();
     });
     $("lineupReset").addEventListener("click", () => { resetModels(); toast("Модели и роли — как в настройках"); });
+    $("members").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-pick-model]");
+      if (b) pickMemberModel(b.dataset.pickModel);
+    });
     for (const id of ["chair", "devil"]) $(id).addEventListener("change", updateResetBtn);
     $("adviseBtn").addEventListener("click", () => runAdvice(false));
   }
