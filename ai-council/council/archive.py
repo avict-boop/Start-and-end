@@ -30,7 +30,8 @@ MARKER = ".reports-version"  # номер версии; время измене�
 LOCK = ".reports-lock"  # фоновую пересборку ведёт один процесс (сайт и бот делят папку архива)
 URGENT = ".reports-urgent-"  # пока такие файлы есть, фоновая пересборка ждёт: человек ждёт свой отчёт
 URGENT_STALE_S = 600
-WORKER_TIMEOUT_S = 900  # сборка всех отчётов одного очень длинного заседания на слабом сервере  # файл старше — остался от упавшего процесса, не ждём его
+WORKER_TIMEOUT_S = 900
+WORKER_LOCK = ".reports-worker.lock"  # на всём сервере верстается один отчёт за раз: вёрстка PDF — сотни МБ памяти  # сборка всех отчётов одного очень длинного заседания на слабом сервере  # файл старше — остался от упавшего процесса, не ждём его
 ID_RE = re.compile(r"^[\w\-]{1,160}$", re.U)
 MIME = {
     "pdf": "application/pdf",
@@ -216,9 +217,10 @@ class Archive:
         pkg_root = str(Path(__file__).resolve().parent.parent)
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [pkg_root, os.environ.get("PYTHONPATH")]))}
         try:
-            p = subprocess.run([sys.executable, "-m", "council.reports_worker", str(self.dir), stem, *formats],
-                               capture_output=True, text=True, check=False, timeout=WORKER_TIMEOUT_S, preexec_fn=nice, env=env,
-                               cwd=pkg_root)
+            with _WaitLock(self.dir / WORKER_LOCK):  # сайт, бот, пересборка архива — по очереди, не одновременно
+                p = subprocess.run([sys.executable, "-m", "council.reports_worker", str(self.dir), stem, *formats],
+                                   capture_output=True, text=True, check=False, timeout=WORKER_TIMEOUT_S, preexec_fn=nice,
+                                   env=env, cwd=pkg_root)
             if p.returncode == 0:
                 return json.loads(p.stdout.strip().splitlines()[-1])
             err = (p.stderr.strip().splitlines() or [f"код {p.returncode}"])[-1]
@@ -276,9 +278,11 @@ class Archive:
                 res: dict[str, str] = {}
                 try:
                     self._wait_urgent()
-                    if self.isolate:  # отдельный процесс с низким приоритетом: открытый человеком отчёт идёт первым
-                        need = [f for f in need if not self._fresh(stem, f)]
-                        res = self._build(stem, need, background=True) if need else {}
+                    if self.isolate:  # отдельный процесс с низким приоритетом, по одному формату: открытый человеком
+                        for f in need:  # отчёт ждёт не дольше одного формата
+                            self._wait_urgent()
+                            if not self._fresh(stem, f):
+                                res.update(self._build(stem, [f], background=True))
                     else:
                         for f in need:
                             self._wait_urgent()
@@ -401,3 +405,24 @@ class _ProcessLock:
     def __exit__(self, *exc: object) -> None:
         if self.fh:
             self.fh.close()  # закрытие файла снимает блокировку
+
+
+class _WaitLock:
+    """Блокировка файла между процессами с ожиданием (где её нет — без блокировки)."""
+
+    def __init__(self, path: Path) -> None:
+        self.path, self.fh = path, None
+
+    def __enter__(self) -> None:
+        try:
+            import fcntl
+            self.fh = open(self.path, "a")  # закрывается в __exit__
+            fcntl.flock(self.fh, fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            if self.fh:
+                self.fh.close()
+            self.fh = None
+
+    def __exit__(self, *exc: object) -> None:
+        if self.fh:
+            self.fh.close()

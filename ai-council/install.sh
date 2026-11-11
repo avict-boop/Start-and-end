@@ -182,6 +182,29 @@ intro() {
   pause "Нажмите Enter, чтобы начать…"
 }
 
+ensure_swap() {
+  # На маленьком сервере (меньше 2 ГБ памяти) без подкачки вёрстка длинных отчётов и сборка образа могут
+  # исчерпать память — тогда сервер «замирает» целиком. Файл подкачки на 2 ГБ превращает это в замедление.
+  local mem swap free_mb
+  mem="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+  swap="$(awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+  ((mem > 0 && mem < 2000 && swap < 500)) || return 0
+  [[ -e /swapfile ]] && return 0
+  free_mb="$(df -Pm / | awk 'NR==2 {print $4}')"
+  ((free_mb > 4000)) || { warn "Памяти ${mem} МБ и нет подкачки, но на диске мало места (${free_mb} МБ) — подкачку не создаю"; return 0; }
+  info "Памяти ${mem} МБ и нет подкачки — включаю файл подкачки 2 ГБ (/swapfile)"
+  if { fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none; } \
+      && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile; then
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    sysctl -q vm.swappiness=10 2>/dev/null || true
+    info "Подкачка включена"
+  else
+    rm -f /swapfile
+    warn "Не удалось включить подкачку (на некоторых VPS это запрещено) — продолжаю без неё"
+  fi
+  return 0
+}
+
 check_system() {
   step "Проверка сервера"
   [[ $EUID -eq 0 ]] || fail "Нужны права root. Запустите так: curl -fsSL $INSTALL_URL | sudo bash"
@@ -191,6 +214,7 @@ check_system() {
   fi
   local mem; mem="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
   ((mem == 0 || mem >= 700)) || warn "Памяти ${mem} МБ — может не хватить для сборки (лучше от 1 ГБ)"
+  ensure_swap
 }
 
 install_deps() {
@@ -810,7 +834,7 @@ summary() {
       info "${C_WARN}Сохраните пароль в надёжном месте.${C_END} Посмотреть ещё раз: ai-council access" ;;
     tunnel)
       info "${C_B}Веб-интерфейс:${C_END} на своём компьютере выполните  ssh -L 8000:127.0.0.1:8000 root@$(public_ip)"
-      info "               и откройте http://localhost:8000" ;;
+      info "              и откройте http://localhost:8000" ;;
   esac
   [[ "${HAS_KEY:-0}" == 1 ]] || info "${C_WARN}Ключа OpenRouter нет — работает только демо-режим. Добавить: ai-council reconfigure${C_END}"
   info ""

@@ -60,6 +60,29 @@ fix_permissions() {
   chmod 755 "$CONTROL"; chmod 644 "$APP_DIR/config.yaml"
 }
 
+ensure_swap() {
+  # На маленьком сервере (меньше 2 ГБ памяти) без подкачки вёрстка длинных отчётов и сборка образа могут
+  # исчерпать память — тогда сервер «замирает» целиком. Файл подкачки на 2 ГБ превращает это в замедление.
+  local mem swap free_mb
+  mem="$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+  swap="$(awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+  ((mem > 0 && mem < 2000 && swap < 500)) || return 0
+  [[ -e /swapfile ]] && return 0
+  free_mb="$(df -Pm / | awk 'NR==2 {print $4}')"
+  ((free_mb > 4000)) || { echo "!! Памяти ${mem} МБ и нет подкачки, но на диске мало места (${free_mb} МБ) — подкачку не создаю"; return 0; }
+  echo "== Памяти ${mem} МБ и нет подкачки — включаю файл подкачки 2 ГБ (/swapfile)"
+  if { fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none; } \
+      && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile; then
+    grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    sysctl -q vm.swappiness=10 2>/dev/null || true
+    echo "== Подкачка включена"
+  else
+    rm -f /swapfile
+    echo "!! Не удалось включить подкачку (на некоторых VPS это запрещено) — продолжаю без неё"
+  fi
+  return 0
+}
+
 do_update() {
   local branch cfg_backup
   branch="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"
@@ -76,6 +99,7 @@ do_update() {
   cp "$cfg_backup" "$APP_DIR/config.yaml"; rm -f "$cfg_backup"
   echo "== Код обновлён до $(git -C "$REPO_DIR" log -1 --format='%h %s')"
   fix_permissions
+  ensure_swap
   echo "== Сборка образа (может занять несколько минут)"
   compose build -q || { echo "!! Ошибка сборки образа"; return 1; }
   echo "== Перезапуск"
