@@ -854,3 +854,15 @@ a.brand:hover .brand-name { color: var(--accent); }
 .adv-rs { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
 .adv-rs li { padding: .45rem .7rem; border-radius: 10px; background: var(--surface-2); }
 .adv-rs li > span:first-child { margin-right: .4rem; }
+
+/* что взять из рекомендации */
+.adv-take { display: inline-flex; align-items: center; gap: .35rem; cursor: pointer; }
+.adv-take input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); flex: none; }
+.adv-take.small { font-size: .8rem; color: var(--accent); font-weight: 600; }
+.adv-drop { display: flex; flex-wrap: wrap; margin-top: .6rem; padding: .5rem .7rem; border-radius: 10px; background: var(--surface-2); }
+.adv-pick:has(input[data-pi]:not(:checked)) .adv-main { opacity: .5; }
+.adv-rs li:has(input:not(:checked)) { opacity: .55; }
+.rs-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: .55rem; align-items: start; cursor: pointer; }
+.rs-row input { width: 18px; height: 18px; margin: .15rem 0 0; accent-color: var(--accent); }
+.rs-body { min-width: 0; line-height: 1.4; }
+.rs-why { display: block; color: var(--muted); font-size: .84rem; margin-top: .15rem; }

@@ -2442,7 +2442,7 @@ function renderAdvice(r) {
   const cost = [src, r.cost ? `$${r.cost.toFixed(3)}` : "", r.dossiers_built ? `обзоров собрано ${r.dossiers_built}` : "",
     r.dossiers_cached ? `из памяти ${r.dossiers_cached}` : ""].filter(Boolean).join(" · ");
   const newMode = a.mode && a.mode !== mode;
-  const picks = (a.picks || []).map((p) => {
+  const picks = (a.picks || []).map((p, i) => {
     const [cls, role] = ROLE_BADGE[p.role] || ROLE_BADGE.member;
     const x = f[p.model] || {}, d = ds[p.model];
     const [prov, ...rest] = p.model.split("/");
@@ -2454,7 +2454,8 @@ function renderAdvice(r) {
       ${issues.length ? `<p><b>Слабые стороны.</b> ${issues.map(esc).join("; ")}</p>` : ""}
       ${(d.sources || []).length ? `<p class="small">${d.sources.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u.replace(/^https?:\/\/(www\.)?/, "").split("/")[0])}</a>`).join(" · ")}</p>` : '<p class="muted small">ссылок от поиска нет — проверьте сами</p>'}</details>` : "";
     return `<li class="adv-pick r-${esc(p.role)}">
-      <div class="adv-role"><span class="role-tag ${cls}">${role}</span>${p.web_search ? '<span class="role-tag web" title="ищет в интернете при написании варианта">🌐 поиск</span>' : ""}</div>
+      <div class="adv-role"><label class="adv-take"><input type="checkbox" data-pi="${i}" checked> <span class="role-tag ${cls}">${role}</span></label>
+        ${p.web_search ? `<label class="adv-take small"><input type="checkbox" data-pw="${i}" checked> 🌐 с поиском</label>` : ""}</div>
       <div class="adv-main">
         <div class="adv-name"><b>${esc(rest.join("/") || p.model)}</b> <span class="muted small">${esc(prov)}</span>
           <button type="button" class="link small adv-card" data-card="${esc(p.model)}">О модели</button></div>
@@ -2462,6 +2463,7 @@ function renderAdvice(r) {
         <p class="adv-why">${esc(p.why)} ${basis(p.basis)}</p>${rev}
       </div></li>`;
   }).join("");
+  const drops = selectedMembers().filter((n) => !(r.plan.members || []).includes(n));
   const avoid = (a.avoid || []).length ? `<h4>Хуже подходят для этого вопроса</h4><ul class="adv-avoid">${a.avoid.map((x) =>
     `<li><b>${esc(x.model.split("/").pop())}</b> — ${esc(x.why)} ${basis(x.basis)}</li>`).join("")}</ul>` : "";
   $("adviceBox").innerHTML = `
@@ -2469,21 +2471,31 @@ function renderAdvice(r) {
     <dl class="adv-sum">
       <dt>Задача</dt><dd><b>${esc(t.kind || "—")}</b>${t.size ? ` · ${esc(SIZE_TEXT[t.size] || t.size)}` : ""}${(t.needs || []).map((n) => ` <span class="need">${esc(n)}</span>`).join("")}
         ${t.summary ? `<div class="muted small">${esc(t.summary)}</div>` : ""}</dd>
-      <dt>Режим</dt><dd><b>${esc(MODE_NAME[a.mode || mode] || mode)}</b>${newMode ? ` <span class="muted small">(сейчас выбран «${esc(MODE_NAME[mode] || mode)}»)</span>` : ""}
+      <dt>Режим</dt><dd>${newMode ? `<label class="adv-take"><input type="checkbox" id="advMode" checked> <b>${esc(MODE_NAME[a.mode] || a.mode)}</b></label> <span class="muted small">(сейчас выбран «${esc(MODE_NAME[mode] || mode)}»)</span>`
+        : `<b>${esc(MODE_NAME[a.mode || mode] || mode)}</b>`}
         ${a.mode_why ? `<div class="muted small">${esc(a.mode_why)}</div>` : ""}</dd>
     </dl>
     ${Object.keys(a.research_settings || {}).length ? `<h4>Настройки исследования для этого вопроса</h4>
-      <ul class="adv-rs">${Object.entries(a.research_settings).map(([k, v]) => `<li><span>${esc(RS_NAME[k] || k)}</span>
-        <b>${esc(rsVal(v))}</b> <span class="muted small">(сейчас ${esc(rsVal((config.research_all || {})[k]))})</span>
-        ${(a.research_why || {})[k] ? `<div class="muted small">${esc(a.research_why[k])}</div>` : ""}</li>`).join("")}</ul>` : ""}
+      <ul class="adv-rs">${Object.entries(a.research_settings).map(([k, v]) => `<li><label class="rs-row"><input type="checkbox" data-rs="${esc(k)}" checked>
+        <span class="rs-body"><span class="rs-name">${esc(RS_NAME[k] || k)}:</span> <b>${esc(rsVal(v))}</b>
+          <span class="muted small">(сейчас ${esc(rsVal((config.research_all || {})[k]))})</span>
+          ${(a.research_why || {})[k] ? `<span class="rs-why">${esc(a.research_why[k])}</span>` : ""}</span></label></li>`).join("")}</ul>` : ""}
     <h4>Состав</h4><ol class="adv-picks">${picks}</ol>
+    ${drops.length ? `<label class="adv-take adv-drop"><input type="checkbox" id="advDrop" checked> Убрать из текущего состава: <b>${drops.map(esc).join(", ")}</b>
+      <span class="muted small">— их нет в рекомендации</span></label>` : ""}
+    <p class="muted small">Снимите галочки с того, что брать не нужно: неотмеченное останется как сейчас.</p>
     ${avoid}
     ${(a.caveats || []).length ? `<ul class="adv-caveats">${a.caveats.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
-    <div class="adv-actions"><button type="button" class="btn primary" id="adviceApply">Применить к этому вопросу</button>
+    <div class="adv-actions"><button type="button" class="btn primary" id="adviceApply">Применить выбранное</button>
       <button type="button" class="btn" id="adviceClose">Закрыть</button>
       ${r.source === "advisor" ? '<button type="button" class="link small" id="adviceRefresh">Обновить обзоры моделей</button>' : ""}</div>
     <p class="muted small adv-foot">Настройки программы не меняются; постоянный состав — «Настройки → Модели».</p>`;
   $("adviceApply").addEventListener("click", () => applyAdvice(r));
+  // поиск у модели нельзя взять без самой модели
+  $("adviceBox").querySelectorAll("[data-pi]").forEach((cb) => cb.addEventListener("change", () => {
+    const w = $("adviceBox").querySelector(`[data-pw="${cb.dataset.pi}"]`);
+    if (w) { w.disabled = !cb.checked; if (!cb.checked) w.checked = false; }
+  }));
   $("adviceClose").addEventListener("click", () => { $("adviceBox").hidden = true; });
   const rf = document.getElementById("adviceRefresh");
   if (rf) rf.addEventListener("click", () => runAdvice(true));
@@ -2491,24 +2503,45 @@ function renderAdvice(r) {
 }
 
 function applyAdvice(r) {
-  const plan = r.plan, a = r.advice;
-  if (!plan.members.length) { toast("В рекомендации нет моделей"); return; }
+  const plan = r.plan, a = r.advice, box = $("adviceBox");
+  const on = (sel) => { const el = box.querySelector(sel); return !!(el && el.checked); };
+  const take = (a.picks || []).map((_, i) => on(`[data-pi="${i}"]`));
+  const modeOn = a.mode && a.mode !== mode ? on("#advMode") : false;
+  const rsOn = Object.keys(a.research_settings || {}).filter((k) => on(`[data-rs="${CSS.escape(k)}"]`));
+  if (!take.some(Boolean) && !modeOn && !rsOn.length && !on("#advDrop")) { toast("Ничего не отмечено"); return; }
   const base = Object.fromEntries(config.members.map((m) => [m.name, m.model]));
-  lineup = { models: Object.fromEntries(Object.entries(plan.models).filter(([n, m]) => base[n] !== m)),
-             extra: plan.extra_members, web: new Set(plan.web_search) };
-  if (a.mode && a.mode !== mode && !(mode === "evaluate")) setMode(a.mode);
-  renderMembers(new Set(plan.members));
+  const sel = new Set(selectedMembers());
+  const chairBefore = $("chair").value, devilBefore = $("devil").value;
+  if (on("#advDrop")) for (const n of [...sel]) if (!plan.members.includes(n)) sel.delete(n);
+  (a.picks || []).forEach((p, i) => {
+    if (!take[i]) return;
+    const slot = plan.members[i];
+    sel.add(slot);
+    const extra = (plan.extra_members || []).find((x) => x.name === slot);
+    if (extra && !lineup.extra.some((x) => x.name === slot)) lineup.extra.push({ ...extra });
+    if (plan.models[slot] && base[slot]) {
+      if (plan.models[slot] === base[slot]) delete lineup.models[slot]; else lineup.models[slot] = plan.models[slot];
+    }
+    if (p.web_search && on(`[data-pw="${i}"]`)) lineup.web.add(slot); else lineup.web.delete(slot);
+  });
+  if (modeOn && mode !== "evaluate") setMode(a.mode);
+  renderMembers(sel);
   refreshRoleSelects();
-  if (plan.chair) $("chair").value = plan.chair;
-  $("devil").value = plan.devil_advocate || "";
-  const rs = (mode === "research" && a.research_settings) || {};
-  if (rs.max_words) { $("researchWords").value = rs.max_words; updateShortenHint(); }
-  if (rs.shorten_long !== undefined) $("researchShorten").checked = !!rs.shorten_long;
-  researchTuned = { ...rs };
-  renderResearchTuned();
+  const ci = (a.picks || []).findIndex((p) => p.role === "chair");
+  const di = (a.picks || []).findIndex((p) => p.role === "devil");
+  $("chair").value = ci >= 0 && take[ci] ? plan.chair : sel.has(chairBefore) ? chairBefore : $("chair").value;
+  $("devil").value = di >= 0 && take[di] ? plan.devil_advocate : sel.has(devilBefore) ? devilBefore : "";
+  if (mode === "research") {
+    const rs = Object.fromEntries(rsOn.map((k) => [k, a.research_settings[k]]));
+    if (rs.max_words) { $("researchWords").value = rs.max_words; updateShortenHint(); }
+    if (rs.shorten_long !== undefined) $("researchShorten").checked = !!rs.shorten_long;
+    researchTuned = { ...researchTuned, ...rs };
+    renderResearchTuned();
+  }
   updateChairHint();
+  updateResetBtn();
   $("params").open = true;
   formChanged();
-  $("adviceBox").hidden = true;
-  toast("Состав применён — только для этого вопроса");
+  box.hidden = true;
+  toast("Выбранное применено — только для этого вопроса");
 }
