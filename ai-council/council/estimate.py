@@ -14,9 +14,9 @@ from .config import CouncilConfig, Mode
 # реально пишут на каждом этапе, включая продолжения длинных ответов, повторы и скрытые рассуждения);
 # если истории нет — значения по умолчанию ниже.
 INSTR = {"framing": 500, "proposal": 800, "critique": 1100, "revision": 1400, "vote": 700, "verdict": 1400,
-         "factcheck": 700, "describe": 500}
+         "factcheck": 700, "describe": 500, "arbitration": 900}
 DEFAULT_OUT = {"framing": 300, "proposal": 4000, "critique": 350, "revision": 4500, "vote": 500,
-               "verdict": 5000, "factcheck": 900}   # critique — на ОДИН оцениваемый вариант
+               "verdict": 5000, "factcheck": 900, "arbitration": 3000}   # critique — на ОДИН оцениваемый вариант
 FEEDBACK_PER_REVIEW = 250   # отзыв одного рецензента на доработке
 NOTES_PER_PROPOSAL = 150    # сводка критики для председателя
 FACT_CHECKER = "факт-чек"  # как в session.FACT_CHECKER
@@ -109,7 +109,7 @@ def plan_calls(
     proposers = [m for m in members if not (judge and m == cfg.chair)]
     n = n_options or len(proposers)
     own = 0 if n_options else 1  # своего варианта участник не оценивает
-    critique_rounds = 0 if mode == "quick" else (1 if mode == "evaluate" else rounds)
+    critique_rounds = 0 if mode == "quick" else (1 if mode in ("evaluate", "research") else rounds)
     plan: dict[str, list[tuple[str, int]]] = {name: [] for name in members}
     if not has_criteria:
         plan[cfg.chair].append(("framing", 0))
@@ -119,11 +119,14 @@ def plan_calls(
             plan[name].append(("proposal", 0))
         for _ in range(critique_rounds):
             plan[name].append(("critique", n - mine))
-            if mode == "debate" and name in proposers:
+            if mode in ("debate", "research") and name in proposers:
                 plan[name].append(("revision", n - mine))
         plan[name].append(("vote", n - mine))
     plan[cfg.chair].append(("verdict", n))
-    if cfg.fact_check.enabled:
+    if mode == "research":  # вместо проверки лидеров — арбитраж доказательств по утверждениям всех вариантов
+        if cfg.research.arbitration:
+            plan[FACT_CHECKER] = [("arbitration", cfg.research.arbitration_claims)] * cfg.research.missions
+    elif cfg.fact_check.enabled:
         plan[FACT_CHECKER] = [("factcheck", 1)] * min(cfg.fact_check.top, n)
     return plan
 
@@ -161,7 +164,7 @@ def estimate(
     plan = plan_calls(cfg, mode, rounds, n_options, has_criteria)
     opt_len = int(options_chars / 3 / n_options) + 100 if n_options and options_chars else out["proposal"]
     first_len = opt_len if n_options else out["proposal"]           # вариант до доработки
-    final_len = out["revision"] if mode == "debate" else first_len  # вариант, который читают голосующие и председатель
+    final_len = out["revision"] if mode in ("debate", "research") else first_len  # вариант, который читают голосующие и председатель
     small_docs = 0 < doc_tokens * 3 <= VOTE_DOC_CHARS
 
     def call_tokens(stage: str, n: int, att: int, critique_round: int) -> tuple[int, int]:
@@ -210,10 +213,14 @@ def estimate(
     if FACT_CHECKER in plan:
         fc = cfg.fact_check
         me = MemberEstimate(FACT_CHECKER, fc.model)
-        for _stage, _ in plan[FACT_CHECKER]:
+        for stage, n in plan[FACT_CHECKER]:
             me.calls += 1
-            me.prompt_tokens += INSTR["factcheck"] + q + final_len
-            me.completion_tokens += min(out["factcheck"], fc.max_tokens)
+            if stage == "arbitration":  # утверждения всех вариантов, ответ с источниками
+                me.prompt_tokens += INSTR["arbitration"] + q + n * 80
+                me.completion_tokens += out.get("arbitration", 3000)
+            else:
+                me.prompt_tokens += INSTR["factcheck"] + q + final_len
+                me.completion_tokens += min(out["factcheck"], fc.max_tokens)
         price = pricing.get(fc.model)
         me.cost = (me.prompt_tokens * price.prompt + me.completion_tokens * price.completion + me.calls * price.request
                    if price else None)

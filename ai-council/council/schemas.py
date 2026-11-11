@@ -124,7 +124,8 @@ class Framing(BaseModel):
 TEXT_ALIASES = ("answer", "content", "text", "proposal", "response", "solution", "body", "details", "description",
                 "option", "result", "report")
 KNOWN_PROPOSAL = {"title", "summary", "reasoning", "pros", "risks", "confidence",
-                  "changes", "comparison", "borrowed", "position"}
+                  "changes", "comparison", "borrowed", "position", "not_accepted",
+                  "claims", "coverage", "unknowns", "what_would_change", "new_after_ledger"}  # + режим «Исследование»
 
 
 class Proposal(BaseModel):
@@ -229,6 +230,9 @@ class Review(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     weaknesses: list[str] = Field(default_factory=list)
     keep: list[str] = Field(default_factory=list)  # что стоит сохранить из варианта, даже если он не победит
+    # режим «Исследование»: спорные утверждения (id утверждения + причина) и пропущенные подвопросы
+    disputed_claims: list[dict[str, Any]] = Field(default_factory=list)
+    missing_subquestions: list[str] = Field(default_factory=list)
 
     @field_validator("label", mode="before")
     @classmethod
@@ -245,7 +249,20 @@ class Review(BaseModel):
             return {str(k): _score(x) for k, x in v.items()}
         return v
 
-    @field_validator("strengths", "weaknesses", "keep", mode="before")
+    @field_validator("disputed_claims", mode="before")
+    @classmethod
+    def _disputed(cls, v: Any) -> list[dict[str, Any]]:
+        out = []
+        for x in v if isinstance(v, list) else ([v] if v else []):
+            if isinstance(x, dict):
+                cid = to_text(_pick(x, "claim_id", "id", "claim") or "")
+                out.append({"claim_id": cid.strip(), "reason": to_text(_pick(x, "reason", "why", "note") or "")})
+            elif isinstance(x, str) and x.strip():
+                m = re.match(r"\s*([A-Z]-C\d+)\W*(.*)", x)
+                out.append({"claim_id": m.group(1), "reason": m.group(2)} if m else {"claim_id": "", "reason": x})
+        return out
+
+    @field_validator("strengths", "weaknesses", "keep", "missing_subquestions", mode="before")
     @classmethod
     def _list(cls, v: Any) -> list[str]:
         return to_list(v)

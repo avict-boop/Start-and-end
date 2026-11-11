@@ -1,0 +1,103 @@
+"""Режим «Исследование»: реестр доказательств, «известно» только с источниками, голосование по подвопросам."""
+import asyncio
+
+import pytest
+
+from council import research as R
+from council.checkpoint import Journal
+from council.mock import MockClient
+from council.session import Council
+from tests.test_council import make_cfg
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+def test_research_session_end_to_end():
+    res = run(Council(make_cfg(mode="research"), MockClient(delay=0), seed=3).run("Стоит ли открывать кофейню у вуза?"))
+    d = res.to_dict()
+    r = d["research"]
+    assert res.mode == "research" and len(r["subquestions"]) == 3 and r["scope"]
+    assert all(lab in r["lens_of"] for lab in res.authors)  # у каждого автора своя линза
+    led = r["ledger"]
+    assert led["missions"] == 2 and led["evidence"] and {c["status"] for c in led["claims"]} >= {"confirmed"}
+    ok = R.confirmed_ids(led)
+    assert res.verdict.known and all(set(k.evidence_ids) <= ok | {"DOC"} for k in res.verdict.known)
+    assert set(r["sections"]) == {"Q1", "Q2", "Q3"} and all(s["leader"] for s in r["sections"].values())
+    assert {c.subquestion_id for c in res.verdict.coverage_audit} == {"Q1", "Q2", "Q3"}
+    assert all(c.id.startswith(lab + "-C") for lab, p in res.proposals.items() for c in p.claims)
+    assert not any(s.failures for s in res.stats.values())
+
+
+def test_ledger_rejects_sources_not_returned_by_search_and_merges_conflicts():
+    sel = [{"id": "A-C1", "label": "A", "text": "x", "basis": "memory", "volatility": "stable"},
+           {"id": "B-C1", "label": "B", "text": "y", "basis": "memory", "volatility": "stable"}]
+    m1 = R.EvidenceResult(search_citations=["https://real.example/a"], checked_claims=[
+        R.CheckedClaim(claim_id="A-C1", status="confirmed", sources=[R.ESource(url="https://invented.example/z")]),
+        R.CheckedClaim(claim_id="B-C1", status="confirmed", sources=[R.ESource(url="https://real.example/a/")])])
+    m2 = R.EvidenceResult(checked_claims=[R.CheckedClaim(claim_id="B-C1", status="refuted",
+                                                         sources=[R.ESource(url="https://other.example", relation="contradicts")])])
+    led = R.build_ledger(sel, [m1, m2], "perplexity/sonar-pro")
+    st = {c["id"]: c["status"] for c in led["claims"]}
+    assert st == {"A-C1": "unclear", "B-C1": "contested_in_sources"}  # выдуманная ссылка подтверждением не считается
+    inv = next(e for e in led["evidence"] if "invented" in e["url"])
+    assert inv["search_returned"] is False and "NOT among search results" in R.ledger_text(led)
+
+
+def test_known_needs_confirmed_evidence():
+    led = {"claims": [{"id": "A-C1", "status": "confirmed", "evidence": ["E1"]},
+                      {"id": "A-C2", "status": "unclear", "evidence": ["E2"]}],
+           "evidence": [{"id": "E1"}, {"id": "E2"}]}
+    v = R.ResearchVerdict(winner="A", final_answer="итог", why="", known=[
+        {"statement": "подтверждено", "evidence_ids": ["E1"]}, {"statement": "из памяти", "evidence_ids": []},
+        {"statement": "неясно", "evidence_ids": ["E2"]}, {"statement": "из таблицы", "evidence_ids": ["[DOC: file]"]}],
+        coverage_audit=[{"subquestion_id": "Q1"}])
+    with pytest.raises(ValueError, match="known"):
+        R.check_verdict(v, ledger=led, n_subq=2, strict=True)
+    out = R.check_verdict(v, ledger=led, n_subq=2, strict=False)
+    assert [k.statement for k in out.known] == ["подтверждено", "из таблицы"]
+    assert {u.gap for u in out.unknown} == {"из памяти", "неясно"} and len(out.coverage_audit) == 2
+
+
+def test_claims_selection_covers_every_author_and_prefers_disputed():
+    from council.schemas import CritiqueSet
+    props = {l: R.number_claims(l, R.ResearchProposal(title="t", summary="текст ответа", claims=[
+        {"text": f"{l} цифра 10%", "basis": "memory"}, {"text": f"{l} из таблицы", "basis": "user_doc"},
+        {"text": f"{l} вывод", "basis": "calc"}])) for l in "AB"}
+    crit = {"x": CritiqueSet(reviews=[{"label": "B", "scores": {"k": 5}, "disputed_claims": [{"claim_id": "B-C3", "reason": "?"}]}])}
+    sel = R.select_claims(props, crit, 3)
+    ids = [c["id"] for c in sel]
+    assert ids[0] == "B-C3" and {c["label"] for c in sel} == {"A", "B"} and not any(i.endswith("C2") for i in ids)
+
+
+def test_research_pause_and_resume_replays_paid_answers(tmp_path):
+    from council.session import BudgetExceeded
+    j = tmp_path / "j.jsonl"
+    with pytest.raises(BudgetExceeded):
+        run(Council(make_cfg(mode="research", max_cost_usd=0.009), MockClient(delay=0), seed=5,
+                    journal=Journal(j)).run("Вопрос?"))
+    c = Council(make_cfg(mode="research", max_cost_usd=5), MockClient(delay=0), seed=5, journal=Journal(j))
+    res = run(c.run("Вопрос?"))
+    assert c.replayed >= 9 and res.research["ledger"]["claims"]
+
+
+def test_chair_failure_gives_honest_fallback():
+    class NoChair(MockClient):
+        async def complete(self, model, messages, **kw):
+            if (kw.get("meta") or {}).get("stage") == "verdict":
+                from council.client import ProviderError
+                raise ProviderError(f"{model}: HTTP 500")
+            return await super().complete(model, messages, **kw)
+
+    res = run(Council(make_cfg(mode="research"), NoChair(delay=0), seed=1).run("Вопрос?"))
+    assert "Синтез не выполнен" in res.verdict.final_answer and res.verdict.known
+
+
+def test_revision_gets_digests_not_full_texts_unless_disabled():
+    others = {"B": R.ResearchProposal(title="Другой", summary="ПОЛНЫЙ_ТЕКСТ " * 50,
+                                      claims=[{"id": "B-C1", "text": "утверждение"}])}
+    own = R.ResearchProposal(title="Мой", summary="мой текст")
+    short = R.revision("H", ["k"], "A", own, [], others, "", "", 1000, 8, full_others=False)
+    full = R.revision("H", ["k"], "A", own, [], others, "", "", 1000, 8, full_others=True)
+    assert "ПОЛНЫЙ_ТЕКСТ" not in short and "B-C1" in short and "ПОЛНЫЙ_ТЕКСТ" in full

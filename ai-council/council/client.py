@@ -5,7 +5,7 @@ import asyncio
 import json
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 import httpx
@@ -109,6 +109,21 @@ def _key_error(code: int, body: str, model: str) -> Exception | None:
     return None
 
 
+def _citations(top: dict[str, Any], message: dict[str, Any]) -> list[str]:
+    """Ссылки, которые вернул поиск: «citations» (Perplexity) и «annotations» с url_citation (поиск OpenRouter)."""
+    out: list[str] = []
+    for c in top.get("citations") or message.get("citations") or []:
+        u = c if isinstance(c, str) else (c.get("url") if isinstance(c, dict) else None)
+        if isinstance(u, str) and u.startswith("http"):
+            out.append(u)
+    for a in message.get("annotations") or []:
+        if isinstance(a, dict):
+            u = (a.get("url_citation") or {}).get("url") or a.get("url")
+            if isinstance(u, str) and u.startswith("http"):
+                out.append(u)
+    return out
+
+
 def _http_reason(code: int, body: str) -> str:
     human = {429: "провайдер ограничил частоту запросов", 408: "истекло время ожидания",
              502: "провайдер модели недоступен", 503: "провайдер модели перегружен",
@@ -143,6 +158,7 @@ class Completion:
     finish_reason: str | None = None  # "length" — ответ обрезан по лимиту токенов
     max_tokens: int = 0  # с каким лимитом получен ответ (после возможных увеличений)
     cached_tokens: int = 0  # сколько входных токенов прочитано из кэша провайдера (дешевле)
+    citations: list[str] = field(default_factory=list)  # ссылки, которые реально вернул поиск (не из текста модели)
 
 
 class LLMClient(Protocol):
@@ -156,6 +172,7 @@ class LLMClient(Protocol):
         reasoning_effort: str | None = None,
         meta: dict[str, Any] | None = None,
         on_progress: ProgressFn | None = None,
+        web_search: bool = False,
     ) -> Completion: ...
 
     async def aclose(self) -> None: ...
@@ -207,8 +224,12 @@ class OpenRouterClient:
         reasoning_effort: str | None = None,
         meta: dict[str, Any] | None = None,
         on_progress: ProgressFn | None = None,
+        web_search: bool = False,
     ) -> Completion:
         """Запрос к модели с потоковой передачей ответа.
+
+        web_search — включить поиск в интернете средствами OpenRouter (у моделей со встроенным поиском,
+        например Perplexity, он есть и так). Найденные ссылки возвращаются в Completion.citations.
 
         Поток нужен, чтобы видеть, что модель жива: «думает» (ответа ещё нет), «пишет» (идут токены).
         «Думающие» модели (gpt-5, o-серия, Gemini 2.5, DeepSeek R1…) сначала тратят токены на скрытые
@@ -229,6 +250,8 @@ class OpenRouterClient:
             payload["reasoning"] = {"effort": reasoning_effort}
         if model in _REASONING_FIX:
             payload["reasoning"] = dict(_REASONING_FIX[model])
+        if web_search and not model.startswith("perplexity/"):
+            payload["plugins"] = [{"id": "web"}]  # поиск OpenRouter: встроенный у провайдера или Exa
         spent = Completion(text="")  # расходы всех попыток, включая неудачные
         last_error = "неизвестная ошибка"
         wait = 0.0
@@ -272,6 +295,7 @@ class OpenRouterClient:
             spent.cached_tokens += res.get("cached_tokens", 0)
             spent.completion_tokens += res["completion_tokens"]
             spent.cost += res["cost"]
+            spent.citations = list(dict.fromkeys(spent.citations + res.get("citations", [])))
             text, finish = res["text"], res["finish"]
             if not text.strip():
                 limit = payload["max_tokens"]
@@ -310,6 +334,7 @@ class OpenRouterClient:
                 finish_reason=finish,
                 max_tokens=payload["max_tokens"],
                 cached_tokens=spent.cached_tokens,
+                citations=spent.citations,
             )
         raise ProviderError(
             f"{model}: не удалось получить ответ после {self.max_retries + 1} попыток: {last_error}",
@@ -363,6 +388,7 @@ class OpenRouterClient:
             raise _Retryable("пустой список choices")
         choice = choices[0]
         return {
+            "citations": _citations(data, choice.get("message") or {}),
             "text": _as_text((choice.get("message") or {}).get("content")),
             "finish": choice.get("finish_reason") or choice.get("native_finish_reason"),
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),
@@ -379,6 +405,7 @@ class OpenRouterClient:
         finish = None
         usage: dict[str, Any] = {}
         real_model = model
+        cites: list[str] = []
         last_report = 0.0
         phase = "thinking"
         report({"phase": "thinking", "chars": 0})
@@ -401,8 +428,10 @@ class OpenRouterClient:
             real_model = chunk.get("model") or real_model
             if chunk.get("usage"):
                 usage = chunk["usage"]
+            cites += _citations(chunk, {})
             for choice in chunk.get("choices") or []:
                 delta = choice.get("delta") or {}
+                cites += _citations({}, delta)
                 piece = _as_text(delta.get("content"))
                 thought = delta.get("reasoning") or ""
                 if piece:
@@ -417,6 +446,7 @@ class OpenRouterClient:
                 report({"phase": phase, "chars": chars, "reasoning_chars": reasoning_chars})
         report({"phase": phase, "chars": chars, "reasoning_chars": reasoning_chars})  # итог потока
         return {
+            "citations": list(dict.fromkeys(cites)),
             "text": "".join(text),
             "finish": finish,
             "prompt_tokens": int(usage.get("prompt_tokens") or 0),

@@ -20,7 +20,7 @@ class MockClient:
         self.calls: list[dict[str, Any]] = []
 
     async def complete(self, model, messages, *, temperature, max_tokens, reasoning_effort=None, meta=None,
-                       on_progress=None) -> Completion:
+                       on_progress=None, web_search=False) -> Completion:
         meta = meta or {}
         self.calls.append({"model": model, "meta": meta})
         report = on_progress or (lambda ev: None)
@@ -36,6 +36,11 @@ class MockClient:
             raise ProviderError(f"{model}: имитация недоступности")
         stage = meta.get("stage")
         who = meta.get("member", model)
+        if meta.get("research"):
+            out = _research(stage, who, meta)
+            return Completion(text=json.dumps(out, ensure_ascii=False), prompt_tokens=800, completion_tokens=300,
+                              cost=0.001, model=model,
+                              citations=["https://example.com/stat", "https://example.org/report"] if stage == "arbitration" else [])
         if stage == "framing":
             out = {"refined_question": "Уточнённый вопрос (mock)", "criteria": ["Польза", "Стоимость", "Риски"],
                    "requirements": ["Ответ на русском языке", "Привести таблицу с цифрами"]}
@@ -119,3 +124,81 @@ class MockClient:
 
     async def aclose(self) -> None:
         pass
+
+
+def _research(stage: str, who: str, meta: dict[str, Any]) -> dict[str, Any]:
+    """Демо-ответы режима «Исследование»."""
+    if stage == "framing":
+        return {"refined_question": "Каков рынок кофеен у вузов и стоит ли открывать точку? (демо)",
+                "criteria": ["Полнота покрытия", "Качество доказательств", "Калибровка неопределённости", "Практическая ценность"],
+                "requirements": ["Ответ на русском языке"], "as_of": "2026-11", "scope": "Россия, города-миллионники, 2024–2026, ₽",
+                "subquestions": ["Размер и динамика спроса", "Экономика одной точки", "Риски и что может пойти не так"],
+                "lenses": ["рынок и первичные данные", "экономика и расчёты", "скептик: как это может провалиться"]}
+    if stage in ("proposal", "revision"):
+        n = _h(who) % 3
+        out = {
+            "title": f"Исследование {who}" + (" (доработано)" if stage == "revision" else ""),
+            "summary": ("### Q1. Спрос\nСредний чек у вуза — 250–350 ₽ [MEM]; поток — 400–600 гостей в день [CALC].\n"
+                        "### Q2. Экономика\nОкупаемость 14–20 месяцев при аренде 150 тыс. ₽ [CALC]"
+                        + (" [E1]" if stage == "revision" else "") + ".\n"
+                        "### Q3. Риски\nЛетний спад спроса на 40% [MEM]; конкуренция сетей."),
+            "reasoning": "Опора на типичные показатели отрасли (демо).",
+            "claims": [
+                {"text": "Средний чек кофейни у вуза — 250–350 ₽", "basis": "memory", "scope": "Россия, 2025", "volatility": "changes_fast"},
+                {"text": f"Летом спрос падает на {30 + 10 * n}%", "basis": "memory", "scope": "вузы, лето", "volatility": "stable"},
+                {"text": "Окупаемость 14–20 месяцев", "basis": "calc", "scope": "одна точка", "volatility": "unknown"},
+            ],
+            "pros": ["покрыты все подвопросы"], "risks": ["цифры из памяти"],
+            "coverage": [{"subquestion_id": f"Q{i}", "status": "covered"} for i in (1, 2, 3)],
+            "unknowns": ["нет открытых данных о выручке точек у вузов"],
+            "what_would_change": ["если аренда выше 250 тыс. ₽, окупаемость уходит за 2 года"],
+            "confidence": 0.6,
+        }
+        if stage == "revision":
+            out.update({"changes": "Исправлена цифра чека по реестру [E1].", "comparison": "у других сильнее риски (демо)",
+                        "borrowed": ["летний спад (из другого варианта)"], "not_accepted": [], "position": "improved",
+                        "new_after_ledger": []})
+        return out
+    if stage == "critique":
+        claims = meta.get("claims") or []
+        return {"reviews": [{"label": l, "scores": {c: 3 + _h(who, l, c) % 8 for c in meta["criteria"]},
+                             "strengths": [f"сильная сторона {l}"], "weaknesses": [f"слабое место {l}"],
+                             "keep": [f"учитывать летний спад спроса (идея из {l})"] if _h(who, l) % 2 else [],
+                             "disputed_claims": [{"claim_id": c, "reason": "цифра из памяти"} for c in claims
+                                                 if c.startswith(l) and c.endswith("C1")],
+                             "missing_subquestions": []} for l in meta["labels"]]}
+    if stage == "arbitration":
+        ids = meta.get("claims") or []
+        st = ["confirmed", "contested_in_sources", "unclear"]
+        return {"checked_claims": [
+            {"claim_id": c, "status": st[i % 3] if meta.get("mission") == 1 else ("confirmed" if i % 3 == 0 else "unclear"),
+             "note": "Данные отраслевого обзора (демо).",
+             "sources": [{"url": "https://example.com/stat", "title": "Обзор рынка кофеен (демо)", "publisher": "Example",
+                          "date": "2026-03-01", "source_type": "primary", "material_seen": "page", "relation": "supports"}]
+             + ([{"url": "https://example.org/report", "title": "Альтернативная оценка (демо)", "relation": "contradicts"}]
+                if i % 3 == 1 else [])}
+            for i, c in enumerate(ids)],
+            "gaps": [{"question": "выручка конкретных точек", "searched_for": "отчётность", "why_unresolved": "нет открытых данных"}]}
+    if stage == "vote":
+        labels = sorted(meta["labels"], key=lambda l: _h(l) % 100)
+        return {"ranking": labels, "rationale": f"{labels[0]} лучше подкреплён источниками (демо).",
+                "best_by_subquestion": {f"Q{i}": labels[(i - 1) % len(labels)] for i in range(1, (meta.get("subquestions") or 3) + 1)}}
+    if stage == "verdict":
+        ok = meta.get("evidence_ok") or []
+        n = meta.get("subquestions") or 3
+        return {"winner": meta["leader"], "section_backbone": {f"Q{i}": meta["leader"] for i in range(1, n + 1)},
+                "final_answer": ("## Итог исследования (демо)\n\n### Q1. Спрос\nСредний чек 250–350 ₽ [E1].\n\n"
+                                 "### Q2. Экономика\nОкупаемость 14–20 месяцев [CALC].\n\n### Q3. Риски\nЛетний спад [MEM].\n\n"
+                                 "**Источники:** [E1] https://example.com/stat"),
+                "why": "Синтез по подвопросам: каркас — варианты-лидеры разделов (демо).",
+                "known": [{"statement": "Средний чек кофейни у вуза — 250–350 ₽", "evidence_ids": ok[:1], "scope": "Россия, 2025",
+                           "volatility": "changes_fast"}] if ok else [],
+                "contested": [{"issue": "Насколько падает спрос летом", "positions": ["на 30%", "на 50%"],
+                               "evidence_ids": ok[:1], "why_they_differ": "разные выборки", "what_would_resolve": "данные чеков за год"}],
+                "unknown": [{"gap": "выручка конкретных точек у вузов", "reason": "no_public_data", "how_to_check": "запросить у арендодателя"}],
+                "coverage_audit": [{"subquestion_id": f"Q{i}", "status": "covered", "note": f"раздел Q{i}"} for i in range(1, n + 1)],
+                "what_would_change": ["аренда выше 250 тыс. ₽"], "next_questions": ["Сколько стоит аренда у трёх ближайших вузов?"],
+                "dissent": ["один участник считает риск сезонности недооценённым"], "risks": ["цифры спроса не проверены на месте"],
+                "deviation": "",
+                "ideas": [{"id": i, "decision": "included", "reason": "учтено в разделе Q3 (демо)"} for i in meta.get("ideas") or []]}
+    return {}

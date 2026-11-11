@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import random
 import re
 import string
@@ -101,6 +102,7 @@ class SessionResult:
     decisive: dict[str, str] = field(default_factory=dict)            # голосующий -> лидер без его бюллетеня
     coverage: dict[str, int] | None = None                            # сколько раз сравнивались пары
     ideas: list[dict[str, Any]] = field(default_factory=list)         # идеи «стоит сохранить» и решение по ним
+    research: dict[str, Any] = field(default_factory=dict)           # режим «Исследование»: рамки, реестр, подвопросы
 
     @property
     def total_cost(self) -> float:
@@ -141,6 +143,7 @@ class SessionResult:
             "decisive": self.decisive,
             "coverage": self.coverage,
             "ideas": self.ideas,
+            "research": self.research,
             "transcript": self.transcript,
         }
 
@@ -172,6 +175,7 @@ class Council:
         self.forced_labels = dict(labels or {})
         self._seen: dict[tuple[str, str], int] = {}  # (этап, участник) -> сколько обращений уже было
         self._sem = asyncio.Semaphore(config.max_concurrency)
+        self._narrow = asyncio.Semaphore(2)
         self.stats: dict[str, MemberStats] = {m.name: MemberStats() for m in config.active_members}
         if config.fact_check.enabled:
             self.stats[FACT_CHECKER] = MemberStats()
@@ -257,9 +261,13 @@ class Council:
         check: Callable[[T], T] | None = None,
         meta: dict[str, Any] | None = None,
         content: list[dict[str, Any]] | None = None,
+        web_search: bool = False,
     ) -> T:
         if stage == "factcheck":
             system = prompts.FACTCHECK_SYSTEM.format(language=self.cfg.language)
+        elif stage == "arbitration":
+            from . import research
+            system = research.ARBITRATION_SYSTEM.format(language=self.cfg.language)
         else:
             # Одна и та же для участника на всех этапах: провайдеры кэшируют одинаковое начало запроса
             # (системная инструкция + вложения + вопрос), и повторное чтение стоит дешевле.
@@ -295,7 +303,7 @@ class Council:
         if key in self.journal.failures:  # участник не справился до приостановки — ход заседания тот же
             raise InvalidResponse(self.journal.failures[key])
         try:
-            obj = await self._ask_model(member, stage, schema, base_messages, messages, meta, check)
+            obj = await self._ask_model(member, stage, schema, base_messages, messages, meta, check, web_search)
         except (InvalidResponse, ProviderError) as e:
             if not isinstance(e, OutOfCredits):
                 self.journal.fail(key, str(e), stage)
@@ -304,7 +312,7 @@ class Council:
         return obj
 
     async def _ask_model(self, member: MemberConfig, stage: str, schema: type[T], base_messages: list, messages: list,
-                         meta: dict[str, Any], check: Callable[[T], T] | None) -> T:
+                         meta: dict[str, Any], check: Callable[[T], T] | None, web_search: bool = False) -> T:
         max_tokens = member.max_tokens or self.cfg.max_tokens
         effort = member.reasoning_effort or self.cfg.reasoning_effort
         error = ""
@@ -330,15 +338,19 @@ class Council:
                 self._call(name, stage, "queued", started, detail="ждёт свободного слота")
             try:
                 async with self._sem:
-                    comp = await self.client.complete(
-                        member.model,
-                        messages,
-                        temperature=member.temperature if member.temperature is not None else self.cfg.temperature,
-                        max_tokens=max_tokens,
-                        reasoning_effort=None if effort == "none" else effort,
-                        meta=meta,
-                        on_progress=progress,
-                    )
+                    # у границы бюджета запросы идут по два: меньше запросов «в полёте» — меньше превышение лимита
+                    async with (self._narrow if self._budget_warned else contextlib.nullcontext()):
+                        extra = {"web_search": True} if web_search else {}
+                        comp = await self.client.complete(
+                            member.model,
+                            messages,
+                            temperature=member.temperature if member.temperature is not None else self.cfg.temperature,
+                            max_tokens=max_tokens,
+                            reasoning_effort=None if effort == "none" else effort,
+                            meta=meta,
+                            on_progress=progress,
+                            **extra,
+                        )
             except ProviderError as e:
                 if e.spent is not None:  # неудачные попытки тоже стоят денег
                     self._account(member, e.spent)
@@ -422,6 +434,8 @@ class Council:
                     self._call(name, stage, "retry", started, detail=hint)
                 attempt += 1
                 continue
+            if "search_citations" in type(obj).model_fields:  # ссылки, которые реально вернул поиск
+                obj = obj.model_copy(update={"search_citations": list(getattr(comp, "citations", []) or [])})
             entry["parsed"] = obj.model_dump()
             self._log(entry)
             self._call(name, stage, "done", started, cost=round(self.stats[name].cost, 6))
@@ -546,6 +560,18 @@ class Council:
             raise CouncilError(f"на этапе «{self.STAGE_TITLE.get(stage, stage)}» не ответил ни один участник: {first[:300]}")
         return ok
 
+    def _labels(self, got: dict[str, Any]) -> dict[str, str]:
+        """Случайные метки вариантов; при «доделке» из архива прежние варианты сохраняют свои метки."""
+        labels = assign_labels(list(got), self.rng)
+        if self.forced_labels:
+            labels = {l: n for l, n in self.forced_labels.items() if n in got}
+            free = [c for c in string.ascii_uppercase if c not in self.forced_labels]
+            fresh = [n for n in got if n not in labels.values()]
+            self.rng.shuffle(fresh)
+            labels.update(zip(free, fresh))
+            labels = dict(sorted(labels.items()))
+        return labels
+
     STAGE_TITLE = {"critique": "Критика", "revision": "Доработка", "vote": "Голосование", "factcheck": "Проверка фактов"}
 
     # ------------------------------------------------------------------ main flow
@@ -585,6 +611,10 @@ class Council:
         if not options and not self.cfg.chair_proposes:
             if len([m for m in members if m.name != chair.name]) >= self.cfg.min_quorum:
                 self.chair_judge = True
+
+        if mode == "research":  # режим «Исследование» — см. council/research.py
+            return await self._run_research(question, criteria=criteria, context=context, followup_of=followup_of,
+                                            started=started, t0=t0)
 
         # 0. Постановка задачи
         refined = question
@@ -631,15 +661,7 @@ class Council:
             )
             if len(got) < self.cfg.min_quorum:
                 raise CouncilError(f"нет кворума: ответили {len(got)} из {len(proposers)}, нужно {self.cfg.min_quorum}")
-            labels = assign_labels(list(got), self.rng)
-            if self.forced_labels:
-                # прежние варианты сохраняют свои метки (на них ссылается критика из стенограммы), новые — следующие
-                labels = {l: n for l, n in self.forced_labels.items() if n in got}
-                free = [c for c in string.ascii_uppercase if c not in self.forced_labels]
-                fresh = [n for n in got if n not in labels.values()]
-                self.rng.shuffle(fresh)
-                labels.update(zip(free, fresh))
-                labels = dict(sorted(labels.items()))
+            labels = self._labels(got)
             authors = dict(labels)
             proposals = {l: got[name] for l, name in labels.items()}
         initial = dict(proposals)
@@ -839,6 +861,249 @@ class Council:
             fact_checker=self.cfg.fact_check.model if facts else "",
             ideas=ideas,
         )
+
+    # ------------------------------------------------------------------ режим «Исследование»
+
+    async def _run_research(self, question: str, *, criteria: list[str] | None, context: str | None,
+                            followup_of: str, started: str, t0: float) -> SessionResult:
+        from . import research as R
+
+        rc = self.cfg.research
+        members = self.cfg.active_members
+        chair = self.cfg.member(self.cfg.chair)
+        rmeta = {"research": True}
+
+        # 0. Постановка: рамки, подвопросы, линзы
+        self._emit("stage", stage="framing", title="Постановка исследования: рамки и подвопросы")
+        fr: R.ResearchFraming | None = None
+        try:
+            fr = await self._ask(chair, "framing", R.framing(question, context, len(members)), R.ResearchFraming,
+                                 meta=rmeta)
+        except (ProviderError, InvalidResponse) as e:
+            if isinstance(e, OutOfCredits):
+                raise
+            self._emit("member_failed", stage="framing", member=chair.name, error=str(e))
+        refined = (fr.refined_question.strip() if fr else "") or question
+        if criteria:
+            criteria = [c.strip() for c in criteria if c.strip()]
+        else:
+            criteria = [c.strip() for c in (fr.criteria if fr else []) if c.strip()] or list(R.DEFAULT_CRITERIA)
+        self.requirements = [r.strip() for r in (fr.requirements if fr else []) if r.strip()]
+        subq = (fr.subquestions if fr else [])[:5] or [refined]
+        scope, as_of = (fr.scope if fr else ""), (fr.as_of if fr else "")
+        lenses = ((fr.lenses if fr else []) or list(R.DEFAULT_LENSES)) if rc.lenses else []
+        self._emit("framing", refined_question=refined, criteria=criteria, requirements=self.requirements,
+                   scope=scope, as_of=as_of, subquestions=subq, lenses=lenses)
+        req = self.requirements or None
+        rhead = R.research_head(refined, question, req, scope, as_of, subq)
+        self.head = rhead  # одинаковое начало всех запросов — его кэширует провайдер
+
+        # 1. Слепые предложения с утверждениями; у каждого автора своя линза
+        proposers = [m for m in members if m.name != chair.name] if self.chair_judge else members
+        pool = list(lenses)
+        self.rng.shuffle(pool)
+        lens_of = {m.name: (pool[i % len(pool)] if pool else "") for i, m in enumerate(proposers)}
+        scout_pool = [m.name for m in proposers if m.name != self.cfg.devil_advocate]
+        self.rng.shuffle(scout_pool)
+        scouts = set(scout_pool[:rc.fresh_scouts])
+        self._emit("stage", stage="proposal", title="Независимые предложения (без поиска)" if not scouts else
+                   f"Независимые предложения (с поиском: {', '.join(sorted(scouts))})", chair_proposes=not self.chair_judge)
+        got = await self._parallel("proposal", {
+            m.name: self._ask(m, "proposal", R.proposal(rhead, criteria, context, lens_of[m.name], rc.max_words,
+                                                        rc.max_claims, web=m.name in scouts),
+                              R.ResearchProposal, check=lambda p: check_substance(p), meta=rmeta,
+                              web_search=m.name in scouts)
+            for m in proposers})
+        if len(got) < self.cfg.min_quorum:
+            raise CouncilError(f"нет кворума: ответили {len(got)} из {len(proposers)}, нужно {self.cfg.min_quorum}")
+        authors: dict[str, str | None] = dict(self._labels(got))
+        proposals: dict[str, Proposal] = {l: R.number_claims(l, got[n]) for l, n in authors.items() if n}
+        initial = dict(proposals)
+        label_of = {n: l for l, n in authors.items() if n}
+        self._emit("proposals", proposals=proposals, authors=authors)
+
+        def others(name: str) -> dict[str, Proposal]:
+            return {l: p for l, p in proposals.items() if authors[l] != name}
+
+        # 2. Критика: оценки, спорные утверждения, пропущенные подвопросы
+        self._emit("stage", stage="critique", title="Критика и спорные утверждения")
+        jobs = {}
+        for m in members:
+            target = self._shuffled(others(m.name))
+            if not target:
+                continue
+            expected = list(target)
+            jobs[m.name] = self._ask(m, "critique", R.critique(rhead, criteria, target, req), CritiqueSet,
+                                     check=lambda cs, e=expected: normalize_critique(cs, e, criteria),
+                                     meta={"labels": expected, "criteria": criteria,
+                                           "claims": [c.id for l in expected for c in getattr(target[l], "claims", [])],
+                                           **rmeta})
+        critiques: dict[str, CritiqueSet] = await self._parallel("critique", jobs)
+
+        # 3. Арбитраж доказательств: поиск по утверждениям всех вариантов, два противоположных задания
+        ledger: dict[str, Any] = {}
+        if rc.arbitration:
+            selected = R.select_claims(proposals, critiques, rc.arbitration_claims)  # type: ignore[arg-type]
+            if selected:
+                ledger = await self._arbitrate(R, refined, as_of, scope, selected, rc)
+        ledger_txt = R.ledger_text(ledger)
+
+        # 4. Доработка по реестру и выжимкам чужих вариантов
+        self._emit("stage", stage="revision", title="Доработка по реестру доказательств")
+        jobs = {}
+        for m in members:
+            own = label_of.get(m.name)
+            if own is None:
+                continue
+            feedback = [{"scores": rv.scores, "strengths": rv.strengths, "weaknesses": rv.weaknesses,
+                         "disputed_claims": rv.disputed_claims, "missing_subquestions": rv.missing_subquestions}
+                        for reviewer, cs in critiques.items() if reviewer != m.name for rv in cs.reviews if rv.label == own]
+            jobs[m.name] = self._ask(
+                m, "revision",
+                R.revision(rhead, criteria, own, proposals[own], feedback, others(m.name), ledger_txt,
+                           lens_of.get(m.name, ""), rc.max_words, rc.max_claims, full_others=not rc.revision_digest),
+                R.ResearchRevision,
+                check=lambda r, prev=proposals[own]: check_substance(_normalize_revision(r), previous=prev),
+                meta={"label": own, **rmeta})
+        revised = await self._parallel("revision", jobs)
+        for name, rev in revised.items():
+            proposals[label_of[name]] = R.number_claims(label_of[name], rev)
+        self._emit("revisions", revised={label_of[n]: proposals[label_of[n]] for n in revised})
+
+        # 5. Голосование: общий порядок и лучший вариант по каждому подвопросу
+        self._emit("stage", stage="vote", title="Голосование: каркас по подвопросам")
+        jobs = {}
+        for m in members:
+            target = self._shuffled(others(m.name))
+            if not target:
+                continue
+            expected = list(target)
+
+            def check_ballot(b: R.ResearchBallot, e: list[str] = expected) -> R.ResearchBallot:
+                best = {q: lab for q, lab in b.best_by_subquestion.items() if lab in e}
+                return b.model_copy(update={"ranking": normalize_ranking(b.ranking, e), "best_by_subquestion": best})
+
+            jobs[m.name] = self._ask(m, "vote", R.vote(rhead, criteria, target, subq, req, rc.section_vote),
+                                     R.ResearchBallot, check=check_ballot,
+                                     meta={"labels": expected, "subquestions": len(subq), **rmeta})
+        ballots = await self._parallel("vote", jobs)
+        rankings = {n: b.ranking for n, b in ballots.items()}
+        rows = tally(list(proposals), rankings, critiques)
+        agree = agreement(rankings)
+        flags = ballot_flags(rows, rankings)
+        robust = leader_without(list(proposals), rankings, critiques, set(flags)) if flags else None
+        tied = co_leaders(rows)
+        decisive = decisive_ballots(list(proposals), rankings, critiques)
+        cover = coverage(list(proposals), rankings)
+        sections = R.section_tally(subq, ballots, [r.label for r in rows]) if rc.section_vote else {}
+        self._emit("tally", rows=rows, authors=authors, agreement=agree, ballot_flags=flags,
+                   leader_without_flagged=robust, co_leaders=tied if len(tied) > 1 else [], decisive=decisive,
+                   coverage=cover, sections=sections)
+        ballot_notes = ""
+        if flags:
+            ballot_notes = "ballots strongly diverging from the others: " + ", ".join(
+                f"{n} ({'; '.join(FLAG_NAME[f] for f in fl['flags'])})" for n, fl in flags.items())
+
+        # 6. Синтез: «известно / спорно / неизвестно»
+        self._emit("stage", stage="verdict", title="Синтез исследования")
+        leader = rows[0].label if rows else next(iter(proposals))
+        valid = list(proposals)
+        ideas = collect_ideas(critiques, exclude={leader})
+        ideas_text = "\n".join(f"{i['id']} (from {i['label']}): {i['idea']}" for i in ideas)
+        idea_ids = [i["id"] for i in ideas]
+        checks = [0]
+        follow = self.cfg.chair_follows_vote
+
+        def check_verdict(v: R.ResearchVerdict) -> R.ResearchVerdict:
+            w = normalize_label(v.winner) if v.winner else leader
+            if w not in valid:
+                raise ValueError(f"winner must be one of the labels {valid}, got '{v.winner}'")
+            deviation = v.deviation.strip()
+            if w == leader or (len(tied) > 1 and w in tied):
+                deviation = ""
+            elif follow and not re.match(r"^\W*(fact|risk|process)\b", deviation, re.I):
+                raise ValueError(f"the overall backbone (winner) must be the voting leader {leader} unless 'deviation' "
+                                 "starts with fact, risk or process and explains why")
+            if _letters(v.final_answer) < 3 or _is_placeholder(v.final_answer):
+                raise ValueError('"final_answer" is empty or a placeholder ("...") — write the research synthesis')
+            checks[0] += 1
+            strict = checks[0] <= self.cfg.json_retries
+            v = R.check_verdict(v, ledger=ledger, n_subq=len(subq), strict=strict)
+            decided = normalize_ideas(v.ideas, idea_ids, strict=strict)
+            return v.model_copy(update={"winner": w, "deviation": deviation, "ideas": decided})
+
+        proposals_txt = "\n\n".join(
+            R.proposal_block(l, p) + (f"\nChanges after critique: {p.changes}" if getattr(p, "changes", "") else "")
+            + (f"\nAdded after the ledger (cannot be known): {'; '.join(p.new_after_ledger)}"
+               if getattr(p, "new_after_ledger", None) else "")
+            for l, p in proposals.items())
+        try:
+            verdict = await self._ask(
+                chair, "verdict",
+                R.verdict(rhead, criteria, proposals_txt, ledger_txt, R.section_text(subq, sections), tally_text(rows),
+                          _critique_notes(critiques), ideas_text, leader, valid,
+                          (f"{agree['level']} (mean Kendall tau = {agree['tau']:.2f})") if agree else "", ballot_notes,
+                          req, tied if len(tied) > 1 else None, subq),
+                R.ResearchVerdict, check=check_verdict,
+                meta={"labels": valid, "leader": leader, "ideas": idea_ids, "subquestions": len(subq),
+                      "evidence_ok": sorted(R.confirmed_ids(ledger)), **rmeta})
+        except (ProviderError, InvalidResponse) as e:
+            if isinstance(e, OutOfCredits):
+                raise
+            self._emit("member_failed", stage="verdict", member=chair.name, error=str(e))
+            verdict = R.fallback_verdict(leader, proposals, ledger, subq)
+        by_id = {d.id: d for d in verdict.ideas}
+        for i in ideas:
+            d = by_id.get(i["id"])
+            i["decision"], i["reason"] = (d.decision, d.reason) if d else ("not_addressed", "")
+        self._emit("verdict", verdict=verdict, ideas=ideas)
+        return SessionResult(
+            question=question, refined_question=refined, criteria=criteria, mode="research", authors=authors,
+            initial_proposals=initial, proposals=proposals, critiques=critiques, ballots=ballots, tally=rows,
+            verdict=verdict, stats=self.stats, transcript=self.transcript, started_at=started,
+            duration_s=round(time.monotonic() - t0, 1), attachments=[a.meta() for a in self.attachments],
+            image_notes=dict(self.image_notes), image_notes_by=self.image_notes_by, followup_of=followup_of,
+            thread=self.history, agreement=agree, chair_proposed=not self.chair_judge, ballot_flags=flags,
+            leader_without_flagged=robust, requirements=self.requirements, co_leaders=tied if len(tied) > 1 else [],
+            decisive=decisive, coverage=cover, fact_check={}, fact_checker=ledger.get("model", "") if ledger else "",
+            ideas=ideas,
+            research={"scope": scope, "as_of": as_of, "subquestions": subq, "lenses": lenses,
+                      "lens_of": {label_of[n]: lens_of.get(n, "") for n in label_of},
+                      "scouts": sorted(label_of[n] for n in scouts if n in label_of),
+                      "ledger": ledger, "sections": sections, "settings": rc.model_dump()},
+        )
+
+    async def _arbitrate(self, R: Any, question: str, as_of: str, scope: str, selected: list[dict[str, Any]],
+                         rc: Any) -> dict[str, Any]:
+        """Два поисковых вызова с противоположными заданиями; сбой поиска не прерывает исследование."""
+        fc = self.cfg.fact_check
+        checker = MemberConfig(name=FACT_CHECKER, model=fc.model, max_tokens=max(fc.max_tokens, 6000),
+                               temperature=0.1, reasoning_effort="none")
+        self.stats.setdefault(FACT_CHECKER, MemberStats())
+        self._emit("stage", stage="arbitration",
+                   title=f"Арбитраж доказательств: {len(selected)} утверждений, поиск {fc.model}",
+                   claims=[c["id"] for c in selected], model=fc.model)
+        batch = R.claims_batch(selected)
+        jobs = [self._ask(checker, "arbitration", R.arbitration(question, as_of, scope, R.MISSIONS[i], batch,
+                                                                 rc.max_evidence),
+                          R.EvidenceResult, meta={"mission": i + 1, "claims": [c["id"] for c in selected], "research": True},
+                          web_search=True)
+                for i in range(rc.missions)]
+        results = await asyncio.gather(*jobs, return_exceptions=True)
+        ok = []
+        for i, res in enumerate(results, 1):
+            if isinstance(res, (BudgetExceeded, OutOfCredits)):
+                raise res
+            if isinstance(res, BaseException):
+                self.stats[FACT_CHECKER].failures.append(f"arbitration: задание {i}: {res}")
+                self._emit("member_failed", stage="arbitration", member=f"{FACT_CHECKER} (задание {i})", error=str(res))
+                continue
+            ok.append(res)
+        ledger = R.build_ledger(selected, ok, fc.model) if ok else {
+            "model": fc.model, "missions": 0, "evidence": [], "gaps": [],
+            "claims": [{**c, "status": "search_unavailable", "notes": [], "evidence": []} for c in selected]}
+        self._emit("ledger", ledger=ledger)
+        return ledger
 
     async def _fact_check(self, question: str, proposals: dict[str, Proposal], rows: list[TallyRow]) -> dict[str, dict]:
         """Проверяет ключевые факты в лидирующих вариантах (топ-N голосования). Сбой проверки не прерывает заседание."""

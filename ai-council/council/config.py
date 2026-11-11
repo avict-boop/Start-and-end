@@ -8,7 +8,7 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, Field, model_validator
 
-Mode = Literal["quick", "debate", "evaluate"]
+Mode = Literal["quick", "debate", "evaluate", "research"]
 Effort = Literal["none", "low", "medium", "high"]
 
 
@@ -40,6 +40,21 @@ class FactCheckConfig(BaseModel):
     max_tokens: int = 3000
 
 
+class ResearchConfig(BaseModel):
+    """Режим «Исследование»: каждую часть можно выключить, чтобы сравнить на пилоте, что помогает."""
+
+    lenses: bool = True            # у каждого автора свой угол зрения (линза)
+    arbitration: bool = True       # арбитраж доказательств после критики: поиск по утверждениям всех вариантов
+    missions: int = Field(default=2, ge=1, le=2)        # поисковых вызовов: подтверждения и опровержения
+    arbitration_claims: int = Field(default=10, ge=3, le=20)  # сколько утверждений проверять
+    max_claims: int = Field(default=8, ge=3, le=15)     # утверждений в варианте
+    max_evidence: int = Field(default=20, ge=5, le=40)  # источников в ответе поиска
+    revision_digest: bool = True   # доработка по реестру и выжимкам чужих вариантов, а не по их полным текстам
+    section_vote: bool = True      # голосование за лучший вариант по каждому подвопросу
+    fresh_scouts: int = Field(default=0, ge=0, le=2)    # авторов с поиском уже на этапе предложений («свежие данные»)
+    max_words: int = Field(default=1400, ge=300, le=5000)  # ориентир длины варианта
+
+
 class CouncilConfig(BaseModel):
     language: str = "Russian"
     mode: Mode = "debate"
@@ -69,6 +84,7 @@ class CouncilConfig(BaseModel):
     runs_dir: str = "runs"
     branding: BrandingConfig = Field(default_factory=BrandingConfig)
     fact_check: FactCheckConfig = Field(default_factory=FactCheckConfig)
+    research: ResearchConfig = Field(default_factory=ResearchConfig)
     transcribe_model: str = "google/gemini-2.5-flash"  # модель OpenRouter для расшифровки голосовых
     members: list[MemberConfig]
 
