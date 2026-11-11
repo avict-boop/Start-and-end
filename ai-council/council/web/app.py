@@ -104,6 +104,10 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
         for f in s.get("failures", []):
             stage, _, err = f.partition(": ")
             ev.append({"type": "member_failed", "stage": stage, "member": name, "error": err})
+    from ..reports.view import chair_failure
+    cf = chair_failure(d)
+    if cf and not any(f.startswith("verdict:") for s in d.get("stats", {}).values() for f in s.get("failures", [])):
+        ev.append({"type": "member_failed", "stage": "verdict", "member": cf[0], "error": cf[1]})
     ev.append({"type": "verdict", "verdict": d["verdict"], "ideas": d.get("ideas") or []})
     ev.append({"type": "done", "id": session_id, "total_cost": d.get("total_cost_usd", 0),
                "duration_s": d.get("duration_s"), "stats": d.get("stats", {})})

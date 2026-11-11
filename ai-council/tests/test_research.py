@@ -169,3 +169,25 @@ def test_absence_claims_go_last():
         {"text": "Цена 10% выше", "basis": "memory"}]))}
     sel = [c["id"] for c in R.select_claims(props, {}, 2)]
     assert "A-C1" not in sel
+
+
+def test_chair_failure_is_recorded_and_recovered_for_old_sessions():
+    from council.reports.view import View
+    from council.web.app import events_from_result
+
+    class NoChair(MockClient):
+        async def complete(self, model, messages, **kw):
+            if (kw.get("meta") or {}).get("stage") == "verdict":
+                from council.client import ProviderError
+                raise ProviderError(f"{model}: HTTP 500")
+            return await super().complete(model, messages, **kw)
+    res = run(Council(make_cfg(mode="research"), NoChair(delay=0), seed=1).run("Вопрос?"))
+    assert any(f.startswith("verdict:") for f in res.stats["a"].failures)
+    # заседание до исправления: сбой не записан — восстанавливается по стенограмме, и появляется «Доделать»
+    d = res.to_dict()
+    d["stats"]["a"]["failures"] = []
+    d["transcript"].append({"stage": "verdict", "member": "a", "error": '"known" may contain ONLY claims backed by …'})
+    fails = View(d, "x").failures()
+    assert fails and "known" in fails[-1][2] and fails[-1][0] == "a"
+    ev = [e for e in events_from_result(d, "x") if e["type"] == "member_failed" and e["stage"] == "verdict"]
+    assert ev and "не сдал итог" in ev[0]["error"]

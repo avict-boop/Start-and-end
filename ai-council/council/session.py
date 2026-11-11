@@ -641,6 +641,7 @@ class Council:
             except (ProviderError, InvalidResponse) as e:
                 if isinstance(e, OutOfCredits):
                     raise
+                self.stats[chair.name].failures.append(f"framing: {e}")
                 self._emit("member_failed", stage="framing", member=chair.name, error=str(e))
                 criteria = []
             criteria = criteria or ["Эффективность", "Реалистичность", "Риски"]
@@ -825,6 +826,7 @@ class Council:
             if isinstance(e, OutOfCredits):
                 raise
             # Председатель недоступен — итог по результатам голосования без синтеза.
+            self.stats[chair.name].failures.append(f"verdict: {e}")
             self._emit("member_failed", stage="verdict", member=chair.name, error=str(e))
             top = proposals[rows[0].label]
             verdict = Verdict(
@@ -893,6 +895,7 @@ class Council:
         except (ProviderError, InvalidResponse) as e:
             if isinstance(e, OutOfCredits):
                 raise
+            self.stats[chair.name].failures.append(f"framing: {e}")
             self._emit("member_failed", stage="framing", member=chair.name, error=str(e))
         refined = (fr.refined_question.strip() if fr else "") or question
         if criteria:
@@ -1067,6 +1070,7 @@ class Council:
         except (ProviderError, InvalidResponse) as e:
             if isinstance(e, OutOfCredits):
                 raise
+            self.stats[chair.name].failures.append(f"verdict: {e}")
             self._emit("member_failed", stage="verdict", member=chair.name, error=str(e))
             verdict = R.fallback_verdict(leader, proposals, ledger, subq)
         by_id = {d.id: d for d in verdict.ideas}

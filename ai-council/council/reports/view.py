@@ -620,7 +620,23 @@ class View:
             for f in (s or {}).get("failures", []):
                 stage, _, err = f.partition(": ")
                 out.append((name, STAGE_NAME.get(stage, stage), err))
+        chair_fail = chair_failure(self.d)
+        if chair_fail and not any(st == STAGE_NAME["verdict"] for _, st, _ in out):
+            out.append((chair_fail[0], STAGE_NAME["verdict"], chair_fail[1]))
         return out
+
+
+def chair_failure(d: dict[str, Any]) -> tuple[str, str] | None:
+    """Итог написан без председателя (запасной путь), а сбой не записан — так было до исправления.
+    Возвращает (председатель, причина по последней ошибке в стенограмме) или None."""
+    vd = d.get("verdict") or {}
+    if not str(vd.get("why", "")).startswith("Председатель не ответил"):
+        return None
+    tr = [e for e in d.get("transcript") or [] if e.get("stage") == "verdict"]
+    chair = (tr[-1].get("member") if tr else "") or (d.get("request") or {}).get("chair") or "председатель"
+    errs = [e.get("error") for e in tr if e.get("error")]
+    reason = f"председатель не сдал итог ({len(tr)} попыт.)" + (f"; последняя причина: {errs[-1][:400]}" if errs else "")
+    return chair, reason
 
 
 # ------------------------------------------------------------------ Markdown → HTML
