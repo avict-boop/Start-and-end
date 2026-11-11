@@ -1,6 +1,6 @@
-# Which database should we use for product analytics: PostgreSQL, ClickHouse or BigQuery?
+# Решение совета
 
-*Решение совета · 08.11.2026 18:30 · Совет нейросетей*
+*08.11.2026 18:30 · Совет нейросетей*
 
 **Choose PostgreSQL with the TimescaleDB extension.** It covers 90% of the analytics workload without a second
 database and keeps operations simple for a team of three.

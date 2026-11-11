@@ -253,6 +253,7 @@ window.addEventListener("resize", markAll); markAll();
 </script>"""
 
 KIND = {"full": "Отчёт о заседании", "summary": "Итог заседания", "decision": "Решение совета"}
+DECISION_TITLE = "Решение совета"
 AGREE_WORD = {"high": "Высокое", "medium": "Среднее", "low": "Низкое"}
 AGREE_SENT = {"high": "Мнения моделей в основном совпадают.", "medium": "Мнения моделей частично расходятся.",
               "low": "Мнения моделей разошлись — смотрите особые мнения."}
@@ -685,19 +686,16 @@ def _toc(v: View) -> str:
 # ------------------------------------------------------------------ три вида отчёта
 
 def render_decision_html(view: View, *, toolbar: str = "") -> str:
-    """Только решение совета: заголовок, ответ и (в конце) вопрос — без обоснования, вариантов и голосования."""
+    """Только решение совета: сам ответ, без вопроса, обоснования, вариантов и голосования."""
     v = view
-    parts = ['<main class="page">', _masthead(v, "decision"), _h1(v)]
-    if not v.question_is_prompt and v.question_is_long:
-        parts.append(_lead(v))
-    parts.append(f'<section class="decision" id="verdict"><div class="answer md">{md_to_html(v.verdict.get("final_answer", ""))}'
-                 "</div></section>")
-    if v.question_is_prompt:
-        parts.append(f'<section id="request"><h2>Вопрос совету</h2><div class="query md">{md_to_html(v.question, breaks=True)}</div></section>')
+    title = DECISION_TITLE
+    parts = ['<main class="page">', _masthead(v, "decision"), f"<h1>{title}</h1>",
+             f'<section class="decision" id="verdict"><div class="answer md">{md_to_html(v.verdict.get("final_answer", ""))}'
+             "</div></section>"]
     n = len(v.members)
     parts.append(f'<p class="muted small" style="margin-top:14pt">{_e(v.date)} · совет из {n} '
                  f'{_plural(n, "модели", "моделей", "моделей")}: {_e(", ".join(v.members))}</p></main>')
-    return _document(v, "".join(parts), toolbar)
+    return _document(v, "".join(parts), toolbar, title=f"{title} · {v.date}")
 
 
 def render_html(view: View, *, toolbar: str = "", summary: bool = False, decision: bool = False) -> str:
@@ -742,11 +740,14 @@ def _short(text: str, n: int) -> str:
     return text if len(text) <= n else text[: n - 1].rsplit(" ", 1)[0] + "…"
 
 
-def _document(v: View, body: str, toolbar: str) -> str:
+def _document(v: View, body: str, toolbar: str, title: str | None = None) -> str:
+    """title — заголовок документа вместо вопроса (в «Только решение» вопроса нет нигде)."""
     b = brand.current()
+    t = title or v.display_title
+    desc = title or v.title_text
     return (f'<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width, initial-scale=1">'
-            f'<meta name="author" content="{_e(b.title)}"><meta name="description" content="{_e(v.title_text)}">'
+            f'<meta name="author" content="{_e(b.title)}"><meta name="description" content="{_e(desc)}">'
             f'<meta name="generator" content="Совет нейросетей">'
-            f"<title>{_e(v.display_title)} — {_e(b.title)}</title><style>{_css(v.display_title)}</style></head>"
+            f"<title>{_e(t)} — {_e(b.title)}</title><style>{_css(t)}</style></head>"
             f"<body>{toolbar}{body}{SCROLL_HINT}</body></html>")

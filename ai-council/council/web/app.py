@@ -667,7 +667,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     async def report(sid: str, format: str = "pdf", download: bool = False,
                      summary: bool = False, decision: bool = False) -> FileResponse | HTMLResponse:
         """Отчёт заседания. summary=1 — итоговое решение с обоснованием, рисками и особыми мнениями;
-        decision=1 — только решение совета (вопрос и ответ)."""
+        decision=1 — только решение совета, без вопроса."""
         arch = archive()
         if not arch.exists(sid):
             raise HTTPException(404, "заседание не найдено")

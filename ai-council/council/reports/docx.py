@@ -665,9 +665,11 @@ class _Report:
     def __init__(self, v: View, kind: str) -> None:
         self.v = v
         self.kind = kind
+        # в «Только решение» вопроса нет нигде — ни в заголовке, ни в колонтитуле, ни в свойствах файла
+        self.title = f"{KIND[kind]} · {v.date}" if kind == "decision" else v.display_title
         self.doc = Document()
-        self.theme = _setup(self.doc, kind, v.display_title)
-        _headers(self.doc, v.display_title)
+        self.theme = _setup(self.doc, kind, self.title)
+        _headers(self.doc, self.title)
         self._bm = 0
 
     def h(self, text: str, level: int, anchor: str | None = None):
@@ -762,8 +764,9 @@ class _Report:
         cp.add_run().add_break()
         _small(cp, v.date, size=8.5)
         doc.add_paragraph().paragraph_format.space_after = Pt(2)
-        t2 = doc.add_paragraph(v.display_title, style="Title")
-        if len(v.display_title) > 90:  # длинный заголовок — мельче
+        heading = KIND[self.kind] if self.kind == "decision" else v.display_title
+        t2 = doc.add_paragraph(heading, style="Title")
+        if len(heading) > 90:  # длинный заголовок — мельче
             for r in t2.runs:
                 r.font.size = Pt(17)
         t2.paragraph_format.keep_with_next = True
@@ -1233,16 +1236,11 @@ def _mark_png() -> bytes:
 # ------------------------------------------------------------------ три вида отчёта
 
 def render_decision_docx(view: View) -> bytes:
-    """Только решение совета: заголовок, ответ и (в конце) вопрос."""
+    """Только решение совета: сам ответ, без вопроса."""
     v = view
     rep = _Report(v, "decision")
     rep.masthead()
-    if not v.question_is_prompt:
-        rep.lead()
     add_markdown(rep.doc, v.verdict.get("final_answer", ""), heading_shift=2)
-    if v.question_is_prompt:
-        rep.h("Вопрос совету", 1)
-        add_markdown(rep.doc, v.question, breaks=True, base_style="Council Query", heading_shift=4)
     n = len(v.members)
     rep.meta(f"{v.date} · совет из {n} {_plural(n, 'модели', 'моделей', 'моделей')}: {', '.join(v.members)}")
     return rep.save()

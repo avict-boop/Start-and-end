@@ -130,3 +130,19 @@ def test_isolated_archive_builds_reports_in_a_separate_process(tmp_path):
     p = arc.report("02-bystryi-otvet", "decision.md")
     assert p.is_file() and "Решение совета" in p.read_text()
     assert arc._build("нет-такого", ["md"])["md"].startswith("ошибка")
+
+
+def test_decision_only_report_has_no_question():
+    from council.reports.docx import render_decision_docx
+    from council.reports.md import render_decision_md
+    from council.reports.html import render_decision_html
+    d = samples.full_debate()
+    v = View(d, "x")
+    md = render_decision_md(v)
+    html = render_decision_html(v)
+    doc = Document(io.BytesIO(render_decision_docx(v)))
+    word = "\n".join(p.text for p in doc.paragraphs) + doc.sections[0].header.paragraphs[0].text
+    for text in (md, html, word):
+        assert "Какую CRM выбрать" not in text and "Сейчас заявки ведём" not in text and "Вопрос совету" not in text
+        assert "Решение совета" in text
+    assert "amoCRM" in md and doc.core_properties.title.startswith("Решение совета")

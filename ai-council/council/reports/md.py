@@ -147,13 +147,12 @@ def _request(v: View, summary: bool) -> list[str]:
 
 
 def render_decision_md(view: View) -> str:
-    """Только решение совета: вопрос и итоговый ответ."""
+    """Только решение совета: сам ответ, без вопроса."""
+    from . import brand
     v = view
-    out = _head(v, "decision") if not v.question_is_prompt else [f"# {v.display_title}", "", f"*Решение совета · {v.date}*", ""]
-    out += [demote(v.verdict.get("final_answer", ""), 2), ""]
-    if v.question_is_prompt:
-        out += ["## Вопрос совету", "", *_quote(v.question), ""]
-    out += ["---", f"*{v.date} · участники: {', '.join(v.members)}*"]
+    out = [f"# {KIND['decision']}", "", f"*{v.date} · {brand.current().title}*", "",
+           demote(v.verdict.get("final_answer", ""), 2), "",
+           "---", f"*{v.date} · участники: {', '.join(v.members)}*"]
     return "\n".join(out).rstrip() + "\n"
 
 

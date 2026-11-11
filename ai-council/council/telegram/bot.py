@@ -1272,7 +1272,7 @@ class CouncilBot:
             await self.send(chat_id, "📎 <b>Отчёты</b> — выберите вид и формат:\n"
                                      "📄 <b>Полный</b> — всё заседание: варианты, критика, голосование, расходы\n"
                                      "📌 <b>Итог</b> — решение с обоснованием, рисками и особыми мнениями\n"
-                                     "✅ <b>Только решение</b> — вопрос и ответ, чтобы переслать",
+                                     "✅ <b>Только решение</b> — без вопроса, чтобы переслать",
                             reply_markup={"inline_keyboard": self._report_buttons(stem)})
         elif kind == "res":
             await self.api.answer_callback(cq["id"])
