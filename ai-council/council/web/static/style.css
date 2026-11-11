@@ -765,3 +765,37 @@ a.brand:hover .brand-name { color: var(--accent); }
 /* длина варианта исследования в «Параметрах» */
 .research-len { display: grid; gap: .5rem; margin: .4rem 0 .8rem; }
 .research-len .field { max-width: 14rem; }
+
+/* «Подобрать состав» */
+.advise-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .8rem; margin: .2rem 0 .6rem; }
+.advise-bar .hint { flex: 1 1 18rem; margin: 0; }
+.advice { margin-bottom: .8rem; }
+.advice h3 { margin: 0; font-size: 1.05rem; }
+.advice h4 { margin: .9rem 0 .35rem; font-size: .92rem; }
+.adv-top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .3rem 1rem; }
+.adv-task, .adv-mode { margin: .5rem 0; }
+.adv-picks { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.adv-picks > li { padding: .6rem .75rem; border-radius: 10px; background: var(--surface-2); min-width: 0; }
+.adv-picks p { margin: .3rem 0; }
+.adv-head { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .5rem; overflow-wrap: anywhere; }
+.adv-basis { display: flex; flex-wrap: wrap; gap: .25rem; }
+.basis { font-size: .72rem; font-weight: 650; padding: .05rem .45rem; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--muted); }
+.basis.b-reviews { color: var(--accent); border-color: var(--accent); }
+.basis.b-knowledge { border-style: dashed; }
+.adv-rev summary { cursor: pointer; color: var(--muted); font-size: .85rem; margin-top: .3rem; }
+.adv-rev p { font-size: .88rem; overflow-wrap: anywhere; }
+.adv-avoid { padding-left: 1.1rem; margin: 0; }
+.adv-avoid li { margin: .2rem 0; }
+.adv-caveats { padding-left: 1.1rem; margin: .7rem 0 0; }
+.adv-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .8rem; margin-top: .8rem; }
+.m-new { font-style: normal; font-size: .68rem; font-weight: 700; color: var(--accent); margin-left: .35rem; }
+.member.picked { border-color: var(--accent); }
+.member.picked code { color: var(--accent); }
+.adv-head .badge::before { display: none; }
+.web-members { display: flex; flex-wrap: wrap; gap: .35rem; }
+.chip-tg { font: inherit; font-size: .85rem; padding: .3rem .7rem; border-radius: 999px; border: 1px solid var(--line-strong);
+  background: var(--surface); color: var(--muted); cursor: pointer; min-height: 36px; }
+.chip-tg.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); font-weight: 650; }
+.spinner { display: inline-block; width: .9em; height: .9em; border: 2px solid var(--line-strong); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -.1em; }
+@keyframes spin { to { transform: rotate(360deg); } }

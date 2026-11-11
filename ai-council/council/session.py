@@ -676,8 +676,10 @@ class Council:
                        chair_proposes=not self.chair_judge)
             got = await self._parallel(
                 "proposal",
-                {m.name: self._ask(m, "proposal", prompts.proposal(refined, criteria, context, question, self.compact, req=req), Proposal,
-                                   check=lambda p: check_substance(p, compact=bool(self.compact)))
+                {m.name: self._ask(m, "proposal", prompts.proposal(refined, criteria, context, question, self.compact, req=req)
+                                   + (prompts.WEB_NOTE if m.web_search else ""), Proposal,
+                                   check=lambda p: check_substance(p, compact=bool(self.compact)),
+                                   web_search=m.web_search)
                  for m in proposers},
             )
             if len(got) < self.cfg.min_quorum:
@@ -732,8 +734,9 @@ class Council:
                     m,
                     "revision",
                     prompts.revision(refined, criteria, own, proposals[own], feedback, others(m.name), question,
-                                     self.compact, req=req),
+                                     self.compact, req=req) + (prompts.WEB_NOTE if m.web_search else ""),
                     Revision,
+                    web_search=m.web_search,
                     check=lambda r, prev=proposals[own]: check_substance(_normalize_revision(r), previous=prev,
                                                                          compact=bool(self.compact)),
                     meta={"label": own},
@@ -930,7 +933,7 @@ class Council:
             self._emit("lenses", by=lens_of)
         scout_pool = [m.name for m in proposers if m.name != self.cfg.devil_advocate]
         self.rng.shuffle(scout_pool)
-        scouts = set(scout_pool[:rc.fresh_scouts])
+        scouts = set(scout_pool[:rc.fresh_scouts]) | {m.name for m in proposers if m.web_search}  # и у кого включён поиск
         self._emit("stage", stage="proposal", title="Независимые предложения (без поиска)" if not scouts else
                    f"Независимые предложения (с поиском: {', '.join(sorted(scouts))})", chair_proposes=not self.chair_judge)
         tries: dict[tuple[str, str], int] = {}

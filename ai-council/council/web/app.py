@@ -133,6 +133,10 @@ class RunRequest(BaseModel):
     compact: bool | None = None         # компактные варианты; None — как в config.yaml
     research_words: int | None = Field(default=None, ge=300, le=5000)  # длина варианта исследования
     research_shorten: bool | None = None  # возвращать слишком длинные варианты на сокращение
+    # состав на это заседание («Подобрать состав»): другая модель у участника, новые участники, поиск у участников
+    models: dict[str, str] | None = None
+    extra_members: list[dict[str, str]] | None = None
+    web_search: list[str] | None = None
     budget: float | None = Field(default=None, gt=0, le=100)
     mock: bool = False
     attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)  # id загрузок
@@ -234,7 +238,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                   chair_proposes=req.chair_proposes, fact_check=req.fact_check,
                                   compact=False if req.mode == "research" else req.compact,
                                   research_words=req.research_words if req.mode == "research" else None,
-                                  research_shorten=req.research_shorten if req.mode == "research" else None)
+                                  research_shorten=req.research_shorten if req.mode == "research" else None,
+                                  models=req.models, extra_members=req.extra_members, web_search=req.web_search)
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
 
@@ -412,7 +417,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         cfg = base_config()
         return {
             "upload": {"accept": ACCEPT, "max_files": MAX_FILES, "max_mb": MAX_FILE_BYTES // 1024 // 1024},
-            "members": [{"name": m.name, "model": m.model, "enabled": m.enabled} for m in cfg.members],
+            "members": [{"name": m.name, "model": m.model, "enabled": m.enabled, "web_search": m.web_search} for m in cfg.members],
             "chair": cfg.chair,
             "devil_advocate": cfg.devil_advocate,
             "chair_proposes": cfg.chair_proposes,
@@ -529,7 +534,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                    "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
                    "compact_proposals": cfg.compact_proposals, "mock": req.mock,
                    **({"research_words": cfg.research.max_words, "research_shorten": cfg.research.shorten_long}
-                      if mode == "research" else {})}
+                      if mode == "research" else {}),
+                   "models": {m.name: m.model for m in cfg.active_members},
+                   "extra_members": req.extra_members or [],
+                   "web_search": [m.name for m in cfg.active_members if m.web_search]}
         # «паспорт» заседания на диске: если оно прервётся, его можно будет продолжить без потери оплаченного
         cp = await asyncio.to_thread(
             Checkpoint.create, runs_dir(cfg), sid, cfg=cfg, question=req.question, mode=req.mode, rounds=rounds,

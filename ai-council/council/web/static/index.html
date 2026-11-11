@@ -111,6 +111,11 @@
           </div>
 
           <div class="compose-side">
+            <div class="advise-bar">
+              <button type="button" id="adviseBtn" class="secondary">✨ Подобрать состав под вопрос</button>
+              <small class="hint">Модель-советник разберёт вопрос и предложит режим, модели и роли — по каталогу OpenRouter, обзорам моделей из интернета и вашей истории. Обычно $0,05–0,3; обзоры запоминаются на 3 недели.</small>
+            </div>
+            <section id="adviceBox" class="card advice" hidden aria-live="polite"></section>
             <details id="params" class="params card">
               <summary>
                 <span><b>Параметры</b><small id="paramsSummary" class="params-sum"></small></span>
@@ -125,7 +130,12 @@
                 <div class="field">
                   <span class="label" id="membersLabel">Участники</span>
                   <div id="members" class="members" role="group" aria-labelledby="membersLabel"></div>
-                  <small class="hint">Чем модели отличаются и для чего подходят — «Настройки → Модели», ссылка «О модели…» у каждой.</small>
+                  <small class="hint">Чем модели отличаются и для чего подходят — «Настройки → Модели», ссылка «О модели…» у каждой. <button type="button" class="link small" id="lineupReset" hidden>Вернуть состав из настроек</button></small>
+                </div>
+                <div class="field" id="webField">
+                  <span class="label" id="webLabel">Поиск в интернете у участников</span>
+                  <div id="webMembers" class="web-members" role="group" aria-labelledby="webLabel"></div>
+                  <small class="hint" id="webHint">Для свежих цифр, цен и новостей: выбранные участники ищут в интернете, когда пишут и дорабатывают вариант, и ставят ссылки. Около $0,02 за запрос. Обычно хватает одного-двух — остальные остаются независимыми.</small>
                 </div>
                 <div class="row2">
                   <div class="field"><label for="chair" class="label">Председатель</label><select id="chair"></select></div>

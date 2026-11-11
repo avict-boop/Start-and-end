@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -19,6 +20,9 @@ class MemberConfig(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     reasoning_effort: Effort | None = None  # своя глубина рассуждений для участника
+    # Поиск в интернете на этапах, где участник пишет вариант (предложение и доработка): для свежих цифр,
+    # цен, новостей. Дороже: OpenRouter берёт плату за результаты поиска (обычно около $0,02 за запрос).
+    web_search: bool = False
 
 
 class BrandingConfig(BaseModel):
@@ -59,6 +63,15 @@ class ResearchConfig(BaseModel):
     long_factor: float = Field(default=2.0, ge=1.2, le=5.0)
 
 
+class AdvisorConfig(BaseModel):
+    """«Подобрать состав»: рекомендация моделей и режима под вопрос."""
+
+    model: str = ""            # модель-советник; пусто — модель председателя (сильная, рассуждает)
+    dossier: bool = True       # собирать «досье» моделей поиском в интернете (обзоры, бенчмарки, известные проблемы)
+    dossier_days: int = Field(default=21, ge=1, le=180)  # сколько дней досье считается свежим
+    max_candidates: int = Field(default=28, ge=6, le=60)  # сколько моделей каталога рассматривать
+
+
 class CouncilConfig(BaseModel):
     language: str = "Russian"
     mode: Mode = "debate"
@@ -89,6 +102,7 @@ class CouncilConfig(BaseModel):
     branding: BrandingConfig = Field(default_factory=BrandingConfig)
     fact_check: FactCheckConfig = Field(default_factory=FactCheckConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
+    advisor: AdvisorConfig = Field(default_factory=AdvisorConfig)
     transcribe_model: str = "google/gemini-2.5-flash"  # модель OpenRouter для расшифровки голосовых
     members: list[MemberConfig]
 
@@ -158,11 +172,39 @@ def with_overrides(
     compact: bool | None = None,
     research_words: int | None = None,
     research_shorten: bool | None = None,
+    models: dict[str, str] | None = None,
+    extra_members: list[dict[str, str]] | None = None,
+    web_search: list[str] | None = None,
 ) -> CouncilConfig:
     """Возвращает копию конфига с выбранными участниками/ролями/бюджетом, проверяя результат."""
     from pydantic import ValidationError
 
     data = base.model_dump()
+    # Состав на одно заседание (например, по «Подобрать состав»): другая модель у участника, новые участники,
+    # поиск в интернете у выбранных. Настройки программы при этом не меняются.
+    known = {m["name"] for m in data["members"]}
+    for x in extra_members or []:
+        name, model = str(x.get("name", "")).strip(), str(x.get("model", "")).strip()
+        if not re.fullmatch(r"[\w.-]{1,32}", name) or "/" not in model:
+            raise OverrideError(f"некорректный участник: {name or '—'} ({model or '—'})")
+        if name in known:
+            raise OverrideError(f"участник {name} уже есть")
+        data["members"].append({"name": name, "model": model, "enabled": False})
+        known.add(name)
+    for name, model in (models or {}).items():
+        if name not in known:
+            raise OverrideError(f"неизвестный участник: {name}")
+        if "/" not in str(model):
+            raise OverrideError(f"некорректная модель у {name}: {model}")
+        for m in data["members"]:
+            if m["name"] == name:
+                m["model"] = str(model).strip()
+    if web_search is not None:
+        unknown = set(web_search) - known
+        if unknown:
+            raise OverrideError(f"неизвестные участники: {', '.join(sorted(unknown))}")
+        for m in data["members"]:
+            m["web_search"] = m["name"] in web_search
     if members is not None:
         unknown = set(members) - {m["name"] for m in data["members"]}
         if unknown:

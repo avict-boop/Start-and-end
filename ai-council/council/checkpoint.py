@@ -191,14 +191,19 @@ class Checkpoint:
         только шаги, где модели не ответили (например, кончился лимит ключа). Итог заменит архивную запись."""
         from .config import with_overrides
         req = data.get("request") or {}
-        known = {m.name for m in base.members}
+        base_names = {m.name for m in base.members}
+        extra = [x for x in req.get("extra_members") or [] if x.get("name") and x.get("name") not in base_names]
+        known = base_names | {x["name"] for x in extra}  # участники на это заседание тоже
         members = [m for m in req.get("members") or [] if m in known] or None
         chair = req.get("chair") if req.get("chair") in known else None
         cfg = with_overrides(base, members=members, chair=chair,
                              devil_advocate=req.get("devil_advocate") if req.get("devil_advocate") in known else "",
                              budget=budget, chair_proposes=req.get("chair_proposes"),
                              fact_check=req.get("fact_check"), compact=req.get("compact_proposals"),
-                             research_words=req.get("research_words"), research_shorten=req.get("research_shorten"))
+                             research_words=req.get("research_words"), research_shorten=req.get("research_shorten"),
+                             extra_members=extra or None,
+                             models={k: v for k, v in (req.get("models") or {}).items() if k in known} or None,
+                             web_search=[n for n in req.get("web_search") or [] if n in known] or None)
         folder = Path(runs_dir) / f"{sid}.files"
         authors = {k: v for k, v in (data.get("authors") or {}).items() if v}
         cp = cls.create(runs_dir, sid, cfg=cfg, question=data.get("question", ""), mode=req.get("mode") or data.get("mode"),

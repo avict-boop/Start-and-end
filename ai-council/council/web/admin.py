@@ -51,6 +51,19 @@ class _TranslateReq(BaseModel):
     full: bool = False
 
 
+class _AdviseReq(BaseModel):
+    question: str
+    mode: str = "debate"
+    members: list[str] | None = None
+    chair: str | None = None
+    devil_advocate: str | None = None
+    budget: float | None = None
+    attachments: list[dict[str, Any]] = []   # {name, kind, chars} — только размеры, не содержимое
+    followup: bool = False
+    mock: bool = False
+    refresh: bool = False  # обновить досье моделей, даже если они свежие
+
+
 def _short(text: str, limit: int = 220) -> str:
     """Первое предложение-два описания разработчика (для списков)."""
     t = " ".join(str(text).split())
@@ -283,6 +296,100 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         new = {i: str(t).strip() for i, t in (got or {}).items() if i in texts and str(t).strip()}
         await asyncio.to_thread(save_many, runs_dir(cfg), {translate_key(lang, i, body.full): t for i, t in new.items()})
         return {"translations": {**out, **new}, "cost": comp.cost}
+
+    @app.post("/api/advise")
+    async def advise(body: _AdviseReq) -> dict[str, Any]:
+        """«Подобрать состав»: какие модели, роли, режим и поиск лучше для этого вопроса (см. council/advisor.py)."""
+        from .. import advisor as A
+        from ..client import OpenRouterClient, ProviderError
+        from ..voting import extract_json
+        if len(body.question.strip()) < 3:
+            raise HTTPException(400, "сначала напишите вопрос")
+        cfg = base_config()
+        models = await catalog.get()
+        if models is None:
+            raise HTTPException(503, "каталог OpenRouter недоступен — подбор невозможен")
+        cands = A.candidates(cfg, models)
+        hist_all = await asyncio.to_thread(model_history)
+        from ..model_notes import history_for
+        hist = {c["id"]: h for c in cands if (h := history_for(hist_all, c["id"]))}
+        rdir = runs_dir(cfg)
+        key = os.environ.get("OPENROUTER_API_KEY")
+        cost, info = 0.0, {"dossiers_built": 0, "dossiers_cached": 0, "source": "rules"}
+
+        def finish(adv: A.Advice) -> dict[str, Any]:
+            adv = A.finalize(adv, cands, cfg, body.mode)
+            plan = A.assign(adv, cfg)
+            by_id = {c["id"]: c for c in cands}
+            return {"advice": adv.model_dump(), "plan": plan, "cost": round(cost, 4), **info,
+                    "facts": {p.model: by_id.get(p.model) for p in adv.picks},
+                    "dossiers": {i: d for i, d in A.load_dossiers(rdir).items() if i in {p.model for p in adv.picks}}}
+
+        if body.mock or not key:
+            adv = A.rule_advice(body.question, body.mode, cfg, cands, hist, body.attachments)
+            if not key and not body.mock:
+                adv.caveats.append("Нет ключа OpenRouter — без анализа вопроса моделью и без обзоров моделей.")
+            return finish(adv)
+
+        client = OpenRouterClient(key, timeout=150, max_retries=1)
+        try:
+            dossiers = await asyncio.to_thread(A.load_dossiers, rdir)
+            ids = [c["id"] for c in cands]
+            need = ids if body.refresh else A.stale(dossiers, ids, cfg.advisor.dossier_days)
+            info["dossiers_cached"] = len(ids) - len(need)
+            notes: list[str] = []
+            if cfg.advisor.dossier and need:  # досье: обзоры и известные проблемы моделей — поиском, пачками
+                today = time.strftime("%Y-%m-%d")
+
+                async def one(batch: list[str]) -> tuple[dict[str, Any], float, str]:
+                    try:
+                        comp = await client.complete(cfg.fact_check.model, [{"role": "user", "content": A.dossier_prompt(batch, today)}],
+                                                     temperature=0.1, max_tokens=5000, web_search=True)
+                        ds = A.DossierSet.model_validate(extract_json(comp.text))
+                        return A.clean_dossiers(ds, batch, comp.citations, time.time()), comp.cost, ""
+                    except (ProviderError, ValueError) as e:
+                        return {}, float(getattr(getattr(e, "spent", None), "cost", 0) or 0), str(e)[:160]
+
+                batches = [need[i:i + A.DOSSIER_BATCH] for i in range(0, len(need), A.DOSSIER_BATCH)]
+                for got, c, err in await asyncio.gather(*(one(b) for b in batches)):
+                    cost += c
+                    dossiers.update(got)
+                    info["dossiers_built"] += len(got)
+                    if err:
+                        notes.append(f"Часть обзоров моделей не собрана: {err}")
+                await asyncio.to_thread(A.save_dossiers, rdir, {i: dossiers[i] for i in need if i in dossiers})
+            current = {"members": body.members, "chair": body.chair, "devil_advocate": body.devil_advocate,
+                       "models": {m.name: m.model for m in cfg.members if not body.members or m.name in body.members}}
+            prompt = A.advise_prompt(question=body.question, mode=body.mode, attachments=body.attachments,
+                                     followup=body.followup, budget=body.budget or cfg.max_cost_usd, current=current,
+                                     cands=cands, history=hist, dossiers=dossiers, language=cfg.language,
+                                     research_words=cfg.research.max_words, search_model=cfg.fact_check.model)
+            model = cfg.advisor.model or next((m.model for m in cfg.members if m.name == cfg.chair), cfg.members[0].model)
+            messages = [{"role": "user", "content": prompt}]
+            adv = None
+            for attempt in range(2):
+                try:
+                    comp = await client.complete(model, messages, temperature=0.2, max_tokens=8000, reasoning_effort="medium")
+                except ProviderError as e:
+                    notes.append(f"Советник ({model}) не ответил: {str(e)[:200]}")
+                    break
+                cost += comp.cost
+                try:
+                    adv = A.Advice.model_validate(extract_json(comp.text))
+                    break
+                except ValueError as e:
+                    messages = [*messages, {"role": "assistant", "content": comp.text},
+                                {"role": "user", "content": f"Your reply is not valid JSON of the requested format ({str(e)[:200]}). "
+                                                            "Reply with the JSON object only."}]
+            if adv is None:
+                adv = A.rule_advice(body.question, body.mode, cfg, cands, hist, body.attachments)
+            else:
+                info["source"] = "advisor"
+                info["advisor_model"] = model
+            adv.caveats.extend(notes)
+            return finish(adv)
+        finally:
+            await client.aclose()
 
     @app.get("/api/models/upgrades")
     async def model_upgrades() -> dict[str, Any]:

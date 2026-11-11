@@ -148,6 +148,10 @@ JSON format:
 {{"refined_question": "...", "criteria": ["...", "..."], "requirements": ["...", "..."]}}"""
 
 
+WEB_NOTE = ("\n\nYou have web search in this step: use it for current facts, prices, dates and news, and cite the URLs "
+            "you actually used next to the claims they support. Do not cite pages you did not open.")
+
+
 def proposal(question: str, criteria: list[str], context: str | None, original: str | None = None,
              compact: int = 0, req: list[str] | None = None) -> str:
     """compact — число слов в режиме «Компактные варианты» (0 — обычный режим)."""
