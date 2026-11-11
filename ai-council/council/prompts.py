@@ -387,6 +387,9 @@ def factcheck_block(results: dict[str, dict]) -> str:
         lines.append(f"Proposal {label}: {r.get('summary', '')}")
         for c in r.get("claims", []):
             lines.append(f"  - [{c.get('status')}] {c.get('claim')} — {c.get('note', '')}")
+            urls = [u for u in (c.get("sources") or []) if isinstance(u, str) and u.startswith("http")][:3]
+            if urls:  # источники доходят до председателя: в итоге можно сослаться на найденное
+                lines.append("    sources: " + " ; ".join(urls))
     return "\n".join(lines)
 
 

@@ -616,3 +616,43 @@ def test_title_from_sectioned_answer():
     from council.schemas import Proposal
     p = Proposal.model_validate({"краткий_вывод": "**Итог:** Схема в целом верна, но есть 3 проблемы", "таблица": "..."})
     assert p.title == "Схема в целом верна, но есть 3 проблемы"
+
+
+@pytest.mark.parametrize("bad", [
+    {"title": "...", "summary": "..."},                                       # claude: заглушка из образца
+    {"title": "...", "summary": "### Proposal D: ... complete Markdown answer"},  # kimi: повтор образца формата
+    {"url": "", "date": ""},                                                  # deepseek: посторонние поля
+])
+def test_placeholder_answers_are_sent_back_not_accepted(bad):
+    class Lazy(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.sent = False
+
+        async def complete(self, model, messages, **kw):
+            if model == "m/b" and (kw.get("meta") or {}).get("stage") == "proposal" and not self.sent:
+                self.sent = True
+                return Completion(text=json.dumps(bad, ensure_ascii=False), model=model, cost=0.001)
+            return await super().complete(model, messages, **kw)
+
+    res = run(Council(make_cfg(), Lazy(), seed=1).run("Q", mode="quick", criteria=["x"]))
+    label = next(l for l, a in res.authors.items() if a == "b")
+    assert "..." not in res.proposals[label].title and len(res.proposals[label].summary) > 20
+    errs = [e for e in res.transcript if e["member"] == "b" and e["stage"] == "proposal" and e.get("error")]
+    assert errs and ("placeholder" in errs[0]["error"] or "summary" in errs[0]["error"])
+
+
+def test_revision_that_loses_the_content_is_rejected():
+    from council.schemas import Proposal
+    from council.session import check_substance
+    long = Proposal(title="Полный вариант", summary="Подробный разбор рынка с цифрами и выводами. " * 80)
+    with pytest.raises(ValueError, match="lost most of the content"):
+        check_substance(Proposal(title="Кратко", summary="Итог: см. выше, всё как было."), previous=long)
+    assert check_substance(Proposal(title="Доработан", summary=long.summary + " Плюс новое."), previous=long)
+
+
+def test_factcheck_sources_reach_the_chair():
+    from council.prompts import factcheck_block
+    text = factcheck_block({"A": {"summary": "ok", "claims": [
+        {"claim": "Цена 10$", "status": "confirmed", "note": "так", "sources": ["https://ex.com/p", "не ссылка"]}]}})
+    assert "sources: https://ex.com/p" in text and "не ссылка" not in text

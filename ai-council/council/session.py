@@ -625,7 +625,8 @@ class Council:
                        chair_proposes=not self.chair_judge)
             got = await self._parallel(
                 "proposal",
-                {m.name: self._ask(m, "proposal", prompts.proposal(refined, criteria, context, question, self.compact, req=req), Proposal)
+                {m.name: self._ask(m, "proposal", prompts.proposal(refined, criteria, context, question, self.compact, req=req), Proposal,
+                                   check=lambda p: check_substance(p, compact=bool(self.compact)))
                  for m in proposers},
             )
             if len(got) < self.cfg.min_quorum:
@@ -690,7 +691,8 @@ class Council:
                     prompts.revision(refined, criteria, own, proposals[own], feedback, others(m.name), question,
                                      self.compact, req=req),
                     Revision,
-                    check=_normalize_revision,
+                    check=lambda r, prev=proposals[own]: check_substance(_normalize_revision(r), previous=prev,
+                                                                         compact=bool(self.compact)),
                     meta={"label": own},
                 )
             revised = await self._parallel("revision", jobs)
@@ -766,6 +768,8 @@ class Council:
                 raise ValueError(
                     f"the winner must be the voting leader {leader}; choosing {w} requires 'deviation' that starts with "
                     f"fact, risk or process and explains the specific reason, otherwise set winner to {leader}")
+            if _letters(v.final_answer) < 3 or _is_placeholder(v.final_answer):
+                raise ValueError('"final_answer" is empty or a placeholder ("...") — write the complete final answer')
             verdict_checks[0] += 1
             decided = normalize_ideas(v.ideas, idea_ids, strict=verdict_checks[0] <= self.cfg.json_retries)
             return v.model_copy(update={"winner": w, "deviation": deviation, "ideas": decided})
@@ -881,6 +885,39 @@ STATUS_ALIASES = {
 POSITION_ALIASES = {"kept": "kept", "keep": "kept", "same": "kept", "сохранена": "kept", "сохранил": "kept",
                     "improved": "improved", "refined": "improved", "strengthened": "improved", "доработана": "improved",
                     "switched": "switched", "changed": "switched", "replaced": "switched", "сменена": "switched"}
+
+
+MIN_LETTERS = 10           # меньше — это не ответ, а заглушка («**url:** **date:**»); настоящие — тысячи букв
+MIN_LETTERS_COMPACT = 10
+PLACEHOLDER_RE = re.compile(r"complete markdown answer|the full (revised )?answer|full answer here|your answer here|"
+                            r"short descriptive title|^\W*(\.\.\.|…)\W*$", re.I | re.S)
+
+
+def _letters(text: str) -> int:
+    return len(re.findall(r"[^\W\d_]", text or ""))
+
+
+def _is_placeholder(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(PLACEHOLDER_RE.search(t)) and _letters(t) < 400
+
+
+def check_substance(p: Proposal, *, previous: Proposal | None = None, compact: bool = False) -> Proposal:
+    """Отсеивает «пустышки»: модель вернула заглушку из образца формата («...», «complete Markdown answer»)
+    или посторонние поля вместо ответа. Такой ответ возвращается модели с объяснением, а не принимается.
+    Доработка, потерявшая почти весь текст, тоже не принимается — иначе она затрёт хороший вариант."""
+    need = MIN_LETTERS_COMPACT if compact else MIN_LETTERS
+    if _letters(p.summary) < need or _is_placeholder(p.summary):
+        raise ValueError('"summary" is empty or a placeholder copied from the format example ("...") — write your '
+                         "complete answer in it")
+    if _letters(p.title) < 2 or _is_placeholder(p.title):
+        raise ValueError('"title" is a placeholder — give a short descriptive title of your proposal')
+    if previous is not None:
+        before, after = _letters(previous.summary), _letters(p.summary)
+        if before > 1500 and after < before * 0.3:
+            raise ValueError(f'the revised "summary" lost most of the content ({before} → {after} letters): keep '
+                             "your full answer and revise it, do not shorten it to a fragment")
+    return p
 
 
 def _normalize_revision(r: Revision) -> Revision:
