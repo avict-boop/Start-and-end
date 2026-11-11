@@ -585,7 +585,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     res = await council.run(sp["question"], attachments=atts, **cp.run_args())
                     res.request = {**(sp.get("request") or {}), "budget": council.budget}
                     st.push({"type": "saving"})
-                    await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts, True)
+                    await asyncio.to_thread(save, res, runs_dir(cfg), sid, atts, True, cp.remove)
                     import shutil
                     for uid in sp.get("uploads") or []:  # черновики больше не нужны: файлы уже в архиве заседания
                         shutil.rmtree(uploads_dir() / uid, ignore_errors=True)
@@ -633,8 +633,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     @app.get("/api/paused")
     async def paused_list() -> dict[str, Any]:
         """Приостановленные и прерванные заседания, которые можно продолжить."""
-        cps = await asyncio.to_thread(Checkpoint.all, runs_dir(base_config()))
-        items = [c.summary() for c in cps]
+        items = await asyncio.to_thread(lambda: [c.summary() for c in Checkpoint.all(runs_dir(base_config()))])
         return {"items": [i for i in items if i["status"] != "running"]}
 
     @app.post("/api/sessions/{sid}/budget")
@@ -688,7 +687,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         d = runs_dir(cfg)
         if await asyncio.to_thread(Checkpoint.load, d, sid):
             raise HTTPException(409, "заседание уже на паузе — нажмите «Продолжить»")
-        data = json.loads(find_file(sid, "json").read_text(encoding="utf-8"))
+        path = find_file(sid, "json")
+        data = await asyncio.to_thread(lambda: json.loads(path.read_text(encoding="utf-8")))  # бывает большим
         spent = float(data.get("total_cost_usd") or 0)
         budget = body.budget if body and body.budget else round(spent + max(1.0, cfg.max_cost_usd), 2)
         if budget <= spent:
@@ -766,8 +766,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 if st.id not in known and (not q or q.casefold() in st.question.casefold()) and (not mode or st.mode == mode)]
         # приостановленные и прерванные (например, перезапуском при обновлении) — их можно продолжить
         live_ids = {x["id"] for x in live}
-        for cp in await asyncio.to_thread(Checkpoint.all, runs_dir(base_config())):
-            info = cp.summary()
+        cps = await asyncio.to_thread(lambda: [(c, c.summary()) for c in Checkpoint.all(runs_dir(base_config()))])
+        for cp, info in cps:
             if cp.id in known or (q and q.casefold() not in info["question"].casefold()) or (mode and info["mode"] != mode):
                 continue
             row = {"id": cp.id, "question": info["question"], "status": info["status"], "reason": info["reason"],

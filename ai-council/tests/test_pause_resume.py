@@ -157,3 +157,16 @@ def test_redo_archived_session_reuses_paid_answers(tmp_path):
     assert c.replayed > 0 and fresh.n < broken.n + 20
     assert "c" in res.authors.values() and len(res.proposals) == 4  # пропущенный вариант модели c доспросили
     assert {k: v for k, v in res.authors.items() if v != "c"} == old.authors  # прежние варианты — под прежними метками
+
+
+def test_stale_pause_next_to_newer_archive_record_is_dropped(tmp_path):
+    import os
+    import time
+    cp = Checkpoint.create(tmp_path, "s2", cfg=make_cfg(), question="В?", mode="quick", rounds=1, criteria=None,
+                           options=None, context=None, attachments=[], history=[], followup_of="", vision={},
+                           request={}, origin="web")
+    assert Checkpoint.load(tmp_path, "s2") is not None
+    (tmp_path / "s2.json").write_text("{}")  # итог сохранён, а пауза не снята (процесс прервался на отчётах)
+    later = time.time() + 5
+    os.utime(tmp_path / "s2.json", (later, later))
+    assert Checkpoint.load(tmp_path, "s2") is None and Checkpoint.all(tmp_path) == [] and not cp.dir.exists()

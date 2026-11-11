@@ -193,14 +193,16 @@ class Checkpoint:
                              budget=budget, chair_proposes=req.get("chair_proposes"),
                              fact_check=req.get("fact_check"), compact=req.get("compact_proposals"))
         folder = Path(runs_dir) / f"{sid}.files"
-        atts = load_from_dir(folder, data.get("attachments") or []) if folder.is_dir() else []
         authors = {k: v for k, v in (data.get("authors") or {}).items() if v}
         cp = cls.create(runs_dir, sid, cfg=cfg, question=data.get("question", ""), mode=req.get("mode") or data.get("mode"),
                         rounds=req.get("rounds") or 1, criteria=req.get("criteria") or None,
-                        options=req.get("options") or None, context=req.get("context") or None, attachments=atts,
+                        options=req.get("options") or None, context=req.get("context") or None, attachments=[],
                         history=data.get("thread") or [], followup_of=data.get("followup_of") or "", vision=vision,
                         request={**req, "budget": budget}, origin=origin, chat_id=chat_id,
                         extra={"redo_of": sid, "labels": authors, "resumes": 1})
+        if folder.is_dir():  # вложения копируются как есть: разбираются один раз, при запуске заседания
+            shutil.copytree(folder, cp.dir / "files", dirs_exist_ok=True)
+            cp.spec["attachments"] = data.get("attachments") or []
         transcript = data.get("transcript") or []
         (cp.dir / "archive_transcript.json").write_text(json.dumps(transcript, ensure_ascii=False), encoding="utf-8")
         j = Journal(cp.journal_path)
@@ -216,16 +218,36 @@ class Checkpoint:
     def load(cls, runs_dir: Path, sid: str) -> Checkpoint | None:
         d = Path(runs_dir) / PAUSED_DIR / sid
         try:
-            return cls(d, json.loads((d / SPEC).read_text(encoding="utf-8")))
+            cp = cls(d, json.loads((d / SPEC).read_text(encoding="utf-8")))
         except (OSError, ValueError):
             return None
+        if cp.stale(runs_dir):
+            cp.remove()
+            return None
+        return cp
+
+    def stale(self, runs_dir: Path) -> bool:
+        """Итог этого заседания уже в архиве и он новее паузы (процесс прервался, не успев её снять)."""
+        try:
+            done = (Path(runs_dir) / f"{self.id}.json").stat().st_mtime
+        except OSError:
+            return False
+        return done >= float(self.spec.get("updated") or 0) and not self.is_live()
 
     @classmethod
     def all(cls, runs_dir: Path) -> list[Checkpoint]:
         root = Path(runs_dir) / PAUSED_DIR
         if not root.is_dir():
             return []
-        out = [cp for d in root.iterdir() if d.is_dir() and (cp := cls.load(runs_dir, d.name))]
+        out = []
+        for d in root.iterdir():
+            cp = cls.load(runs_dir, d.name) if d.is_dir() else None
+            if cp is None:
+                continue
+            if cp.stale(runs_dir):
+                cp.remove()
+                continue
+            out.append(cp)
         return sorted(out, key=lambda c: c.spec.get("created", 0), reverse=True)
 
     def _save(self) -> None:

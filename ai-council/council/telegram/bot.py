@@ -1066,7 +1066,7 @@ class CouncilBot:
                     r = self.running.get(chat_id)
                     if r:
                         r.dirty = True
-                    await asyncio.to_thread(save, res, self.runs_dir, stem, atts, True)
+                    await asyncio.to_thread(save, res, self.runs_dir, stem, atts, True, cp.remove)
                     await asyncio.to_thread(cp.remove)
                     log.info("заседание %s: готово, $%.4f, из журнала %d ответов", stem, res.total_cost, council.replayed)
                     updater.cancel()
