@@ -439,6 +439,7 @@ class Council:
                         {"role": "assistant", "content": text},
                         {"role": "user", "content": prompts.fix_json(error)},
                     ]
+                    continuations = 0  # исправленный ответ пишется заново — ему снова можно продолжаться
                     hint = f"ответ не в нужном формате ({error[:120]}) — прошу модель исправить"
                 if attempt < self.cfg.json_retries:
                     self._call(name, stage, "retry", started, detail=hint)
@@ -1040,8 +1041,11 @@ class Council:
         def check_verdict(v: R.ResearchVerdict) -> R.ResearchVerdict:
             # В исследовании «winner» — лишь общий каркас для диагностики (итог собирается по подвопросам),
             # поэтому за него ответ не отклоняется: неверная метка — лидер голосования, иной выбор — с пометкой.
+            # Итог исследования длинный и дорогой (часто собран из нескольких продолжений): за поправимое —
+            # «известно» без подтверждённого источника, пропущенный подвопрос или идея — его не выбрасываем,
+            # а исправляем сами (неподкреплённое уходит в «неизвестно»). Заново спрашиваем только пустой итог.
             checks[0] += 1
-            strict = checks[0] <= self.cfg.json_retries
+            strict = False
             w = normalize_label(v.winner) if v.winner else leader
             if w not in valid:
                 w = leader
@@ -1053,7 +1057,12 @@ class Council:
                     f" ({deviation})" if deviation else "")
             if _letters(v.final_answer) < 3 or _is_placeholder(v.final_answer):
                 raise ValueError('"final_answer" is empty or a placeholder ("...") — write the research synthesis')
+            moved = len(v.known)
             v = R.check_verdict(v, ledger=ledger, n_subq=len(subq), strict=strict)
+            moved -= len(v.known)
+            if moved:
+                self._emit("warning", stage="verdict", member=chair.name,
+                           text=f"{moved} утв. перенесено из «известно» в «неизвестно»: нет подтверждённого источника")
             decided = normalize_ideas(v.ideas, idea_ids, strict=strict)
             return v.model_copy(update={"winner": w, "deviation": deviation, "ideas": decided})
 

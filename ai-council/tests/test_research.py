@@ -225,3 +225,30 @@ def test_compact_option_does_not_apply_to_research():
     d = res.to_dict()
     d["request"] = {"compact_proposals": True}
     assert View(d, "x").compact_note == ""
+
+
+def test_verdict_with_unsupported_known_is_repaired_not_thrown_away():
+    """Дорогой итог не отправляется переписывать из-за «известно» без источника: это исправляется само."""
+    import json as _json
+
+    class Chair(MockClient):
+        verdicts = 0
+
+        async def complete(self, model, messages, **kw):
+            comp = await super().complete(model, messages, **kw)
+            if kw.get("meta", {}).get("stage") == "verdict":
+                Chair.verdicts += 1
+                d = _json.loads(comp.text)
+                d.setdefault("known", []).append({"statement": "НЕПОДКРЕПЛЁННОЕ", "evidence_ids": ["E999"]})
+                d["coverage_audit"] = []
+                comp.text = _json.dumps(d, ensure_ascii=False)
+            return comp
+
+    events = []
+    res = run(Council(make_cfg(mode="research"), Chair(delay=0), seed=3,
+                      on_event=lambda e, **d: events.append((e, d))).run("Вопрос?"))
+    assert Chair.verdicts == 1 and not any(s.failures for s in res.stats.values())
+    assert all(k.statement != "НЕПОДКРЕПЛЁННОЕ" for k in res.verdict.known)
+    assert any(u.gap == "НЕПОДКРЕПЛЁННОЕ" for u in res.verdict.unknown)
+    assert len(res.verdict.coverage_audit) == len(res.to_dict()["research"]["subquestions"])
+    assert any(e == "warning" and "перенесено" in d.get("text", "") for e, d in events)

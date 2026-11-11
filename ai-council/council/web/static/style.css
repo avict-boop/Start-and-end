@@ -758,6 +758,6 @@ a.brand:hover .brand-name { color: var(--accent); }
 .frame-lenses { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap: .5rem; }
 .frame-lenses li { padding: .55rem .75rem; border-radius: 10px; background: var(--surface-2); min-width: 0; }
 .lens-head b { font-weight: 650; }
-.lens-head b::first-letter { text-transform: uppercase; }
+.lens-head::first-letter { text-transform: uppercase; }
 .lens-who { font-size: .78rem; color: var(--accent); font-weight: 700; margin-bottom: .1rem; }
 .lens-text { font-size: .88rem; color: var(--muted); line-height: 1.4; margin-top: .15rem; overflow-wrap: anywhere; }
