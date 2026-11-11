@@ -66,6 +66,8 @@ def _keyfacts(v: View) -> list[str]:
     a = v.agreement
     row = next((r for r in v.tally if r.get("label") == w), {}) if w else {}
     dec = f"**{_cell(v.title(w))}** (вариант {w}, {_cell(v.author(w))})" if w else "итог председателя"
+    if w and v.unacceptable:
+        dec = f"⛔ ни один вариант не подходит; лидер сравнения — вариант {w} (не рекомендован)"
     agree = f"{AGREE[a['level']]} (τ = {a['tau']:.2f})" if a else "—"
     first = f"{row.get('first_places', 0)} из {row.get('ballots')}" if row.get("ballots") else "—"
     return ["| Решение | Согласие совета | Первых мест | Совет |", "|---|---|---|---|",
@@ -140,7 +142,8 @@ def _kcu(v: View) -> list[str]:
            "цифры «из памяти» сюда не попадают.*", "", "### ✓ Известно", ""]
     if v.known:
         out += ["| Утверждение | Рамки | Источники |", "|---|---|---|"]
-        out += [f"| {_cell(k.get('statement', ''))}{' *(быстро меняется)*' if k.get('volatility') == 'changes_fast' else ''} "
+        out += [f"| {_cell(k.get('statement', ''))}{' *(быстро меняется)*' if k.get('volatility') == 'changes_fast' else ''}"
+                f"{(' <br>*' + _cell(v.known_basis(k)) + '*') if v.known_basis(k) else ''} "
                 f"| {_cell(k.get('scope', ''))} | {_erefs(v, k.get('evidence_ids') or [])} |" for k in v.known]
     else:
         out.append("*Подтверждённых источниками утверждений нет.*")

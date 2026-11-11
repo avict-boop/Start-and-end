@@ -1074,9 +1074,10 @@ class CouncilBot:
                     cp.update(status="running", reason="", message="")
                     atts = await asyncio.to_thread(cp.attachments)
                     journal = await asyncio.to_thread(Journal, cp.journal_path)
+                    pricing = None if sp.get("mock") else parse_pricing(await self.catalog.get() or [])
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
                                       seed=sp.get("seed"), journal=journal, labels=sp.get("labels"),
-                                      link_checker=None if sp.get("mock") else check_links)
+                                      link_checker=None if sp.get("mock") else check_links, pricing=pricing)
                     council_ref["c"] = council
                     r = self.running.get(chat_id)
                     if r:
@@ -1105,7 +1106,8 @@ class CouncilBot:
                         message = f"внутренняя ошибка: {type(e).__name__}"
                     spent = council.total_cost if council else 0.0
                     cp.update(status="paused", reason=reason, message=message, spent=round(spent, 6),
-                              config={**cp.spec["config"], "max_cost_usd": council.budget if council else cp.budget})
+                              config={**cp.spec["config"], "max_cost_usd": council.budget if council else cp.budget},
+                              budget_at_pause=(council.budget if council else cp.budget) if reason == "budget" else 0)
                     if reason in ("error", "stopped"):
                         import traceback
                         expected = reason == "stopped" or isinstance(e, CouncilError)
@@ -1236,8 +1238,8 @@ class CouncilBot:
         if action.startswith("+"):
             budget = round(max(budget, info["spent"]) + float(action[1:] or 0), 2)
             await asyncio.to_thread(cp.set_budget, budget)
-        if budget <= info["spent"]:
-            await self.api.answer_callback(cq["id"], "Бюджет уже потрачен — поднимите его")
+        if cp.budget_short(info["spent"]):
+            await self.api.answer_callback(cq["id"], "Бюджета не хватает — поднимите его")
             return
         if not cp.spec.get("mock") and not os.environ.get("OPENROUTER_API_KEY"):
             await self.api.answer_callback(cq["id"], "Нет OPENROUTER_API_KEY")
@@ -1304,6 +1306,10 @@ class CouncilBot:
         row = next((r for r in v.tally if r.get("label") == w), None) if w else None
         sub = [f"вариант {w}" if w else "", f"предложил {esc(v.author(w))}" if w else "",
                f"{row.get('first_places', 0)} из {row.get('ballots', 0)} за первое место" if row and row.get("ballots") else ""]
+        if w and v.unacceptable:  # лидер сравнения — не решение
+            head = "⛔ <b>Ни один вариант не подходит</b>"
+            sub = [f"лидер сравнения — вариант {w}, не рекомендован"] + sub[2:]
+            short = "Причины: " + "; ".join(v.unacceptable) + "\n\n" + short
         lines = [head, f"<i>{' · '.join(x for x in sub if x)}</i>", f"❓ <i>{esc(v.title_text)}</i>", "", md_to_tg(short)]
         if cut:
             lines += ["", "<i>Целиком — «📖 Полный ответ» или в отчёте.</i>"]

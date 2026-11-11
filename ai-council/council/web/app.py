@@ -402,6 +402,12 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         return {**data, "solo_rating": (ratings.get(f"{sid}#solo") or {}).get("rating"),
                 "solo_model": pilot.solo_model(base_config())}
 
+    @app.get("/api/reports/memory")
+    async def reports_memory() -> dict[str, Any]:
+        """Пик памяти последних сборок отчётов — чтобы подобрать reports_memory_mb."""
+        from ..archive import report_peaks
+        return await asyncio.to_thread(report_peaks, runs_dir(base_config()))
+
     @app.post("/api/sessions/{sid}/solo")
     async def pilot_solo(sid: str) -> dict[str, Any]:
         """Контрольная группа: одна модель с поиском отвечает на тот же вопрос (обычно $0,2–0,5)."""
@@ -712,9 +718,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     cp.update(status="running", reason="", message="")
                     atts = await asyncio.to_thread(cp.attachments)
                     journal = await asyncio.to_thread(Journal, cp.journal_path)
+                    pricing = None if sp.get("mock") else parse_pricing(await catalog.get() or [])
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
                                       seed=sp.get("seed"), journal=journal, labels=sp.get("labels"),
-                                      link_checker=None if sp.get("mock") else check_links)
+                                      link_checker=None if sp.get("mock") else check_links, pricing=pricing)
                     st.council = council
                     if journal.replayable or journal.loose:
                         st.push({"type": "resumed", "replayable": journal.replayable or len(journal.loose),
@@ -747,7 +754,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                         message = f"внутренняя ошибка: {e!r}"
                     spent = council.total_cost if council else 0.0
                     cp.update(status="paused", reason=reason, message=message, spent=round(spent, 6),
-                              config={**cp.spec["config"], "max_cost_usd": council.budget if council else cp.budget})
+                              config={**cp.spec["config"], "max_cost_usd": council.budget if council else cp.budget},
+                              budget_at_pause=(council.budget if council else cp.budget) if reason == "budget" else 0)
                     final = "paused"
                     st.push(paused_event(cp))
                     if reason in ("error", "stopped"):
@@ -808,8 +816,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         spent = float(cp.spec.get("spent") or 0) or await asyncio.to_thread(lambda: Journal(cp.journal_path).spent)
         if budget:
             cp.set_budget(budget)
-        if cp.budget <= spent:
-            raise HTTPException(400, f"бюджет ${cp.budget:g} уже потрачен (${spent:.2f}) — укажите бюджет больше")
+        if cp.budget_short(spent):
+            raise HTTPException(400, f"бюджета ${cp.budget:g} не хватает (потрачено ${spent:.2f}, следующий запрос не "
+                                     "помещается) — укажите бюджет больше")
         client = make_client(cp.config(), bool(cp.spec.get("mock")))
         cp.update(resumes=int(cp.spec.get("resumes") or 0) + 1)
         launch(cp, client)

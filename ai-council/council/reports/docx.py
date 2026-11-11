@@ -796,7 +796,10 @@ class _Report:
                 c.add_paragraph(sub, style="Council Meta")
         if w:
             who = "ваш вариант" if v.author(w) == "пользователь" else f"предложил {v.author(w)}"
-            cell(t.cell(0, 0), "РЕШЕНИЕ", f"◆ {v.title(w)}", f"вариант {w} · {who}")
+            if v.unacceptable:
+                cell(t.cell(0, 0), "РЕШЕНИЕ", "⛔ Ни один вариант не подходит", f"лидер сравнения — вариант {w}, не рекомендован")
+            else:
+                cell(t.cell(0, 0), "РЕШЕНИЕ", f"◆ {v.title(w)}", f"вариант {w} · {who}")
         else:
             cell(t.cell(0, 0), "РЕШЕНИЕ", "Итог председателя")
         _cell_shade(t.cell(0, 0), self.theme["dec_soft"])
@@ -922,6 +925,8 @@ class _Report:
                 inline_markdown(t.cell(n, 0).paragraphs[0], k.get("statement", ""))
                 if k.get("volatility") == "changes_fast":
                     _small(t.cell(n, 0).add_paragraph(), "быстро меняется — проверьте дату", size=8)
+                if v.known_basis(k):
+                    _small(t.cell(n, 0).add_paragraph(), v.known_basis(k), size=8)
                 _cell_text(t.cell(n, 1), k.get("scope", ""))
                 self._erefs(t.cell(n, 2).paragraphs[0], k.get("evidence_ids") or [])
             self.doc.add_paragraph().paragraph_format.space_after = Pt(0)

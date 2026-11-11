@@ -16,6 +16,9 @@ x-common: &common
   logging:
     driver: json-file
     options: { max-size: "10m", max-file: "3" }
+  # Предел памяти контейнера (по желанию): сначала посмотрите пик сборки отчётов в «Настройки → Заседание»,
+  # затем раскомментируйте с запасом. Превысит — Docker перезапустит контейнер (restart: unless-stopped).
+  # mem_limit: 700m
 
 services:
   bot:

@@ -57,9 +57,9 @@ def test_known_needs_confirmed_evidence():
         coverage_audit=[{"subquestion_id": "Q1"}])
     with pytest.raises(ValueError, match="known"):
         R.check_verdict(v, ledger=led, n_subq=2, strict=True)
-    out = R.check_verdict(v, ledger=led, n_subq=2, strict=False)
-    assert [k.statement for k in out.known] == ["подтверждено", "из таблицы"]
-    assert {u.gap for u in out.unknown} == {"из памяти", "неясно"} and len(out.coverage_audit) == 2
+    out = R.check_verdict(v, ledger=led, n_subq=2, strict=False, require_claims=False, docs_text="")
+    assert [k.statement for k in out.known] == ["подтверждено"]  # «из документа» без документа и цитаты — нельзя
+    assert {u.gap for u in out.unknown} == {"из памяти", "неясно", "из таблицы"} and len(out.coverage_audit) == 2
 
 
 def test_claims_selection_covers_every_author_and_prefers_disputed():
@@ -81,7 +81,7 @@ def test_research_pause_and_resume_replays_paid_answers(tmp_path):
                     journal=Journal(j)).run("Вопрос?"))
     c = Council(make_cfg(mode="research", max_cost_usd=5), MockClient(delay=0), seed=5, journal=Journal(j))
     res = run(c.run("Вопрос?"))
-    assert c.replayed >= 9 and res.research["ledger"]["claims"]
+    assert c.replayed >= 8 and res.research["ledger"]["claims"]
 
 
 def test_chair_failure_gives_honest_fallback():

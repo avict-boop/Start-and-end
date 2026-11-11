@@ -303,6 +303,12 @@ class Checkpoint:
         self.spec.setdefault("config", {})["max_cost_usd"] = float(budget)
         self.update()
 
+    def budget_short(self, spent: float) -> bool:
+        """Продолжать с этим бюджетом бессмысленно: он потрачен, или пауза была из-за резерва бюджета (следующий
+        запрос не помещался) и бюджет с тех пор не подняли."""
+        at_pause = float(self.spec.get("budget_at_pause") or 0) if self.spec.get("reason") == "budget" else 0.0
+        return self.budget <= spent or (at_pause > 0 and self.budget <= at_pause)
+
     def lock(self) -> Any:
         """Блокировка «заседание сейчас идёт» между процессами (сайт и бот), снимается при выходе процесса."""
         from .archive import _ProcessLock

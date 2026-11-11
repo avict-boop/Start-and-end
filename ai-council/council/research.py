@@ -94,6 +94,7 @@ class RClaim(BaseModel):
     subquestions: list[str] = Field(default_factory=list)  # к каким подвопросам относится: ["Q2"]
     checkability: str = "public"   # public | registry | private — можно ли проверить открытым поиском
     check_path: str = ""           # где проверять (реестр, документ, правообладатель)
+    decisive: bool = False         # вывод или рекомендация изменились бы, окажись утверждение ложным
 
     @model_validator(mode="before")
     @classmethod
@@ -113,6 +114,13 @@ class RClaim(BaseModel):
     @classmethod
     def _chk(cls, v: Any) -> str:
         return _norm(v, ("public", "registry", "private"), "public")
+
+    @field_validator("decisive", mode="before")
+    @classmethod
+    def _dec(cls, v: Any) -> bool:
+        if isinstance(v, str):
+            return v.strip().lower() in ("true", "yes", "1", "да", "high", "critical")
+        return bool(v)
 
     @field_validator("text", "scope", "why_it_matters", "id", "check_path", mode="before")
     @classmethod
@@ -284,6 +292,9 @@ class KnownItem(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
     scope: str = ""
     volatility: str = "unknown"
+    doc_ref: str = ""     # для данных из документов пользователя: файл и место
+    doc_quote: str = ""   # дословная короткая цитата из документа — программа ищет её в тексте вложений
+    verified: list[str] = Field(default_factory=list)  # ставит программа: текст проверенных утверждений реестра
 
     @model_validator(mode="before")
     @classmethod
@@ -292,7 +303,7 @@ class KnownItem(BaseModel):
             return {"statement": data, "evidence_ids": re.findall(r"\bE\d+\b|\[DOC", data)}
         return data
 
-    @field_validator("statement", "scope", mode="before")
+    @field_validator("statement", "scope", "doc_ref", "doc_quote", mode="before")
     @classmethod
     def _txt(cls, v: Any) -> str:
         return to_text(v)
@@ -468,12 +479,15 @@ versions) as "changes_fast".
 Make every claim ATOMIC: one entity, one fact or number, one period, one geography — if a sentence holds several
 facts, write several claims. Name the subquestions each claim supports ("subquestions": ["Q2"]). Set "checkability":
 public (a primary or reputable public source can confirm it), registry (only a named registry or database can; name
-it in "check_path"), private (needs the rights holder, a contract or an internal document)."""
+it in "check_path"), private (needs the rights holder, a contract or an internal document). Who publicly holds the
+rights to a product, or whether it is in a public registry, is public or registry, not private; only the terms a
+company would offer YOU are private. Set "decisive": true if your conclusion or recommendation would change were
+the claim false."""
 
 
 CLAIM_JSON = ('{"text": "one atomic checkable statement", "basis": "user_doc|calc|memory|search_reported", '
               '"scope": "period, geography, units", "volatility": "stable|changes_fast|unknown", '
-              '"subquestions": ["Q1"], "checkability": "public|registry|private", "check_path": "", '
+              '"subquestions": ["Q1"], "checkability": "public|registry|private", "check_path": "", "decisive": false, '
               '"source_leads": ["..."], "why_it_matters": "..."}')
 
 
@@ -728,7 +742,7 @@ JSON format:
 
 
 DECISION_CARD_NOTE = ("\n- \"decision_card\": a one-page executive brief shown FIRST to the user: summary_decision (at most 60 "
-                      "words), top_known (at most 5 known facts with E-ids), key_unknowns (at most 5, with how to check), "
+                      "words), top_known (at most 5 items restated from \"known\", each with its E-ids), key_unknowns (at most 5, with how to check), "
                       "next_steps (at most 5).")
 DECISION_CARD_JSON = ('\n "decision_card": {{"summary_decision": "...", "top_known": ["... [E1]"], '
                       '"key_unknowns": ["..."], "next_steps": ["..."]}},').replace("{{", "{").replace("}}", "}")
@@ -762,10 +776,14 @@ Write a RESEARCH SYNTHESIS, not a defence of one winner.
 - Build "final_answer" over {qids} using each subquestion's backbone leader; integrate verified findings and kept ideas
   of all proposals. "winner": the overall backbone label ({', '.join(labels)}); the overall voting leader is {leader or "—"}.
   If you choose another winner or override a section leader, fill "deviation" as "<fact|risk|process>: reason".
-- "known": ONLY claims with status confirmed in the ledger whose text and scope entail the statement — cite their
-  claim ids in "claim_ids" and their E-ids in "evidence_ids" — or direct user-document data (evidence id "DOC", name
-  the file and place; it is user data, not independent verification). Model agreement and [MEM] claims NEVER qualify
-  as known. Claims added after the ledger (new_after_ledger) cannot be known unless the ledger re-checked them.
+- "known": ONLY claims with status confirmed in the ledger whose text and scope entail the statement. EVERY known
+  item MUST cite the confirmed ledger claim ids it rests on in "claim_ids" and their E-ids in "evidence_ids"; the
+  statement must not go beyond those claims (no new numbers, dates, entities, places or broader scope — "the
+  product exists" does not support "the company grants exclusive rights"). Direct user-document data: evidence id
+  "DOC", "doc_ref" = file and place, "doc_quote" = a short VERBATIM quote (at most 25 words) from that document; it
+  is user data, not independent verification. The program checks all of this and moves anything else to unknown.
+  Model agreement and [MEM] claims NEVER qualify as known. Claims added after the ledger (new_after_ledger) cannot
+  be known unless the ledger re-checked them.
 - In "final_answer" itself, label memory-only, new_after_ledger and unresolved statements as uncertain; a vote or
   agreement is not evidence. Claims the ledger lists as "not checkable by public search" go to "unknown" with how
   to check them.{DECISION_CARD_NOTE if card else ""}
@@ -784,7 +802,7 @@ Write a RESEARCH SYNTHESIS, not a defence of one winner.
 JSON format:
 {{"winner": "{labels[0] if labels else 'A'}", "section_backbone": {{"Q1": "B"}},
  "final_answer": "concise structured Markdown with [E1]/[DOC]/[CALC]/[MEM] tags and a Sources list with URLs",
- "why": "how the synthesis was built", "known": [{{"statement": "...", "claim_ids": ["A-C1"], "evidence_ids": ["E1"], "scope": "...", "volatility": "stable|changes_fast|unknown"}}],{DECISION_CARD_JSON if card else ""}
+ "why": "how the synthesis was built", "known": [{{"statement": "...", "claim_ids": ["A-C1"], "evidence_ids": ["E1"], "scope": "...", "volatility": "stable|changes_fast|unknown"}}, {{"statement": "...", "evidence_ids": ["DOC"], "doc_ref": "file.pdf, p. 3", "doc_quote": "verbatim words"}}],{DECISION_CARD_JSON if card else ""}
  "contested": [{{"issue": "...", "positions": ["..."], "evidence_ids": ["E2"], "why_they_differ": "...", "what_would_resolve": "..."}}],
  "unknown": [{{"gap": "...", "reason": "unverified_memory|no_public_data|not_checked", "how_to_check": "..."}}],
  "coverage_audit": [{{"subquestion_id": "Q1", "status": "covered|partial|unknown", "note": "where"}}],
@@ -843,6 +861,7 @@ def select_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, A
             s = 3.0 * disputed.get(c.id.upper(), 0) + (2.0 if c.volatility == "changes_fast" else 0.0)
             s += 2.0 if c.basis == "memory" and re.search(r"\d", c.text) else 0.0
             s += 1.0 if c.basis == "search_reported" else 0.0
+            s += 3.0 if c.decisive else 0.0  # от него зависит вывод
             s += 0.5 / (i + 1)  # автор ставит важное выше
             if NEGATIVE_RE.search(c.text):
                 s -= 4.0  # «нет / не зарегистрирован / ни один» поиском не доказать: проверяем, только если места хватит
@@ -883,13 +902,15 @@ def _same_claim(a: tuple, b: tuple) -> bool:
 
 
 def prepare_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, Any], limit: int, *, n_subq: int = 0,
-                   dedupe: bool = True, defer_private: bool = True, coverage_first: bool = True
-                   ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                   dedupe: bool = True, defer_private: bool = True, coverage_first: bool = True,
+                   check_decisive_private: bool = True) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Что проверять поиском — и что сразу в «неизвестно».
 
     1. Дубли разных авторов склеиваются (проверяются один раз; статус получат все копии — «dup_ids»).
     2. Непубличное (права, внутренние цены — checkability private) и утверждения об отсутствии («нигде нет») поиском
-       не решить — они уходят в «неизвестно» с тем, где проверять («deferred»), и не тратят проверки.
+       не решить — они уходят в «неизвестно» с тем, где проверять («deferred»), и не тратят проверки. Но метку
+       «private» ставит автор: решающее для вывода утверждение с такой меткой один раз проверяется публичным
+       поиском (check_decisive_private) — автор мог ошибиться, а правообладатель или регистрация часто публичны.
     3. Отбор: сначала по утверждению на каждый подвопрос, затем по одному от каждого автора, затем самые важные
        (спорные по мнению критиков, быстро меняющиеся, числа «из памяти»)."""
     base = select_claims(proposals, critiques, 10 ** 6)  # все кандидаты, по важности
@@ -900,9 +921,12 @@ def prepare_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, 
     for c in base:
         rc = by_id.get(c["id"].upper())
         c = {**c, "subquestions": list(rc.subquestions) if rc else [], "checkability": rc.checkability if rc else "public",
-             "check_path": rc.check_path if rc else "", "dup_ids": [],
-             "critical": bool(c.get("disputed")) or c.get("volatility") == "changes_fast"}
-        if defer_private and (c["checkability"] == "private" or NEGATIVE_RE.search(c["text"])):
+             "check_path": rc.check_path if rc else "", "dup_ids": [], "decisive": bool(rc and rc.decisive),
+             "critical": bool(c.get("disputed")) or c.get("volatility") == "changes_fast" or bool(rc and rc.decisive)}
+        private = c["checkability"] == "private" and not (check_decisive_private and c["decisive"])
+        if c["checkability"] == "private" and not private:
+            c["private_checked"] = True  # автор считал непубличным, но от него зависит вывод — один публичный поиск
+        if defer_private and (private or NEGATIVE_RE.search(c["text"])):
             deferred.append({"ids": [c["id"]], "text": c["text"], "reason": "absence" if NEGATIVE_RE.search(c["text"]) else "private",
                              "how_to_check": c["check_path"] or ("запрос правообладателю" if c["checkability"] == "private"
                                                                  else "проверка по реестрам и запрос — отсутствие поиском не доказать")})
@@ -944,7 +968,7 @@ def claims_batch(selected: list[dict[str, Any]]) -> str:
     lines = []
     for c in selected:
         why = f" | critics: {'; '.join(c['reasons'])}" if c.get("reasons") else ""
-        lines.append(f"{c['id']}{' CRITICAL' if c.get('critical') else ''}: {c['text']}"
+        lines.append(f"{c['id']}{' CRITICAL' if c.get('critical') else ''}{' DECISIVE' if c.get('decisive') else ''}: {c['text']}"
                      + (f" (scope: {c['scope']})" if c.get("scope") else "")
                      + f" [basis {c['basis']}, {c['volatility']}]{why}")
     return "\n".join(lines)
@@ -1154,57 +1178,148 @@ def check_length(p: Proposal, max_words: int, factor: float) -> Proposal:
     return p
 
 
+_IDS_RE = re.compile(r"\[[^\]]*\]|\b[A-Z]-C\d+\b|\b[EQR]\d+\b")
+_NUM_RE = re.compile(r"\d+(?:[.,]\d+)*")
+
+
+def _numbers(text: str) -> set[str]:
+    """Числа утверждения (без номеров E1, A-C2, Q3 и однозначных счётов «3 компании»): только цифры, без разделителей."""
+    t = _IDS_RE.sub(" ", text or "")
+    t = re.sub(r"(?<=\d)[ \u00a0\u202f](?=\d{3}\b)", "", t)  # 1 360 → 1360
+    out = set()
+    for n in _NUM_RE.findall(t):
+        d = re.sub(r"[.,]", "", n).lstrip("0") or "0"
+        if len(d) > 1 or re.search(r"[.,]", n):
+            out.add(d)
+    return out
+
+
+def _plain(text: str) -> str:
+    t = (text or "").lower().replace("ё", "е")
+    t = re.sub(r"[«»\"“”„'’`*_>#|]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _known_problem(k: KnownItem, *, ok_ids: set[str], claim_by: dict[str, Any], require_claims: bool,
+                   numbers_check: bool, docs: str) -> str:
+    """Почему пункт нельзя оставить в «известно» (пустая строка — можно)."""
+    ids = [i for i in k.evidence_ids if i]
+    ext = [i for i in ids if i != "DOC"]
+    if "DOC" in ids:
+        if not docs:
+            return "ссылка на документ пользователя, но документов нет"
+        q = _plain(k.doc_quote)
+        if len(q.split()) < 2:
+            return "ссылка на документ без дословной цитаты (doc_quote)"
+        if q not in docs:
+            return "цитата не найдена в приложенных документах"
+    if not ext:
+        return "" if "DOC" in ids else "нет источника"
+    if not all(i in ok_ids for i in ext):
+        return "источник не подтверждён в реестре"
+    if not k.claim_ids:
+        return "не указано, какое проверенное утверждение реестра его подтверждает" if require_claims else ""
+    cl = [claim_by.get(c) for c in k.claim_ids]
+    if not all(c and c.get("status") == "confirmed" for c in cl):
+        return "опорное утверждение не подтверждено"
+    if not set(ext) <= {e for c in cl for e in c.get("evidence") or []}:
+        return "источник не из подтверждения названного утверждения"
+    if numbers_check:
+        extra = _numbers(k.statement) - set().union(*(_numbers(f"{c.get('text', '')} {c.get('scope', '')}") for c in cl))
+        if extra:
+            return "в формулировке есть числа, которых нет в проверенном утверждении: " + ", ".join(sorted(extra)[:5])
+    return ""
+
+
+def _mark_answer(answer: str, bad: list[tuple[KnownItem, str]], all_ids: set[str], mark: bool) -> str:
+    """Неподтверждённое — видно и там, где читают сначала: предупреждение в начале, пометки в тексте, полный список."""
+    if all_ids:  # ссылка на источник, которого нет в реестре
+        def fix(m: re.Match) -> str:
+            ids = re.findall(r"\bE\d+\b", m.group(0))
+            missing = [i for i in ids if i not in all_ids]
+            return m.group(0)[:-1] + " ⚠ нет в реестре]" if missing and "⚠" not in m.group(0) else m.group(0)
+        answer = re.sub(r"\[[^\]\n]{0,60}\]", fix, answer)
+    if not (bad and mark):
+        return answer
+    for k, _ in bad:
+        st = k.statement.strip()
+        if len(st) >= 20 and st in answer:
+            answer = answer.replace(st, st + " ⚠ *(не подтверждено источниками)*", 1)
+    head = (f"> ⚠ **{len(bad)} утв. из «известно» не подтверждены источниками** и перенесены в «неизвестно» — "
+            "список в конце итога. Не опирайтесь на них без проверки.\n\n")
+    tail = ("\n\n> ⚠ **Не подтверждено источниками** — председатель указал эти утверждения как известные, но опоры в "
+            "реестре проверенных источников для них нет (перенесены в «неизвестно»):\n"
+            + "\n".join(f"> - {k.statement} — *{why}*" for k, why in bad))
+    return head + answer + tail
+
+
+def _check_card(card: DecisionCard, known: list[KnownItem], bad: list[tuple[KnownItem, str]]) -> DecisionCard:
+    """Карточку решения читают первой: «известное» в ней — только из прошедшего проверку."""
+    if not any((card.summary_decision, card.top_known, card.key_unknowns, card.next_steps)):
+        return card
+    eids = {e for k in known for e in k.evidence_ids if e != "DOC"}
+    texts = [_plain(k.statement) for k in known]
+    keep, dropped = [], []
+    for t in card.top_known:
+        ids = set(re.findall(r"\bE\d+\b", t.upper()))
+        n = _plain(_IDS_RE.sub(" ", t))
+        same = any(n and x and (n in x or x in n) for x in texts)
+        (keep if (ids and ids <= eids) or same else dropped).append(t)
+    if not keep and known:
+        keep = [k.statement + (f" [{', '.join(k.evidence_ids)}]" if k.evidence_ids else "") for k in known[:5]]
+    unknowns = list(card.key_unknowns) + [f"{t} — не подтверждено источниками" for t in dropped]
+    return card.model_copy(update={"top_known": keep[:5], "key_unknowns": unknowns[:8]})
+
+
 def check_verdict(v: ResearchVerdict, *, ledger: dict[str, Any] | None, n_subq: int, strict: bool,
-                  mark: bool = False) -> ResearchVerdict:
-    """«Известно» — только с опорой на подтверждённые источники реестра или документы пользователя.
-    Ошибка — ответ возвращается председателю; на последней попытке неподкреплённое переносится в «неизвестно»."""
+                  mark: bool = False, require_claims: bool = True, numbers_check: bool = True,
+                  docs_text: str = "") -> ResearchVerdict:
+    """«Известно» — только с опорой на подтверждённые утверждения реестра или на цитату из документов пользователя.
+    Каждый пункт должен назвать опорные утверждения (claim_ids, require_claims), источники — из их подтверждений,
+    в формулировке — без чисел, которых в проверенном нет (numbers_check). Для данных из документов («DOC») —
+    дословная цитата, которая есть в тексте вложений. Что не прошло — в «неизвестно» с причиной; в тексте итога
+    это видно сразу (mark), карточка решения — только из прошедшего."""
     ok_ids = confirmed_ids(ledger)
     all_ids = {e["id"] for e in (ledger or {}).get("evidence", [])}
     claim_by = {c["id"].upper(): c for c in (ledger or {}).get("claims", [])}
-    bad, known = [], []
+    docs = _plain(docs_text)
+    bad: list[tuple[KnownItem, str]] = []
+    known: list[KnownItem] = []
     unknown = list(v.unknown)
     for k in v.known:
-        ids = [i for i in k.evidence_ids if i]
-        ok = "DOC" in ids or (ids and all(i in ok_ids for i in ids))
-        if ok and k.claim_ids and "DOC" not in ids:
-            # опора названа: все утверждения подтверждены, и источники — из их подтверждений
-            cl = [claim_by.get(c) for c in k.claim_ids]
-            ok = all(c and c.get("status") == "confirmed" for c in cl) and \
-                set(ids) <= {e for c in cl if c for e in c.get("evidence") or []}
-        if ok:
-            known.append(k)
+        why = _known_problem(k, ok_ids=ok_ids, claim_by=claim_by, require_claims=require_claims,
+                             numbers_check=numbers_check, docs=docs)
+        if why:
+            bad.append((k, why))
         else:
-            bad.append(k)
+            verified = [claim_by[c]["text"] for c in k.claim_ids if c in claim_by and claim_by[c].get("text")]
+            known.append(k.model_copy(update={"verified": verified}))
     contested = [c.model_copy(update={"evidence_ids": [i for i in c.evidence_ids if i in all_ids]}) for c in v.contested]
     have = {c.subquestion_id for c in v.coverage_audit}
     missing = [f"Q{i}" for i in range(1, n_subq + 1) if f"Q{i}" not in have]
     if strict and (bad or missing):
         parts = []
         if bad:
-            parts.append('"known" may contain ONLY claims backed by CONFIRMED ledger evidence ids or user documents '
-                         '("DOC"); move these to "contested" or "unknown": '
-                         + "; ".join(f'"{k.statement[:80]}" (ids: {", ".join(k.evidence_ids) or "none"})' for k in bad[:5]))
+            parts.append('"known" may contain ONLY items resting on CONFIRMED ledger claims (claim_ids + their E-ids, '
+                         'no new numbers) or on a verbatim user-document quote ("DOC"); move these to "contested" or '
+                         '"unknown": ' + "; ".join(f'"{k.statement[:80]}" ({why})' for k, why in bad[:5]))
         if missing:
             parts.append(f'"coverage_audit" must have one entry per subquestion; missing: {", ".join(missing)}')
         raise ValueError(" ".join(parts))
-    unknown += [UnknownItem(gap=k.statement, reason="not_checked",
-                            how_to_check="нет подтверждения в реестре источников") for k in bad]
+    unknown += [UnknownItem(gap=k.statement, reason="not_checked", how_to_check=f"не подтверждено: {why}")
+                for k, why in bad]
     audit = list(v.coverage_audit) + [CoverageItem(subquestion_id=q, status="unknown", note="председатель не указал")
                                       for q in missing]
-    answer = v.final_answer
-    if bad and mark:  # «известно» без источника перенесено — читатель текста итога должен это видеть
-        answer += ("\n\n> ⚠ **Не подтверждено источниками** — эти утверждения председатель указал как известные, но в "
-                   "реестре проверенных источников опоры для них нет (перенесены в «неизвестно»):\n"
-                   + "\n".join(f"> - {k.statement}" for k in bad[:10]))
+    answer = _mark_answer(v.final_answer, bad, all_ids, mark)
     return v.model_copy(update={"known": known, "unknown": unknown, "contested": contested, "coverage_audit": audit,
-                                "final_answer": answer})
+                                "final_answer": answer, "decision_card": _check_card(v.decision_card, known, bad)})
 
 
 def fallback_verdict(leader: str, proposals: dict[str, Proposal], ledger: dict[str, Any] | None,
                      subq: list[str]) -> ResearchVerdict:
     """Председатель не ответил: не выдаём текст лидера за исследование — показываем реестр и лучший вариант с пометкой."""
-    known = [KnownItem(statement=c["text"], evidence_ids=c["evidence"], scope=c.get("scope", ""),
-                       volatility=c.get("volatility", "unknown"))
+    known = [KnownItem(statement=c["text"], claim_ids=[c["id"]], evidence_ids=c["evidence"], scope=c.get("scope", ""),
+                       volatility=c.get("volatility", "unknown"), verified=[c["text"]])
              for c in (ledger or {}).get("claims", []) if c.get("status") == "confirmed" and c.get("evidence")]
     contested = [ContestedItem(issue=c["text"], evidence_ids=c["evidence"], positions=c.get("notes", []))
                  for c in (ledger or {}).get("claims", []) if c.get("status") in ("contested_in_sources", "refuted")]

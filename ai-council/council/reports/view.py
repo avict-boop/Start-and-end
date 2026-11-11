@@ -410,6 +410,18 @@ class View:
     def known(self) -> list[dict[str, Any]]:
         return self.research_list("known")
 
+    @staticmethod
+    def known_basis(k: dict[str, Any]) -> str:
+        """На что опирается пункт «известно»: проверенная формулировка реестра или цитата из документа."""
+        st = (k.get("statement") or "").strip().lower()
+        v = [t for t in k.get("verified") or [] if t.strip().lower() != st]
+        out = ["проверено: «" + "», «".join(v) + "»"] if v else []
+        if "DOC" in (k.get("evidence_ids") or []):
+            ref = f" ({k['doc_ref']})" if k.get("doc_ref") else ""
+            q = f": «{k['doc_quote']}»" if k.get("doc_quote") else ""
+            out.append(f"по вашему документу{ref}{q} — не независимая проверка")
+        return "; ".join(out)
+
     @property
     def contested(self) -> list[dict[str, Any]]:
         return self.research_list("contested")

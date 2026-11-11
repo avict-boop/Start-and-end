@@ -372,6 +372,9 @@ def _keyfacts(v: View, *, full: bool) -> str:
                f'<div class="s">вариант {_e(w)} · {who}</div>')
     else:
         dec = '<div class="k">Решение</div><div class="v">Итог председателя</div>'
+    if w and v.unacceptable:
+        dec = ('<div class="k">Решение</div><div class="v">⛔ Ни один вариант не подходит</div>'
+               f'<div class="s">лидер сравнения — вариант {_e(w)}, не рекомендован</div>')
     a = v.agreement
     if a:
         n = AGREE_DOTS[a["level"]]
@@ -500,6 +503,7 @@ def _kcu(v: View) -> str:
                  '<th style="width:16%">Источники</th></tr></thead><tbody>' + "".join(
                      f'<tr><td>{_inline(k.get("statement", ""))}'
                      + ('<div class="muted small">быстро меняется — проверьте дату</div>' if k.get("volatility") == "changes_fast" else "")
+                     + (f'<div class="muted small">{_e(v.known_basis(k))}</div>' if v.known_basis(k) else "")
                      + f'</td><td class="small">{_inline(k.get("scope", ""))}</td><td>{_eref(v, k.get("evidence_ids") or [])}</td></tr>'
                      for k in known) + "</tbody></table>" if known else '<p class="muted">Подтверждённых источниками утверждений нет.</p>'))
     cont = v.contested

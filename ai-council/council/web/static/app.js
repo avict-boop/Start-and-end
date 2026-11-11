@@ -981,7 +981,7 @@ async function loadHistory() {
   if (!items.length) { ul.innerHTML = '<li class="muted small" style="padding:0 .75rem">Пока пусто</li>'; return; }
   ul.innerHTML = items.slice(0, HISTORY_LIMIT).map((it) => {
     const meta = it.status === "done"
-      ? `${esc(niceDate(it))}${it.winner ? ` · решение ${esc(it.winner)}` : ""}`
+      ? `${esc(niceDate(it))}${it.winner ? (it.unacceptable ? " · ни один не подходит" : ` · решение ${esc(it.winner)}`) : ""}`
       : `${it.status === "running" ? '<span class="dot-run"></span>' : ""}${esc(niceDate(it))} · ${STATUS_TEXT[it.status] || esc(it.status)}${it.spent ? ` · ${money(it.spent)}` : ""}`;
     return `<li class="item" data-id="${esc(it.id)}"><button type="button" class="open" data-open-id="${esc(it.id)}" title="${esc(shortTitle(it.question, 300))}">
       <span class="q">${esc(shortTitle(it.question))}</span><span class="meta">${meta}</span></button>
@@ -1027,7 +1027,8 @@ async function loadArchive() {
     return `<article class="arc-item">
       <div class="arc-q" data-open="${esc(it.id)}" tabindex="0" role="link" title="${esc(shortTitle(it.question, 300))}">${status}${esc(shortTitle(it.question))}</div>
       <div class="arc-actions">${dl}${del}</div>
-      ${done && it.winner ? `<div class="arc-win"><span class="lbl" style="width:24px;height:24px;font-size:.78rem;margin-right:.35rem;vertical-align:-2px">${esc(it.winner)}</span>${esc(it.winner_title)} <span class="muted">· ${esc(it.winner_author)}</span></div>` : ""}
+      ${done && it.winner && it.unacceptable ? `<div class="arc-win">⛔ Ни один вариант не подходит <span class="muted">· лидер сравнения — ${esc(it.winner)}</span></div>` : ""}
+      ${done && it.winner && !it.unacceptable ? `<div class="arc-win"><span class="lbl" style="width:24px;height:24px;font-size:.78rem;margin-right:.35rem;vertical-align:-2px">${esc(it.winner)}</span>${esc(it.winner_title)} <span class="muted">· ${esc(it.winner_author)}</span></div>` : ""}
       <div class="arc-meta">${meta}</div>
     </article>`;
   }).join("");
@@ -1271,7 +1272,8 @@ function apply(s, ev) {
     case "verdict":
       s.verdict = ev.verdict;
       s.ideas = ev.ideas || [];
-      logAdd(s, `Председатель выбрал вариант ${ev.verdict.winner}`, "k-ok");
+      logAdd(s, ev.verdict.acceptable === false ? `Председатель: ни один вариант не подходит (лидер сравнения — ${ev.verdict.winner})`
+        : `Председатель выбрал вариант ${ev.verdict.winner}`, ev.verdict.acceptable === false ? "k-warn" : "k-ok");
       break;
     case "done":
       setTimeout(() => refreshBalance(true), 3000);  // расход заседания уже списан
@@ -1452,7 +1454,7 @@ function renderResearch(s) {
     ? `<div class="decision-card"><div class="dc-title">Карточка решения</div>${card.summary_decision ? `<p class="dc-sum">${inline(card.summary_decision)}</p>` : ""}
       <div class="dc-grid">${cardList("Известно", card.top_known)}${cardList("Главные пробелы", card.key_unknowns)}${cardList("Следующие шаги", card.next_steps)}</div></div>` : "";
   h += `<h3>Что известно, что спорно, чего не знает никто</h3><p class="muted small">«Известно» — только то, что подтвердили найденные источники или ваши документы; согласие моделей сюда не попадает.</p>`;
-  h += `<div class="kcu"><div class="kcu-col ok"><h4>Известно</h4>${(v.known || []).length ? `<ul>${v.known.map((k) => `<li>${inline(k.statement)} ${refs(k.evidence_ids)}${k.volatility === "changes_fast" ? ' <span class="muted small">· быстро меняется</span>' : ""}</li>`).join("")}</ul>` : '<p class="muted small">Подтверждённых источниками утверждений нет.</p>'}</div>`;
+  h += `<div class="kcu"><div class="kcu-col ok"><h4>Известно</h4>${(v.known || []).length ? `<ul>${v.known.map((k) => `<li>${inline(k.statement)} ${refs(k.evidence_ids)}${k.volatility === "changes_fast" ? ' <span class="muted small">· быстро меняется</span>' : ""}${knownBasis(k)}</li>`).join("")}</ul>` : '<p class="muted small">Подтверждённых источниками утверждений нет.</p>'}</div>`;
   h += `<div class="kcu-col warn"><h4>Спорно</h4>${(v.contested || []).length ? `<ul>${v.contested.map((c) => `<li><b>${inline(c.issue)}</b>${(c.positions || []).length ? `<div class="small">${c.positions.map(inline).join(" · ")}</div>` : ""}${c.why_they_differ ? `<div class="muted small">почему: ${inline(c.why_they_differ)}</div>` : ""} ${refs(c.evidence_ids)}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div>`;
   h += `<div class="kcu-col bad"><h4>Неизвестно</h4>${(v.unknown || []).length ? `<ul>${v.unknown.map((u) => `<li>${inline(u.gap)}${u.reason ? ` <span class="muted small">· ${esc(GAP_WORD[u.reason] || u.reason)}</span>` : ""}${u.how_to_check ? `<div class="muted small">как узнать: ${inline(u.how_to_check)}</div>` : ""}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div></div>`;
   const subq = s.subq || [];
@@ -1581,7 +1583,7 @@ function stageResult(s, key) {
   if (key === "revision") { const k = Object.keys(s.revised).length; return k ? `доработано: ${k}` : "готово"; }
   if (key === "vote") return s.tally && s.tally[0] ? `лидирует вариант ${s.tally[0].label}` : "готово";
   if (key === "factcheck") return s.facts ? "проверено" : "готово";
-  if (key === "verdict") return s.verdict ? `выбран вариант ${s.verdict.winner}` : "готово";
+  if (key === "verdict") return s.verdict ? (s.verdict.acceptable === false ? "ни один вариант не подходит" : `выбран вариант ${s.verdict.winner}`) : "готово";
   return "готово";
 }
 
@@ -1713,6 +1715,9 @@ function renderVerdict(s) {
     const L = s.ledger && s.ledger.claims ? s.ledger.claims.length : 0;
     $("vSub").textContent = [`синтез по ${(s.subq || []).length || "—"} подвопросам`, `общий каркас — вариант ${v.winner}`,
       L ? `проверено утверждений: ${L}` : "поиск не проводился"].join(" · ");
+  } else if (v.acceptable === false) {
+    $("vTitle").textContent = "Ни один вариант не подходит";
+    $("vSub").textContent = [`лидер сравнения — вариант ${v.winner}${p && p.title ? ` «${p.title}»` : ""}, но он не рекомендован`, firsts].filter(Boolean).join(" · ");
   } else $("vSub").textContent = [`Вариант ${v.winner}`, s.authors[v.winner] != null ? (authorOf(s, v.winner) === "автор скрыт" ? "автор скрыт" : `предложил ${authorOf(s, v.winner)}`) : "ваш вариант", firsts].filter(Boolean).join(" · ");
 
   const lead = s.tally && s.tally[0] && s.tally[0].label;
@@ -2340,7 +2345,7 @@ function notifyFinished(s, ok) {
   if (!document.hidden) return;  // вкладка открыта — и так видно
   beep();
   const body = ok && s.verdict
-    ? `Решение: ${(s.proposals[s.verdict.winner] || {}).title || s.verdict.winner}`
+    ? (s.verdict.acceptable === false ? "Ни один вариант не подходит" : `Решение: ${(s.proposals[s.verdict.winner] || {}).title || s.verdict.winner}`)
     : (s.error || "Заседание прервано");
   if ("Notification" in window && Notification.permission === "granted") {
     try {
@@ -2666,4 +2671,14 @@ function applyAdvice(r) {
   formChanged();
   box.hidden = true;
   toast("Выбранное применено — только для этого вопроса");
+}
+
+// на что опирается пункт «известно»: проверенная формулировка реестра или цитата из документа пользователя
+function knownBasis(k) {
+  const same = (a, b) => (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
+  const v = (k.verified || []).filter((t) => !same(t, k.statement));
+  const out = [];
+  if (v.length) out.push(`<div class="muted small">проверено: «${v.map(esc).join("», «")}»</div>`);
+  if ((k.evidence_ids || []).includes("DOC")) out.push(`<div class="muted small">по вашему документу${k.doc_ref ? ` (${esc(k.doc_ref)})` : ""}${k.doc_quote ? `: «${esc(k.doc_quote)}»` : ""} — не независимая проверка</div>`);
+  return out.join("");
 }

@@ -197,6 +197,7 @@ def _research(stage: str, who: str, meta: dict[str, Any]) -> dict[str, Any]:
                                   "key_unknowns": ["Выручка конкретных точек у вузов — запросить у арендодателя"],
                                   "next_steps": ["Узнать аренду у трёх ближайших вузов", "Посчитать поток в часы пик"]},
                 "known": [{"statement": "Средний чек кофейни у вуза — 250–350 ₽", "evidence_ids": ok[:1], "scope": "Россия, 2025",
+                           "claim_ids": [(meta.get("claims_ok") or {}).get(ok[0], "")] if ok else [],
                            "volatility": "changes_fast"}] if ok else [],
                 "contested": [{"issue": "Насколько падает спрос летом", "positions": ["на 30%", "на 50%"],
                                "evidence_ids": ok[:1], "why_they_differ": "разные выборки", "what_would_resolve": "данные чеков за год"}],

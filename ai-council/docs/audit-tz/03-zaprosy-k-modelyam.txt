@@ -526,12 +526,15 @@ versions) as "changes_fast".
 Make every claim ATOMIC: one entity, one fact or number, one period, one geography — if a sentence holds several
 facts, write several claims. Name the subquestions each claim supports ("subquestions": ["Q2"]). Set "checkability":
 public (a primary or reputable public source can confirm it), registry (only a named registry or database can; name
-it in "check_path"), private (needs the rights holder, a contract or an internal document)."""
+it in "check_path"), private (needs the rights holder, a contract or an internal document). Who publicly holds the
+rights to a product, or whether it is in a public registry, is public or registry, not private; only the terms a
+company would offer YOU are private. Set "decisive": true if your conclusion or recommendation would change were
+the claim false."""
 
 
 CLAIM_JSON = ('{"text": "one atomic checkable statement", "basis": "user_doc|calc|memory|search_reported", '
               '"scope": "period, geography, units", "volatility": "stable|changes_fast|unknown", '
-              '"subquestions": ["Q1"], "checkability": "public|registry|private", "check_path": "", '
+              '"subquestions": ["Q1"], "checkability": "public|registry|private", "check_path": "", "decisive": false, '
               '"source_leads": ["..."], "why_it_matters": "..."}')
 
 
@@ -753,10 +756,14 @@ Write a RESEARCH SYNTHESIS, not a defence of one winner.
 - Build "final_answer" over {qids} using each subquestion's backbone leader; integrate verified findings and kept ideas
   of all proposals. "winner": the overall backbone label ({', '.join(labels)}); the overall voting leader is {leader or "—"}.
   If you choose another winner or override a section leader, fill "deviation" as "<fact|risk|process>: reason".
-- "known": ONLY claims with status confirmed in the ledger whose text and scope entail the statement — cite their
-  claim ids in "claim_ids" and their E-ids in "evidence_ids" — or direct user-document data (evidence id "DOC", name
-  the file and place; it is user data, not independent verification). Model agreement and [MEM] claims NEVER qualify
-  as known. Claims added after the ledger (new_after_ledger) cannot be known unless the ledger re-checked them.
+- "known": ONLY claims with status confirmed in the ledger whose text and scope entail the statement. EVERY known
+  item MUST cite the confirmed ledger claim ids it rests on in "claim_ids" and their E-ids in "evidence_ids"; the
+  statement must not go beyond those claims (no new numbers, dates, entities, places or broader scope — "the
+  product exists" does not support "the company grants exclusive rights"). Direct user-document data: evidence id
+  "DOC", "doc_ref" = file and place, "doc_quote" = a short VERBATIM quote (at most 25 words) from that document; it
+  is user data, not independent verification. The program checks all of this and moves anything else to unknown.
+  Model agreement and [MEM] claims NEVER qualify as known. Claims added after the ledger (new_after_ledger) cannot
+  be known unless the ledger re-checked them.
 - In "final_answer" itself, label memory-only, new_after_ledger and unresolved statements as uncertain; a vote or
   agreement is not evidence. Claims the ledger lists as "not checkable by public search" go to "unknown" with how
   to check them.{DECISION_CARD_NOTE if card else ""}
@@ -775,7 +782,7 @@ Write a RESEARCH SYNTHESIS, not a defence of one winner.
 JSON format:
 {{"winner": "{labels[0] if labels else 'A'}", "section_backbone": {{"Q1": "B"}},
  "final_answer": "concise structured Markdown with [E1]/[DOC]/[CALC]/[MEM] tags and a Sources list with URLs",
- "why": "how the synthesis was built", "known": [{{"statement": "...", "claim_ids": ["A-C1"], "evidence_ids": ["E1"], "scope": "...", "volatility": "stable|changes_fast|unknown"}}],{DECISION_CARD_JSON if card else ""}
+ "why": "how the synthesis was built", "known": [{{"statement": "...", "claim_ids": ["A-C1"], "evidence_ids": ["E1"], "scope": "...", "volatility": "stable|changes_fast|unknown"}}, {{"statement": "...", "evidence_ids": ["DOC"], "doc_ref": "file.pdf, p. 3", "doc_quote": "verbatim words"}}],{DECISION_CARD_JSON if card else ""}
  "contested": [{{"issue": "...", "positions": ["..."], "evidence_ids": ["E2"], "why_they_differ": "...", "what_would_resolve": "..."}}],
  "unknown": [{{"gap": "...", "reason": "unverified_memory|no_public_data|not_checked", "how_to_check": "..."}}],
  "coverage_audit": [{{"subquestion_id": "Q1", "status": "covered|partial|unknown", "note": "where"}}],
@@ -794,49 +801,47 @@ def check_length(p: Proposal, max_words: int, factor: float) -> Proposal:
 
 
 def check_verdict(v: ResearchVerdict, *, ledger: dict[str, Any] | None, n_subq: int, strict: bool,
-                  mark: bool = False) -> ResearchVerdict:
-    """«Известно» — только с опорой на подтверждённые источники реестра или документы пользователя.
-    Ошибка — ответ возвращается председателю; на последней попытке неподкреплённое переносится в «неизвестно»."""
+                  mark: bool = False, require_claims: bool = True, numbers_check: bool = True,
+                  docs_text: str = "") -> ResearchVerdict:
+    """«Известно» — только с опорой на подтверждённые утверждения реестра или на цитату из документов пользователя.
+    Каждый пункт должен назвать опорные утверждения (claim_ids, require_claims), источники — из их подтверждений,
+    в формулировке — без чисел, которых в проверенном нет (numbers_check). Для данных из документов («DOC») —
+    дословная цитата, которая есть в тексте вложений. Что не прошло — в «неизвестно» с причиной; в тексте итога
+    это видно сразу (mark), карточка решения — только из прошедшего."""
     ok_ids = confirmed_ids(ledger)
     all_ids = {e["id"] for e in (ledger or {}).get("evidence", [])}
     claim_by = {c["id"].upper(): c for c in (ledger or {}).get("claims", [])}
-    bad, known = [], []
+    docs = _plain(docs_text)
+    bad: list[tuple[KnownItem, str]] = []
+    known: list[KnownItem] = []
     unknown = list(v.unknown)
     for k in v.known:
-        ids = [i for i in k.evidence_ids if i]
-        ok = "DOC" in ids or (ids and all(i in ok_ids for i in ids))
-        if ok and k.claim_ids and "DOC" not in ids:
-            # опора названа: все утверждения подтверждены, и источники — из их подтверждений
-            cl = [claim_by.get(c) for c in k.claim_ids]
-            ok = all(c and c.get("status") == "confirmed" for c in cl) and \
-                set(ids) <= {e for c in cl if c for e in c.get("evidence") or []}
-        if ok:
-            known.append(k)
+        why = _known_problem(k, ok_ids=ok_ids, claim_by=claim_by, require_claims=require_claims,
+                             numbers_check=numbers_check, docs=docs)
+        if why:
+            bad.append((k, why))
         else:
-            bad.append(k)
+            verified = [claim_by[c]["text"] for c in k.claim_ids if c in claim_by and claim_by[c].get("text")]
+            known.append(k.model_copy(update={"verified": verified}))
     contested = [c.model_copy(update={"evidence_ids": [i for i in c.evidence_ids if i in all_ids]}) for c in v.contested]
     have = {c.subquestion_id for c in v.coverage_audit}
     missing = [f"Q{i}" for i in range(1, n_subq + 1) if f"Q{i}" not in have]
     if strict and (bad or missing):
         parts = []
         if bad:
-            parts.append('"known" may contain ONLY claims backed by CONFIRMED ledger evidence ids or user documents '
-                         '("DOC"); move these to "contested" or "unknown": '
-                         + "; ".join(f'"{k.statement[:80]}" (ids: {", ".join(k.evidence_ids) or "none"})' for k in bad[:5]))
+            parts.append('"known" may contain ONLY items resting on CONFIRMED ledger claims (claim_ids + their E-ids, '
+                         'no new numbers) or on a verbatim user-document quote ("DOC"); move these to "contested" or '
+                         '"unknown": ' + "; ".join(f'"{k.statement[:80]}" ({why})' for k, why in bad[:5]))
         if missing:
             parts.append(f'"coverage_audit" must have one entry per subquestion; missing: {", ".join(missing)}')
         raise ValueError(" ".join(parts))
-    unknown += [UnknownItem(gap=k.statement, reason="not_checked",
-                            how_to_check="нет подтверждения в реестре источников") for k in bad]
+    unknown += [UnknownItem(gap=k.statement, reason="not_checked", how_to_check=f"не подтверждено: {why}")
+                for k, why in bad]
     audit = list(v.coverage_audit) + [CoverageItem(subquestion_id=q, status="unknown", note="председатель не указал")
                                       for q in missing]
-    answer = v.final_answer
-    if bad and mark:  # «известно» без источника перенесено — читатель текста итога должен это видеть
-        answer += ("\n\n> ⚠ **Не подтверждено источниками** — эти утверждения председатель указал как известные, но в "
-                   "реестре проверенных источников опоры для них нет (перенесены в «неизвестно»):\n"
-                   + "\n".join(f"> - {k.statement}" for k in bad[:10]))
+    answer = _mark_answer(v.final_answer, bad, all_ids, mark)
     return v.model_copy(update={"known": known, "unknown": unknown, "contested": contested, "coverage_audit": audit,
-                                "final_answer": answer})
+                                "final_answer": answer, "decision_card": _check_card(v.decision_card, known, bad)})
 
 ==================== council/advisor.py — «Подобрать состав» (только запросы)
 

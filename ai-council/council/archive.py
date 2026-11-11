@@ -137,6 +137,7 @@ class Archive:
                 "mode_name": MODE_NAME.get(v.d.get("mode", ""), ""), "date": v.date,
                 "started_at": v.d.get("started_at"), "winner": w, "winner_title": v.title(w),
                 "winner_author": v.author(w) if w else "", "cost": round(v.cost, 4),
+                "unacceptable": bool(v.unacceptable),
                 "members": v.members, "proposals": len(v.proposals), "status": "done",
                 "attachments": len(v.attachments),
                 "followup_of": v.d.get("followup_of", ""),
@@ -217,16 +218,24 @@ class Archive:
         if not self.isolate:
             return self.build(stem, formats)
         nice = _worker_limits(background)
+        limit_mb = _memory_limit_mb()
         pkg_root = str(Path(__file__).resolve().parent.parent)
         env = {**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [pkg_root, os.environ.get("PYTHONPATH")]))}
+        peak, killed = 0, False
         try:
             with _WaitLock(self.dir / WORKER_LOCK):  # сайт, бот, пересборка архива — по очереди, не одновременно
-                p = subprocess.run([sys.executable, "-m", "council.reports_worker", str(self.dir), stem, *formats],
-                                   capture_output=True, text=True, check=False, timeout=WORKER_TIMEOUT_S, preexec_fn=nice,
-                                   env=env, cwd=pkg_root)
-            if p.returncode == 0:
-                return json.loads(p.stdout.strip().splitlines()[-1])
-            err = (p.stderr.strip().splitlines() or [f"код {p.returncode}"])[-1]
+                code, out, errtxt, peak, killed = _run_watched(
+                    [sys.executable, "-m", "council.reports_worker", str(self.dir), stem, *formats],
+                    limit_mb=limit_mb, timeout=WORKER_TIMEOUT_S, preexec_fn=nice, env=env, cwd=pkg_root)
+            if peak:
+                _save_peak(self.dir, stem, peak, killed)
+            if killed:
+                err = (f"не хватило памяти: сборка заняла больше {limit_mb} МБ (предел reports_memory_mb в настройках) — "
+                       "остановлена, чтобы сервер не завис")
+            elif code == 0:
+                return json.loads(out.strip().splitlines()[-1])
+            else:
+                err = (errtxt.strip().splitlines() or [f"код {code}"])[-1]
         except (OSError, subprocess.SubprocessError, ValueError, IndexError) as e:
             err = str(e) or type(e).__name__
         log.warning("отчёты %s не собраны: %s", stem, err)
@@ -419,26 +428,85 @@ class _ProcessLock:
             self.fh.close()  # закрытие файла снимает блокировку
 
 
-def _worker_limits(background: bool) -> Any:
-    """Для процесса сборки отчётов: низкий приоритет в фоне и предел памяти (reports_memory_mb в config.yaml;
-    сайт и бот передают его в COUNCIL_REPORTS_MEM_MB) — чтобы большой отчёт не «повесил» сервер на 1 ГБ."""
+def _memory_limit_mb() -> int:
+    """Предел РЕАЛЬНО занятой памяти сборки отчётов (reports_memory_mb; сайт и бот передают его в
+    COUNCIL_REPORTS_MEM_MB). Не виртуальной: у Python с WeasyPrint она заметно больше занятой, и предел по ней
+    ломал бы сборку раньше времени, а сервер всё равно не защищал."""
     try:
-        mb = int(os.environ.get("COUNCIL_REPORTS_MEM_MB") or 0)
+        return max(0, int(os.environ.get("COUNCIL_REPORTS_MEM_MB") or 0))
     except ValueError:
-        mb = 0
-    if not (background and hasattr(os, "nice")) and not mb:
+        return 0
+
+
+def _worker_limits(background: bool) -> Any:
+    """Для процесса сборки отчётов в фоне — низкий приоритет."""
+    if not (background and hasattr(os, "nice")):
         return None
 
     def apply() -> None:
-        if background and hasattr(os, "nice"):
-            os.nice(15)
-        if mb:
-            try:
-                import resource
-                resource.setrlimit(resource.RLIMIT_AS, (mb * 1024 * 1024, mb * 1024 * 1024))
-            except (ImportError, ValueError, OSError):
-                pass
+        os.nice(15)
     return apply
+
+
+def _rss_mb(pid: int) -> int:
+    """Сколько памяти процесс занимает сейчас (Linux: /proc; где нет — 0, без надзора)."""
+    try:
+        for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+            if line.startswith("VmRSS:"):
+                return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def _run_watched(cmd: list[str], *, limit_mb: int, timeout: float, **kw: Any) -> tuple[int, str, str, int, bool]:
+    """Запустить процесс и следить за его памятью: пик сохраняется, превышение предела — остановка.
+    Вывод — во временные файлы (большой stderr не заблокирует трубу)."""
+    import tempfile
+    with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as err:
+        p = subprocess.Popen(cmd, stdout=out, stderr=err, text=True, **kw)
+        peak, killed, t0 = 0, False, time.monotonic()
+        while p.poll() is None:
+            peak = max(peak, _rss_mb(p.pid))
+            if limit_mb and peak > limit_mb:
+                p.kill()
+                killed = True
+                break
+            if time.monotonic() - t0 > timeout:
+                p.kill()
+                p.wait()
+                raise subprocess.TimeoutExpired(cmd, timeout)
+            time.sleep(0.2)
+        code = p.wait()
+        out.seek(0)
+        err.seek(0)
+        return code, out.read(), err.read(), peak, killed
+
+
+PEAKS_FILE = "report_memory.json"
+
+
+def _save_peak(runs: Path, stem: str, mb: int, killed: bool) -> None:
+    """Пик памяти последних 30 сборок — по нему подбирается предел (видно в «Настройки → Заседание»)."""
+    p = runs / "notes" / PEAKS_FILE
+    try:
+        items = json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+        items = (items if isinstance(items, list) else [])[-29:] + [
+            {"stem": stem, "mb": mb, "killed": killed, "ts": time.time()}]
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(items), encoding="utf-8")
+    except (OSError, ValueError):
+        pass
+
+
+def report_peaks(runs: Path) -> dict[str, Any]:
+    try:
+        items = json.loads((runs / "notes" / PEAKS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        items = []
+    mbs = sorted(int(x.get("mb") or 0) for x in items if isinstance(x, dict))
+    return {"count": len(mbs), "max_mb": mbs[-1] if mbs else 0, "median_mb": mbs[len(mbs) // 2] if mbs else 0,
+            "killed": sum(1 for x in items if isinstance(x, dict) and x.get("killed"))}
 
 
 class _WaitLock:

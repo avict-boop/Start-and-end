@@ -104,7 +104,7 @@ def compute(archive: Archive, ratings: dict[str, dict[str, Any]] | None = None) 
                 continue
             st = models[author]
             st["proposals"] += 1
-            st["wins"] += int(label == v.winner)
+            st["wins"] += int(label == v.winner and not v.unacceptable)  # «ни один не подходит» — не победа
             row = tally.get(label) or {}
             if row.get("avg_score") is not None:
                 st["scores"].append(float(row["avg_score"]))

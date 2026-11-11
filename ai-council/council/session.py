@@ -165,6 +165,7 @@ class Council:
         journal: Journal | None = None,
         labels: dict[str, str] | None = None,
         link_checker: Callable[[list[str]], Awaitable[dict[str, Any]]] | None = None,
+        pricing: dict[str, Any] | None = None,
     ) -> None:
         """labels — метки вариантов, как в прошлом прогоне («доделать» заседание из архива: ответы из стенограммы
         ссылаются на эти метки)."""
@@ -179,6 +180,8 @@ class Council:
         self._budget_warned = False
         self.replayed = 0  # сколько ответов взято из журнала
         self._in_flight = 0      # запросы к моделям, отправленные и ещё не вернувшиеся (резерв бюджета)
+        self._reserved = 0.0     # оценка их цены
+        self.pricing = pricing or {}  # модель -> estimate.Price (каталог OpenRouter): резерв по конкретному запросу
         self._requests_done = 0
         self._fresh_stage = ""   # первый этап, где ответ пришлось получать от модели (не из журнала)
         self.link_checker = link_checker  # проверка ссылок реестра (в демо и тестах — нет)
@@ -368,12 +371,13 @@ class Council:
                 raise BudgetExceeded(
                     f"достигнут лимит бюджета ${self.budget:g} (потрачено ${self.total_cost:.4f})"
                 )
-            if self.cfg.budget_reserve and self._in_flight and self._requests_done:
-                expected = self.total_cost / self._requests_done * self._in_flight  # средняя цена × запросы в полёте
-                if self.total_cost + expected >= self.budget:
-                    raise BudgetExceeded(
-                        f"бюджет ${self.budget:g} будет исчерпан запросами, которые уже отправлены (потрачено "
-                        f"${self.total_cost:.4f}, ещё в работе {self._in_flight}) — пауза, чтобы не превысить лимит")
+            cost_est = self._call_estimate(member, messages, max_tokens, web_search) if self.cfg.budget_reserve else 0.0
+            if self.cfg.budget_reserve and self.total_cost + self._reserved + cost_est >= self.budget:
+                raise BudgetExceeded(
+                    f"бюджет ${self.budget:g} будет превышен: потрачено ${self.total_cost:.4f}, запросы в работе "
+                    f"({self._in_flight}) — около ${self._reserved:.2f}, этот запрос — около ${cost_est:.2f}. Пауза, "
+                    f"чтобы не превысить лимит; поднимите бюджет примерно до "
+                    f"${self.total_cost + self._reserved + cost_est + 0.5:.2f} и продолжите")
             if self._sem.locked():
                 self._call(name, stage, "queued", started, detail="ждёт свободного слота")
             try:
@@ -382,11 +386,13 @@ class Council:
                     async with (self._narrow if self._budget_warned else contextlib.nullcontext()):
                         extra = {"web_search": True} if web_search else {}
                         self._in_flight += 1
+                        self._reserved += cost_est
                         try:
                             comp = await self._complete(member, messages, temperature, max_tokens, effort, meta, progress,
                                                         extra)
                         finally:
                             self._in_flight -= 1
+                            self._reserved = max(0.0, self._reserved - cost_est)
                         self._requests_done += 1
             except ProviderError as e:
                 if e.spent is not None:  # неудачные попытки тоже стоят денег
@@ -497,6 +503,29 @@ class Council:
         return await self.client.complete(member.model, messages, temperature=temperature, max_tokens=max_tokens,
                                           reasoning_effort=None if effort == "none" else effort, meta=meta,
                                           on_progress=progress, **extra)
+
+    SEARCH_RESERVE_USD = 0.02  # поиск в интернете на запрос — оценка сверху (у OpenRouter оплачивается отдельно)
+    CHARS_PER_TOKEN = 3.0      # для оценки входа: русский текст ~2,5–3 знака на токен, английский ~4
+
+    def _call_estimate(self, member: MemberConfig, messages: list, max_tokens: int | None, web: bool) -> float:
+        """Сколько может стоить этот запрос: вход по длине, выход — доля предела ответа, поиск. Цена модели — по
+        каталогу; если её нет — средняя цена уже сделанных запросов (так было раньше)."""
+        chars = 0
+        for m in messages:
+            c = m.get("content")
+            chars += len(c) if isinstance(c, str) else sum(len(p.get("text", "")) for p in c or [] if isinstance(p, dict))
+        price = self.pricing.get(member.model)
+        if price is None:
+            return self.total_cost / self._requests_done if self._requests_done else 0.0
+        out = (max_tokens or member.max_tokens or self.cfg.max_tokens or 4000) * self.cfg.reserve_output_share
+        return (chars / self.CHARS_PER_TOKEN * price.prompt + out * price.completion + price.request
+                + (self.SEARCH_RESERVE_USD if web else 0.0))
+
+    def _docs_text(self) -> str:
+        """Текст документов пользователя и описания картинок — для сверки цитат «из документов» в «известно»."""
+        parts = [a.text for a in self.attachments if a.kind == "document" and a.text]
+        parts += [str(x) for x in (self.image_notes or {}).values() if x]
+        return "\n".join(parts)
 
     def _input_gaps(self, gaps: list[str], chair: MemberConfig) -> None:
         """Председатель заметил, что вход обрезан или недоступен, — показать это пользователю."""
@@ -1053,7 +1082,8 @@ class Council:
         if rc.arbitration:
             selected, deferred = R.prepare_claims(  # type: ignore[arg-type]
                 proposals, critiques, rc.arbitration_claims, n_subq=len(subq), dedupe=rc.dedupe_claims,
-                defer_private=rc.defer_private, coverage_first=rc.coverage_first)
+                defer_private=rc.defer_private, coverage_first=rc.coverage_first,
+                check_decisive_private=rc.check_decisive_private)
             if selected:
                 results = await self._search(R, refined, as_of, scope, selected, rc, "arbitration")
                 ledger = self._ledger(R, selected, results, rc, deferred)
@@ -1101,7 +1131,8 @@ class Council:
                      for l, p in proposals.items()}
             new_sel, new_def = R.prepare_claims(fresh, {}, rc.post_revision_claims, n_subq=len(subq),  # type: ignore[arg-type]
                                                 dedupe=rc.dedupe_claims, defer_private=rc.defer_private,
-                                                coverage_first=rc.coverage_first)
+                                                coverage_first=rc.coverage_first,
+                                                check_decisive_private=rc.check_decisive_private)
             if new_sel:
                 self._emit("stage", stage="recheck", title=f"Проверка новых утверждений после доработки: {len(new_sel)}")
                 results += await self._search(R, refined, as_of, scope, new_sel, rc, "recheck", missions=1)
@@ -1177,11 +1208,14 @@ class Council:
             if _letters(v.final_answer) < 3 or _is_placeholder(v.final_answer):
                 raise ValueError('"final_answer" is empty or a placeholder ("...") — write the research synthesis')
             moved = len(v.known)
-            v = R.check_verdict(v, ledger=ledger, n_subq=len(subq), strict=strict, mark=rc.mark_unconfirmed)
+            v = R.check_verdict(v, ledger=ledger, n_subq=len(subq), strict=strict, mark=rc.mark_unconfirmed,
+                                require_claims=rc.require_claim_ids, numbers_check=rc.known_numbers_check,
+                                docs_text=self._docs_text())
             moved -= len(v.known)
             if moved:
                 self._emit("warning", stage="verdict", member=chair.name,
-                           text=f"{moved} утв. перенесено из «известно» в «неизвестно»: нет подтверждённого источника")
+                           text=f"{moved} утв. перенесено из «известно» в «неизвестно»: нет опоры на проверенное "
+                                "утверждение или цитату документа (причины — в «неизвестно»)")
             decided = normalize_ideas(v.ideas, idea_ids, strict=strict)
             return v.model_copy(update={"winner": w, "deviation": deviation, "ideas": decided})
 
@@ -1199,7 +1233,9 @@ class Council:
                           req, tied if len(tied) > 1 else None, subq, card=rc.decision_card),
                 R.ResearchVerdict, check=check_verdict, max_tokens=self.verdict_tokens(chair),
                 meta={"labels": valid, "leader": leader, "ideas": idea_ids, "subquestions": len(subq),
-                      "evidence_ok": sorted(R.confirmed_ids(ledger)), **rmeta})
+                      "evidence_ok": sorted(R.confirmed_ids(ledger)),
+                      "claims_ok": {e: c["id"] for c in reversed((ledger or {}).get("claims", []))  # первое утверждение источника
+                                    if c.get("status") == "confirmed" for e in c.get("evidence") or []}, **rmeta})
         except (ProviderError, InvalidResponse) as e:
             if isinstance(e, OutOfCredits):
                 raise

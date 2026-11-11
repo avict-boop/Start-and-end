@@ -125,13 +125,19 @@ def test_quorum_is_three_for_four_authors():
     assert c._quorum(4, "debate") == 3 and c._quorum(3, "debate") == 2 and c._quorum(4, "quick") == 2
 
 
-def test_budget_reserve_stops_before_in_flight_requests_exceed_the_limit():
-    c = Council(make_cfg(max_cost_usd=0.01), MockClient(delay=0))
-    c._requests_done, c._in_flight = 4, 8   # уже потрачено 4 × $0.001; в работе ещё 8 запросов
-    c.stats["a"].cost = 0.004
+def test_budget_reserve_counts_this_request_and_requests_in_flight_by_catalog_price():
+    from council.estimate import Price
     from council.session import BudgetExceeded
-    with pytest.raises(BudgetExceeded):
-        run(c._ask(c.cfg.members[0], "proposal", "вопрос", R.ResearchProposal))
+    cfg = make_cfg(max_cost_usd=1.0)
+    m = cfg.members[0]
+    c = Council(cfg, MockClient(delay=0), pricing={m.model: Price(prompt=3e-6, completion=15e-6)})
+    big = "x" * 300_000   # ~100 тыс. токенов входа × $3/млн ≈ $0,30 + выход
+    assert 0.3 < c._call_estimate(m, [{"role": "user", "content": big}], 20000, web=False) < 0.5
+    c._reserved = 0.7     # уже отправлено запросов примерно на $0,70
+    with pytest.raises(BudgetExceeded, match="поднимите бюджет"):
+        run(c._ask(m, "proposal", big, R.ResearchProposal, max_tokens=20000))
+    c._reserved = 0.0     # без запросов в полёте этот запрос помещается
+    run(c._ask(m, "proposal", "вопрос", R.ResearchProposal))
 
 
 def test_internal_links_are_refused_without_network():
@@ -201,3 +207,71 @@ def test_solo_answer_is_continued_when_cut_by_the_length_limit():
     res = run(pilot.solo_answer(make_cfg(), c, {"question": "Вопрос?"}))
     assert res["answer"] == "часть 1 часть 2 часть 3" and res["parts"] == 3 and not res["truncated"]
     assert c.calls == [True, False, False] and res["cost"] == 0.03 and len(res["citations"]) == 3
+
+
+def _led():
+    return {"evidence": [{"id": "E1"}, {"id": "E2"}],
+            "claims": [{"id": "A-C1", "status": "confirmed", "evidence": ["E1"], "text": "Препарат X выпускает компания Y",
+                        "scope": "США, 2025"},
+                       {"id": "A-C2", "status": "confirmed", "evidence": ["E2"], "text": "Цена упаковки 40 долларов"}]}
+
+
+def test_known_rests_on_named_claims_without_new_numbers_and_on_verbatim_document_quotes():
+    v = R.ResearchVerdict(final_answer="Итог. Компания Y даёт эксклюзив в России на 5 лет. [E9]", known=[
+        {"statement": "Препарат X выпускает компания Y", "claim_ids": ["A-C1"], "evidence_ids": ["E1"]},
+        {"statement": "без опорного утверждения", "evidence_ids": ["E1"]},
+        {"statement": "Цена упаковки 45 долларов", "claim_ids": ["A-C2"], "evidence_ids": ["E2"]},
+        {"statement": "Оборот дистрибьютора 120 млн", "evidence_ids": ["DOC"], "doc_ref": "отчёт.pdf, с. 2",
+         "doc_quote": "оборот за 2025 год составил 120 млн рублей"},
+        {"statement": "из документа, но цитаты там нет", "evidence_ids": ["DOC"], "doc_quote": "такой фразы нет"},
+        {"statement": "документ и чужой источник", "evidence_ids": ["DOC", "E7"], "doc_quote": "оборот за 2025 год"}],
+        decision_card={"summary_decision": "Идти к Y.", "top_known": ["X выпускает Y [E1]", "Y даёт эксклюзив [E2]"]})
+    docs = "Отчёт. Оборот за 2025 год составил 120 млн рублей; прибыль — 8 млн."
+    out = R.check_verdict(v, ledger=_led(), n_subq=0, strict=False, mark=True, docs_text=docs)
+    assert [k.statement for k in out.known] == ["Препарат X выпускает компания Y", "Оборот дистрибьютора 120 млн"]
+    assert out.known[0].verified == ["Препарат X выпускает компания Y"]
+    why = {u.gap: u.how_to_check for u in out.unknown}
+    assert "какое проверенное утверждение" in why["без опорного утверждения"]
+    assert "45" in why["Цена упаковки 45 долларов"]          # расширение: другого числа в проверенном нет
+    assert "цитата не найдена" in why["из документа, но цитаты там нет"]
+    assert "не подтверждён" in why["документ и чужой источник"]  # «DOC» больше не пропускает чужие ссылки
+    assert out.final_answer.startswith("> ⚠ **4 утв.") and "[E9 ⚠ нет в реестре]" in out.final_answer
+    assert out.decision_card.top_known == ["X выпускает Y [E1]"]   # E2 — не из прошедшего «известно»
+    assert any("не подтверждено" in x for x in out.decision_card.key_unknowns)
+
+
+def test_all_moved_items_are_listed():
+    v = R.ResearchVerdict(final_answer="Итог.", known=[{"statement": f"факт {i}", "evidence_ids": []} for i in range(11)])
+    out = R.check_verdict(v, ledger=_led(), n_subq=0, strict=False, mark=True)
+    assert all(f"факт {i}" in out.final_answer for i in range(11))
+
+
+def test_decisive_private_claim_gets_one_public_check():
+    props = props_with({"A": [{"text": "Права на препарат X принадлежат компании Y", "checkability": "private", "decisive": True},
+                              {"text": "Условия эксклюзива для нас", "checkability": "private"}]})
+    sel, deferred = R.prepare_claims(props, {}, 10)
+    assert [c["id"] for c in sel] == ["A-C1"] and sel[0]["private_checked"] and sel[0]["critical"]
+    assert [d["ids"] for d in deferred] == [["A-C2"]]
+    sel2, _ = R.prepare_claims(props, {}, 10, check_decisive_private=False)
+    assert sel2 == []
+
+
+def test_report_worker_is_stopped_when_its_real_memory_exceeds_the_limit():
+    import sys
+    from council.archive import _run_watched
+    code, out, err, peak, killed = _run_watched(
+        [sys.executable, "-c", "import time; x = bytearray(200 * 1024 * 1024); time.sleep(5)"], limit_mb=80, timeout=30)
+    assert killed and peak > 80
+    code, out, err, peak, killed = _run_watched([sys.executable, "-c", "print('ok')"], limit_mb=500, timeout=30)
+    assert code == 0 and not killed and out.strip() == "ok"
+
+
+def test_unacceptable_leader_is_not_counted_as_a_win(tmp_path):
+    from council.archive import Archive
+    from council.stats import compute
+    d = run(Council(make_cfg(), MockClient(delay=0), seed=1).run("Вопрос?", options=["один", "два"])).to_dict()
+    d["verdict"]["acceptable"] = False
+    (tmp_path / "20250101-000000-s1.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    st = compute(Archive(tmp_path))
+    assert st["models"]
+    assert sum(m["wins"] for m in st["models"]) == 0
