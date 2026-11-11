@@ -746,7 +746,9 @@ class CouncilBot:
             n = len(cfg.active_members)
             extras = [x for x, on in (("компактно", cfg.compact_proposals), ("проверка фактов", cfg.fact_check.enabled),
                                       ("демо", s.demo)) if on]
+            judge = mode != "evaluate" and not cfg.chair_proposes and n - 1 >= cfg.min_quorum
             lines.append(f"{n} {_plural(n, 'модель', 'модели', 'моделей')} · председатель {esc(cfg.chair)}"
+                         + (f" (своего варианта не предлагает — вариантов {n - 1})" if judge else "")
                          + (" · " + " · ".join(extras) if extras else ""))
             if p.view == "opts":
                 lines.append("<i>Участники: " + ", ".join(

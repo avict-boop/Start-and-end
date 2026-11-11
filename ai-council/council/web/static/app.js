@@ -221,6 +221,7 @@ function setMode(m) {
   $("roundsField").hidden = m !== "debate";
   $("optionsField").hidden = m !== "evaluate";
   $("modeHint").textContent = MODE_HINT[m];
+  if ($("chairHint")) updateChairHint();
   formChanged();
 }
 
@@ -292,8 +293,22 @@ function refreshRoleSelects() {
     else if (!withNone && names.length) sel.value = names[0];
     else if (withNone) sel.value = "";
   };
+  const before = $("chair").value;
   fill($("chair"), false, config.chair);
   fill($("devil"), true, config.devil_advocate);
+  if (before && before !== $("chair").value && !names.includes(before)) toast(`Председатель теперь ${$("chair").value}: ${before} не выбран`);
+  updateChairHint();
+}
+
+// сколько будет вариантов: председатель обычно своего не предлагает (если без него хватает участников для кворума)
+function updateChairHint() {
+  const names = selectedMembers();
+  const chair = $("chair").value;
+  const judge = !$("chairProposes").checked && mode !== "evaluate" && names.length - 1 >= 2;
+  const n = judge ? names.length - 1 : names.length;
+  $("chairHint").textContent = !chair || mode === "evaluate" ? "" : judge
+    ? `${chair} — председатель: ставит задачу, оценивает чужие варианты и пишет итог, своего не предлагает. Вариантов будет ${n} из ${names.length} моделей.`
+    : `${chair} — председатель и тоже предлагает свой вариант. Вариантов будет ${n}.`;
 }
 
 // переключатели — по умолчаниям из config.yaml (только при загрузке, чтобы смена участников их не сбрасывала)
@@ -578,6 +593,7 @@ $("keyStatus").addEventListener("click", () => {
 $("modeSeg").addEventListener("change", (e) => { if (e.target.name === "mode") setMode(e.target.value); });
 for (const id of ["question", "options", "criteria", "rounds", "budget", "context"]) $(id).addEventListener("input", formChanged);
 for (const id of ["mock", "compact", "factCheck", "chairProposes", "chair", "devil"]) $(id).addEventListener("change", formChanged);
+for (const id of ["chairProposes", "chair"]) $(id).addEventListener("change", updateChairHint);
 for (const b of document.querySelectorAll("[data-step]")) {
   b.addEventListener("click", () => {
     const r = $("rounds");
