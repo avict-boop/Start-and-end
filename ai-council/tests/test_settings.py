@@ -262,3 +262,15 @@ def test_model_card_api(web, monkeypatch):
     assert c.post("/api/models/card/summary", json={"model": "anthropic/claude-sonnet-5"}).status_code == 400  # нет ключа
     items = c.get("/api/models?q=claude").json()["items"]
     assert items[0]["tags"] and "desc" in items[0]
+
+
+def test_model_translations_are_cached_outside_the_archive(web, tmp_path):
+    c, cfg_file = web
+    from council.model_notes import save_many, load_cache, translate_key
+    runs = cfg_file.parent / "runs"
+    save_many(runs, {translate_key("Russian", "anthropic/claude-sonnet-5", False): "Перевод"})
+    assert load_cache(runs) and not (runs / "model_notes.json").exists()
+    (runs / "telegram_settings.json").write_text("{}")
+    assert all(i["id"] != "telegram_settings" for i in c.get("/api/sessions").json()["items"])
+    r = c.post("/api/models/translate", json={"ids": ["anthropic/claude-sonnet-5", "openai/gpt-5"]}).json()
+    assert r["translations"] == {"anthropic/claude-sonnet-5": "Перевод"}  # без ключа — только то, что уже переведено

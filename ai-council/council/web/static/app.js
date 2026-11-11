@@ -51,9 +51,10 @@ function toast(text, ms = 3500) {
 }
 
 // своё окно подтверждения вместо системного confirm(): крупные кнопки, понятный текст, работает с клавиатуры
-function ask({ title, html = "", ok = "OK", cancel = "Отмена", danger = false }) {
+function ask({ title, html = "", ok = "OK", cancel = "Отмена", danger = false, wide = false }) {
   return new Promise((resolve) => {
     const d = $("dialog");
+    d.querySelector(".dialog-box").classList.toggle("wide", wide);
     const back = document.activeElement;
     $("dTitle").textContent = title;
     $("dBody").innerHTML = html;

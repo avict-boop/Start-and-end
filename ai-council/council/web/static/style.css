@@ -583,7 +583,10 @@ body.modal-open { overflow: hidden; }
   .modal-foot { padding-bottom: calc(.75rem + var(--safe-b)); }
 }
 .dialog { align-items: center; padding: 1rem; }
-.dialog-box { width: min(440px, 100%); padding: 1.3rem 1.4rem 1.1rem; max-height: 90vh; overflow: auto; height: auto !important; border-radius: 18px !important; }
+.dialog-box { width: min(440px, 100%); padding: 1.3rem 1.4rem 1.1rem; max-height: 90vh; max-height: 90dvh; overflow: hidden; height: auto !important; border-radius: 18px !important; display: flex; flex-direction: column; }
+.dialog-box.wide { width: min(680px, 100%); }
+.dialog-box h2, .dialog-actions { flex: none; }
+.dialog-body { overflow: auto; min-height: 0; flex: 1 1 auto; }
 .dialog-box h2 { font-size: 1.2rem; margin: 0 0 .6rem; }
 .dialog-body { font-size: .97rem; color: var(--text); }
 .dialog-body .muted { font-size: .9rem; }
@@ -728,14 +731,15 @@ a.brand:hover .brand-name { color: var(--accent); }
 .w.note { display: block; padding: .15rem 0; }
 
 /* выбор модели из линейки разработчика */
-.fam-list { max-height: min(60vh, 520px); overflow: auto; margin-top: .5rem; }
+.fam-list { margin-top: .5rem; }
 .fam-list h4 { margin: .8rem 0 .3rem; font-size: .9rem; color: var(--muted); text-transform: none; }
 .fam-list ul { list-style: none; padding: 0; margin: 0; display: grid; gap: .35rem; }
 .fam-item { display: flex; gap: .6rem; align-items: center; justify-content: space-between; padding: .45rem .6rem;
   border-radius: 8px; background: var(--surface-2); }
 .fam-item.cur { outline: 2px solid var(--accent-soft); }
 .fam-main { min-width: 0; overflow-wrap: anywhere; }
-#famSearch { width: 100%; }
+#famSearch { width: 100%; position: sticky; top: 0; z-index: 1; }
+.fam-search { position: sticky; top: 0; z-index: 1; background: var(--surface); padding-bottom: .4rem; }
 .set-members .w-tok { width: 7.5rem; }
 
 /* описания моделей */

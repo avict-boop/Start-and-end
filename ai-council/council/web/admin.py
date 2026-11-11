@@ -46,6 +46,11 @@ class _SummaryReq(BaseModel):
     model: str
 
 
+class _TranslateReq(BaseModel):
+    ids: list[str]
+    full: bool = False
+
+
 def _short(text: str, limit: int = 220) -> str:
     """Первое предложение-два описания разработчика (для списков)."""
     t = " ".join(str(text).split())
@@ -162,10 +167,13 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         if models is None:
             return {"available": False, "groups": []}
         prov = provider(model)
+        from ..model_notes import load_cache
+        cache = load_cache(runs_dir(base_config()))
+        lang = base_config().language
         groups: dict[str, list[dict[str, Any]]] = {}
         for m in sort_newest(models):
             if is_text_model(m) and provider(m["id"]) == prov:
-                groups.setdefault(family(m["id"]), []).append(_with_tags(_model_row(m)))
+                groups.setdefault(family(m["id"]), []).append(_tr(_with_tags(_model_row(m)), cache, lang))
         cur_fam = family(model)
         order = sorted(groups, key=lambda f: (f != cur_fam, -max(created_of(models, r["id"]) for r in groups[f]), f))
         return {"available": True, "provider": prov, "current": model,
@@ -193,7 +201,7 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
     @app.get("/api/models/card")
     async def model_card(model: str) -> dict[str, Any]:
         """Всё о модели для выбора: метки, роли в совете, ваша история, описание разработчика и пересказ."""
-        from ..model_notes import history_for, load_cache, roles, tags
+        from ..model_notes import history_for, load_cache, roles, tags, translate_key
         models = await catalog.get()
         info = next((m for m in models or [] if m.get("id") == model), None)
         row = _model_row(info) if info else {"id": model}
@@ -201,6 +209,8 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         return {"available": models is not None, "found": info is not None, "row": row,
                 "tags": tags(row) if info else [], "roles": roles(row) if info else [],
                 "history": hist, "description": (info or {}).get("description") or "",
+                "description_tr": load_cache(runs_dir(base_config())).get(
+                    translate_key(base_config().language, model, True), ""),
                 "summary": load_cache(runs_dir(base_config())).get(model, "")}
 
     @app.post("/api/models/card/summary")
@@ -230,6 +240,49 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         text = comp.text.strip()
         await asyncio.to_thread(save_summary, runs_dir(cfg), body.model, text)
         return {"summary": text, "cached": False, "cost": comp.cost}
+
+    def _tr(row: dict[str, Any], cache: dict[str, str], language: str) -> dict[str, Any]:
+        """Подставляет переведённое описание из кэша (если уже переводили)."""
+        from ..model_notes import translate_key
+        t = cache.get(translate_key(language, row["id"], False))
+        return {**row, "desc_tr": t} if t else row
+
+    @app.post("/api/models/translate")
+    async def translate_models(body: _TranslateReq) -> dict[str, Any]:
+        """Перевод описаний моделей на язык приложения (дешёвая модель, пакетом; переводы запоминаются)."""
+        from ..client import OpenRouterClient, ProviderError
+        from ..model_notes import load_cache, save_many, translate_key, translate_prompt
+        from ..voting import extract_json
+        cfg = base_config()
+        lang = cfg.language
+        cache = load_cache(runs_dir(cfg))
+        out = {i: cache[translate_key(lang, i, body.full)] for i in body.ids if translate_key(lang, i, body.full) in cache}
+        need = [i for i in body.ids[:40] if i not in out]
+        if not need:
+            return {"translations": out}
+        key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            return {"translations": out, "unavailable": "нет OPENROUTER_API_KEY — описания остаются на языке разработчика"}
+        models = {m["id"]: m for m in (await catalog.get() or [])}
+        texts = {}
+        for i in need:
+            d = (models.get(i) or {}).get("description") or ""
+            if d:
+                texts[i] = d[:4000] if body.full else _short(d)
+        if not texts:
+            return {"translations": out}
+        client = OpenRouterClient(key, timeout=90, max_retries=1)
+        try:
+            comp = await client.complete(cfg.transcribe_model, [{"role": "user", "content": translate_prompt(texts, lang)}],
+                                         temperature=0.1, max_tokens=6000 if body.full else 4000)
+            got = extract_json(comp.text)
+        except (ProviderError, ValueError) as e:
+            return {"translations": out, "unavailable": f"перевод не удался: {str(e)[:200]}"}
+        finally:
+            await client.aclose()
+        new = {i: str(t).strip() for i, t in (got or {}).items() if i in texts and str(t).strip()}
+        await asyncio.to_thread(save_many, runs_dir(cfg), {translate_key(lang, i, body.full): t for i, t in new.items()})
+        return {"translations": {**out, **new}, "cost": comp.cost}
 
     @app.get("/api/models/upgrades")
     async def model_upgrades() -> dict[str, Any]:

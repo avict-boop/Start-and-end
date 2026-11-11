@@ -12,7 +12,7 @@ from pathlib import Path
 from statistics import mean
 from typing import Any
 
-CACHE = "model_notes.json"
+CACHE = "model_notes.json"  # в runs/notes/: не в корне архива, иначе файл примут за заседание
 
 
 def _k(n: int | None) -> str:
@@ -138,7 +138,7 @@ def history_for(history_map: dict[str, dict[str, Any]], model: str) -> dict[str,
 
 def load_cache(runs_dir: Path) -> dict[str, str]:
     try:
-        return json.loads((Path(runs_dir) / CACHE).read_text(encoding="utf-8"))
+        return json.loads((Path(runs_dir) / "notes" / CACHE).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
 
@@ -146,7 +146,32 @@ def load_cache(runs_dir: Path) -> dict[str, str]:
 def save_summary(runs_dir: Path, model: str, text: str) -> None:
     data = load_cache(runs_dir)
     data[model] = text
-    p = Path(runs_dir) / CACHE
+    p = Path(runs_dir) / "notes" / CACHE
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(p)
+
+
+def translate_key(language: str, model: str, full: bool) -> str:
+    return f"{'trfull' if full else 'tr'}:{language}:{model}"
+
+
+def translate_prompt(texts: dict[str, str], language: str) -> str:
+    payload = json.dumps(texts, ensure_ascii=False, indent=1)
+    return f"""Translate each value of this JSON object into {language}. These are descriptions of AI models from a model
+catalog. Keep model names, product names, numbers and technical terms (context, tokens, benchmarks) as they are; keep the
+meaning exact, add nothing. Reply with ONE JSON object with the same keys and the translated values, nothing else.
+
+{payload}"""
+
+
+def save_many(runs_dir: Path, items: dict[str, str]) -> None:
+    if not items:
+        return
+    data = load_cache(runs_dir)
+    data.update(items)
+    p = Path(runs_dir) / "notes" / CACHE
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")

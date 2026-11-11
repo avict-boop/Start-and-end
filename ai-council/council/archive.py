@@ -127,7 +127,10 @@ class Archive:
         if cached and cached[0] == mtime:
             return cached[1]
         try:
-            v = View(json.loads(p.read_text(encoding="utf-8")), stem)
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or "question" not in data or "verdict" not in data:
+                return None  # служебный файл в папке архива, а не заседание
+            v = View(data, stem)
             w = v.winner
             s = {
                 "id": stem, "key": key_of(stem), "question": v.question, "mode": v.d.get("mode"),

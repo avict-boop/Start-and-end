@@ -83,10 +83,19 @@ async function openModelCard(id) {
     <p class="muted small">Подсказка по характеристикам модели, а не оценка её качества: качество лучше видно по вашей истории ниже.</p>
     <h4>В ваших заседаниях</h4>${hist}
     <h4>Описание разработчика</h4>
+    <p id="cardDesc">${c.description_tr ? esc(c.description_tr) : c.description ? '<span class="muted small">Перевожу описание…</span>' : ""}</p>
     <div id="cardSummary">${c.summary ? `<p>${esc(c.summary)}</p><p class="muted small">Пересказ по описанию разработчика (сделан моделью).</p>` : ""}</div>
     ${c.description && !c.summary ? '<button type="button" class="secondary small-btn" id="cardSum">Кратко по-русски</button> <span class="muted small">доли цента, запоминается</span>' : ""}
-    ${c.description ? `<details class="card-desc"><summary>Оригинальный текст (англ.)</summary><p>${esc(c.description)}</p></details>` : '<p class="muted small">Описания в каталоге нет.</p>'}`;
-  const done = ask({ title: id, html, ok: "Закрыть", cancel: null });
+    ${c.description ? `<details class="card-desc"><summary>Оригинальный текст разработчика</summary><p>${esc(c.description)}</p></details>` : '<p class="muted small">Описания в каталоге нет.</p>'}`;
+  const done = ask({ title: id, html, ok: "Закрыть", cancel: null, wide: true });
+  if (c.description && !c.description_tr) {
+    api("/api/models/translate", { method: "POST", body: { ids: [id], full: true } }).then((t) => {
+      const el = document.getElementById("cardDesc");
+      if (!el) return;
+      const tr = (t.translations || {})[id];
+      el.innerHTML = tr ? esc(tr) : `<span class="muted small">${esc(t.unavailable || "перевод недоступен")} — оригинал ниже.</span>`;
+    }).catch(() => { const el = document.getElementById("cardDesc"); if (el) el.innerHTML = '<span class="muted small">Перевод недоступен — оригинал ниже.</span>'; });
+  }
   const btn = document.getElementById("cardSum");
   if (btn) btn.addEventListener("click", async () => {
     btn.disabled = true; btn.textContent = "Пересказываю…";
@@ -349,14 +358,23 @@ async function pickFromFamily(i) {
   const row = (x) => `<li class="fam-item${x.id === m.model ? " cur" : ""}" data-text="${esc((x.id + " " + x.name).toLowerCase())}">
       <div class="fam-main"><code>${esc(x.id)}</code>${x.id === m.model ? ' <span class="badge plain">сейчас</span>' : ""}
         <div class="muted small">${esc(x.date)} · $${x.prompt} / $${x.completion} за 1M · контекст ${k(x.context)}${x.max_out ? ` · ответ до ${k(x.max_out)}` : ""}</div>
-        <div class="m-tags">${tagChips(x.tags)}</div>${x.desc ? `<div class="small fam-desc">${esc(x.desc)}</div>` : ""}</div>
+        <div class="m-tags">${tagChips(x.tags)}</div>${x.desc ? `<div class="small fam-desc" data-desc="${esc(x.id)}">${esc(x.desc_tr || x.desc)}</div>` : ""}</div>
       ${x.id === m.model ? "" : `<button type="button" class="secondary small-btn" data-pick="${esc(x.id)}">Выбрать</button>`}</li>`;
   const html = `<p class="muted small">Все модели <b>${esc(r.provider)}</b>, доступные сейчас на OpenRouter, по линейкам, новые сверху.
       🧠 — умеет рассуждать (глубину задайте в столбце «Глубина рассуждений»).</p>
-    <input type="search" id="famSearch" placeholder="Поиск: pro, flash, r1…" aria-label="Поиск модели">
+    <div class="fam-search"><input type="search" id="famSearch" placeholder="Поиск: pro, flash, r1…" aria-label="Поиск модели"></div>
     <div class="fam-list">${r.groups.map((g) => `<h4>${esc(g.family)}</h4><ul>${g.items.map(row).join("")}</ul>`).join("")}</div>`;
   let chosen = null;
-  const done = ask({ title: `Модель для «${m.name}»`, html, ok: "Закрыть", cancel: null });
+  const done = ask({ title: `Модель для «${m.name}»`, html, ok: "Закрыть", cancel: null, wide: true });
+  const untranslated = r.groups.flatMap((g) => g.items).filter((x) => x.desc && !x.desc_tr).map((x) => x.id);
+  if (untranslated.length) {
+    api("/api/models/translate", { method: "POST", body: { ids: untranslated } }).then((t) => {
+      for (const [mid, text] of Object.entries(t.translations || {})) {
+        const el = $("dBody").querySelector(`[data-desc="${CSS.escape(mid)}"]`);
+        if (el) el.textContent = text;
+      }
+    }).catch(() => {});
+  }
   const body = $("dBody");
   body.querySelector("#famSearch").addEventListener("input", (e) => {
     const q = e.target.value.toLowerCase().trim();
