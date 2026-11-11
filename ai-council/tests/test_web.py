@@ -260,3 +260,23 @@ def test_budget_pause_resume_and_raise(client):
     assert client.post(f"/api/sessions/{sid2}/budget", json={"budget": 0.5}).json()["running"] is False
     assert client.delete(f"/api/sessions/{sid2}").status_code == 200
     assert client.get("/api/paused").json()["items"] == []
+
+
+def test_redo_archived_session_with_failures(client, monkeypatch):
+    from council.mock import MockClient
+    real_init = MockClient.__init__
+
+    def flaky(self, *a, **kw):
+        real_init(self, *a, **kw)
+        self.fail_models = {"m/a"}  # председатель не отвечает — итог «по голосованию», без синтеза
+    monkeypatch.setattr(MockClient, "__init__", flaky)
+    sid = client.post("/api/sessions", json={"question": "Вопрос со сбоем модели?", "mock": True}).json()["id"]
+    assert read_events(client, sid)[-1]["type"] == "done"
+    monkeypatch.setattr(MockClient, "__init__", real_init)
+    assert client.post(f"/api/sessions/{sid}/redo", json={"budget": 0.001}).status_code == 400  # меньше потраченного
+    assert client.post(f"/api/sessions/{sid}/redo", json={"budget": 5}).status_code == 200
+    events = read_events(client, sid)
+    assert "resumed" in [e["type"] for e in events] and events[-1]["type"] == "done"
+    data = client.get(f"/api/sessions/{sid}/report?format=md").text
+    assert "Решение совета" in data and "Председатель не ответил" not in data
+    assert client.get("/api/paused").json()["items"] == []

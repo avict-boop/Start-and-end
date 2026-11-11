@@ -1005,7 +1005,7 @@ class CouncilBot:
                    "options": p.options or [], "members": [m.name for m in cfg.active_members],
                    "chair": cfg.chair, "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
                    "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
-                   "compact_proposals": cfg.compact_proposals}
+                   "compact_proposals": cfg.compact_proposals, "mock": s.demo}
         # «паспорт» заседания на диске: если оно прервётся, его можно продолжить без потери оплаченного
         cp = await asyncio.to_thread(
             Checkpoint.create, self.runs_dir, stem, cfg=cfg, question=p.question, mode=mode, rounds=s.rounds,
@@ -1053,7 +1053,7 @@ class CouncilBot:
                     atts = await asyncio.to_thread(cp.attachments)
                     journal = await asyncio.to_thread(Journal, cp.journal_path)
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
-                                      seed=sp.get("seed"), journal=journal)
+                                      seed=sp.get("seed"), journal=journal, labels=sp.get("labels"))
                     council_ref["c"] = council
                     r = self.running.get(chat_id)
                     if r:
@@ -1142,11 +1142,12 @@ class CouncilBot:
         info = cp.summary()
         help_ = {"budget": "Поднимите бюджет — заседание продолжится с того же места.",
                  "credits": "Пополните баланс на openrouter.ai/settings/credits и нажмите «Продолжить».",
+                 "key_limit": "Поднимите или снимите лимит ключа на openrouter.ai/settings/keys (или дождитесь сброса) и нажмите «Продолжить».",
                  "interrupted": "Нажмите «Продолжить» — заседание пойдёт с того места, где остановилось.",
                  "stopped": "Его можно продолжить с того места, где оно остановилось.",
                  "error": "Можно попробовать продолжить: модели, не ответившие на последнем этапе, спросим заново."
                  }.get(info["reason"], "")
-        detail = f"\n<i>{esc(info['message'][:400])}</i>" if info["message"] and info["reason"] in ("error", "credits") else ""
+        detail = f"\n<i>{esc(info['message'][:400])}</i>" if info["message"] and info["reason"] in ("error", "credits", "key_limit") else ""
         stage = f" · этап «{esc(info['stage'])}»" if info["stage"] else ""
         await self.send(chat_id,
                         f"⏸ <b>Заседание приостановлено:</b> {esc(info['reason_text'])}.{detail}\n"

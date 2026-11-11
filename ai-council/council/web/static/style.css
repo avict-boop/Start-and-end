@@ -704,3 +704,5 @@ a.brand:hover .brand-name { color: var(--accent); }
 .hist-paused { color: var(--warn); font-weight: 600; }
 .paused-list { margin: .4rem 0 0; padding-left: 1.1rem; }
 .paused-list li { margin: .2rem 0; }
+.redo { margin-top: .8rem; }
+.redo p { margin: 0 0 .5rem; }

@@ -1140,6 +1140,7 @@ function render(s) {
   renderMatrix(s);
 
   $("failSec").hidden = !s.failures.length;
+  $("redoBox").hidden = !(s.done && s.failures.length);
   $("failures").innerHTML = s.failures.map((f) =>
     `<li><b>${esc(f.member)}</b> (${esc(STAGE_NAME[f.stage] || f.stage)}): ${esc(f.error)}</li>`).join("");
 }
@@ -1148,6 +1149,7 @@ function render(s) {
 // приостановлено: причина, сколько потрачено, продолжить (с новым бюджетом) или удалить
 const PAUSE_HELP = {
   budget: "Поднимите бюджет и нажмите «Продолжить».",
+  key_limit: 'Поднимите или снимите лимит ключа в <a href="https://openrouter.ai/settings/keys" target="_blank" rel="noopener">настройках ключей OpenRouter</a> (или дождитесь сброса лимита) и нажмите «Продолжить».',
   credits: 'Пополните баланс на <a href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener">OpenRouter</a> и нажмите «Продолжить».',
   interrupted: "Нажмите «Продолжить» — заседание пойдёт с того места, где остановилось.",
   stopped: "Его можно продолжить с того места, где оно остановилось.",
@@ -1157,7 +1159,7 @@ function renderPaused(s) {
   const p = s.paused;
   $("sPaused").hidden = !p;
   if (!p) return;
-  $("pReason").innerHTML = `<b>Причина:</b> ${esc(p.reason_text || "")}${p.message && ["error", "credits"].includes(p.reason) ? ` — <span class="muted">${esc(p.message)}</span>` : ""}. ${PAUSE_HELP[p.reason] || ""}`;
+  $("pReason").innerHTML = `<b>Причина:</b> ${esc(p.reason_text || "")}${p.message && ["error", "credits", "key_limit"].includes(p.reason) ? ` — <span class="muted">${esc(p.message)}</span>` : ""}. ${PAUSE_HELP[p.reason] || ""}`;
   $("pSpent").textContent = `Потрачено ${money(p.spent || s.cost)} из бюджета ${money(p.budget || s.budget)}`
     + `${p.stage ? ` · остановилось на этапе «${p.stage}»` : ""}. Уже полученные ответы моделей сохранены: при продолжении они не оплачиваются повторно.`;
   const inp = $("pBudget");
@@ -1681,6 +1683,22 @@ $("cancelBtn").addEventListener("click", async () => {
 });
 $("blind").addEventListener("change", () => current && render(current));
 $("budgetBtn").addEventListener("click", raiseBudget);
+$("redoBtn").addEventListener("click", async () => {
+  const s = current;
+  if (!s) return;
+  const suggest = Math.ceil((Number(s.cost || 0) + Math.max(1, Number(config.budget || 1))) * 2) / 2;
+  const ok = await ask({ title: "Доделать заседание?", ok: "Доделать",
+    html: `<p>Ответы, которые модели уже дали (и за которые заплачено), возьмутся из сохранённого. Заново спросим только `
+      + `шаги со сбоями и всё, что от них зависит (например, голосование и итог). Новый итог заменит этот.</p>`
+      + `<p class="muted small">Если сбой был из-за лимита ключа или баланса OpenRouter — сначала поднимите лимит или пополните баланс.</p>`
+      + `<label class="field"><span>Бюджет заседания, $ (уже потрачено ${money(s.cost)})</span><input id="redoBudget" type="number" min="0.1" step="0.5" value="${suggest}" inputmode="decimal"></label>` });
+  if (!ok) return;
+  const budget = Number((document.getElementById("redoBudget") || {}).value) || suggest;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(s.id)}/redo`, { method: "POST", body: { budget } });
+    openSession(s.id);
+  } catch (e) { toast(e.message); }
+});
 $("sBudgetWarn").addEventListener("click", (e) => { if (e.target.closest("[data-raise]")) raiseBudget(); });
 $("pResume").addEventListener("click", () => current && resumeSession(current.id));
 $("pDrop").addEventListener("click", async () => {

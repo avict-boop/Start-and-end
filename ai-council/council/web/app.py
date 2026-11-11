@@ -503,7 +503,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                    "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
                    "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
                    "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
-                   "compact_proposals": cfg.compact_proposals}
+                   "compact_proposals": cfg.compact_proposals, "mock": req.mock}
         # «паспорт» заседания на диске: если оно прервётся, его можно будет продолжить без потери оплаченного
         cp = await asyncio.to_thread(
             Checkpoint.create, runs_dir(cfg), sid, cfg=cfg, question=req.question, mode=req.mode, rounds=rounds,
@@ -575,10 +575,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     atts = await asyncio.to_thread(cp.attachments)
                     journal = await asyncio.to_thread(Journal, cp.journal_path)
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
-                                      seed=sp.get("seed"), journal=journal)
+                                      seed=sp.get("seed"), journal=journal, labels=sp.get("labels"))
                     st.council = council
-                    if journal.replayable:
-                        st.push({"type": "resumed", "replayable": journal.replayable,
+                    if journal.replayable or journal.loose:
+                        st.push({"type": "resumed", "replayable": journal.replayable or len(journal.loose),
                                  "spent": round(journal.spent, 4)})
                     for w in sp.get("att_warnings") or []:
                         st.push({"type": "member_failed", "stage": "attachments", "member": "вложения", "error": w})
@@ -674,6 +674,32 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             raise HTTPException(400, f"бюджет ${cp.budget:g} уже потрачен (${spent:.2f}) — укажите бюджет больше")
         client = make_client(cp.config(), bool(cp.spec.get("mock")))
         cp.update(resumes=int(cp.spec.get("resumes") or 0) + 1)
+        launch(cp, client)
+        return {"id": sid}
+
+    @app.post("/api/sessions/{sid}/redo")
+    async def redo(sid: str, body: ResumeRequest | None = None) -> dict[str, Any]:
+        """«Доделать» заседание из архива, где модели не ответили (лимит ключа, деньги, сбой): оплаченные ответы
+        берутся из стенограммы, заново спрашиваются только недостающие шаги. Итог заменит архивную запись."""
+        st = runs.get(sid)
+        if st is not None and st.status == "running":
+            raise HTTPException(409, "заседание уже идёт")
+        cfg = base_config()
+        d = runs_dir(cfg)
+        if await asyncio.to_thread(Checkpoint.load, d, sid):
+            raise HTTPException(409, "заседание уже на паузе — нажмите «Продолжить»")
+        data = json.loads(find_file(sid, "json").read_text(encoding="utf-8"))
+        spent = float(data.get("total_cost_usd") or 0)
+        budget = body.budget if body and body.budget else round(spent + max(1.0, cfg.max_cost_usd), 2)
+        if budget <= spent:
+            raise HTTPException(400, f"на заседание уже потрачено ${spent:.2f} — бюджет должен быть больше")
+        mock = bool((data.get("request") or {}).get("mock"))  # демо-заседание доделывается тоже в демо
+        client = make_client(cfg, mock)
+        vision = vision_map(cfg, None if mock else await catalog.get())
+        try:
+            cp = await asyncio.to_thread(Checkpoint.from_archive, d, sid, data, cfg, budget=budget, vision=vision)
+        except OverrideError as e:
+            raise HTTPException(400, str(e)) from e
         launch(cp, client)
         return {"id": sid}
 

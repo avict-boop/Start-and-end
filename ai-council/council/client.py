@@ -78,6 +78,37 @@ def _credit_error(code: int, body: str, model: str) -> Exception:
                          "и лимит длины ответа.")
 
 
+def _key_error(code: int, body: str, model: str) -> Exception | None:
+    """HTTP 401/403 от OpenRouter про сам ключ (лимит расходов ключа, неверный ключ) — или None, если это другое."""
+    try:
+        err = (json.loads(body) or {}).get("error") or {}
+    except ValueError:
+        err = {}
+    if not isinstance(err, dict):
+        err = {}
+    meta = err.get("metadata") if isinstance(err.get("metadata"), dict) else {}
+    msg = str(err.get("message") or body)
+    low = msg.lower()
+    if code == 403 and (meta.get("scope") == "key_limit" or "key_limit" in str(meta.get("limit_source", ""))
+                        or "key limit" in low or "limit exceeded" in low):
+        spent, limit, resets = meta.get("spend_usd"), meta.get("limit_usd"), str(meta.get("resets_at") or "")
+        bits = []
+        if spent is not None and limit is not None:
+            try:
+                bits.append(f"потрачено ${float(spent):.2f} из ${float(limit):g}")
+            except (TypeError, ValueError):
+                pass
+        if resets:
+            bits.append(f"лимит сбросится {resets[8:10]}.{resets[5:7]}.{resets[:4]}" if len(resets) >= 10 else f"сброс {resets}")
+        detail = f" ({', '.join(bits)})" if bits else ""
+        return KeyLimit(f"достигнут лимит расходов API-ключа OpenRouter{detail}. Поднимите или снимите лимит ключа: "
+                        "https://openrouter.ai/settings/keys — затем нажмите «Продолжить».")
+    if code == 401:
+        return KeyLimit("OpenRouter не принял API-ключ (HTTP 401): ключ неверный, удалён или отключён. Проверьте ключ "
+                        "в .env на сервере и https://openrouter.ai/settings/keys, затем нажмите «Продолжить».")
+    return None
+
+
 def _http_reason(code: int, body: str) -> str:
     human = {429: "провайдер ограничил частоту запросов", 408: "истекло время ожидания",
              502: "провайдер модели недоступен", 503: "провайдер модели перегружен",
@@ -95,6 +126,11 @@ class ProviderError(RuntimeError):
 
 class OutOfCredits(ProviderError):
     """На балансе OpenRouter кончились деньги (HTTP 402). Заседание приостанавливается, а не теряется."""
+
+
+class KeyLimit(OutOfCredits):
+    """Ключ OpenRouter не пускает дальше: исчерпан лимит расходов ключа (HTTP 403) или ключ неверный/отключён (401).
+    Это касается всех моделей сразу — заседание приостанавливается, а не теряет участников по одному."""
 
 
 @dataclass
@@ -283,7 +319,8 @@ class OpenRouterClient:
                     raise err
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode("utf-8", "replace")
-                    raise ProviderError(f"{model}: HTTP {resp.status_code}: {body[:500]}")
+                    raise _key_error(resp.status_code, body, model) or ProviderError(
+                        f"{model}: HTTP {resp.status_code}: {body[:500]}")
                 if "text/event-stream" not in resp.headers.get("content-type", ""):
                     try:
                         data = json.loads(await resp.aread())
@@ -374,6 +411,10 @@ class OpenRouterClient:
             raise _Retryable(_http_reason(code, msg or ""))
         if code == 402:
             raise _credit_error(402, json.dumps({"error": err}), model)
+        if code in (401, 403):
+            key = _key_error(code, json.dumps({"error": err}), model)
+            if key:
+                raise key
         raise ProviderError(f"{model}: ошибка провайдера: {msg or err}")
 
     async def balance(self) -> float | None:

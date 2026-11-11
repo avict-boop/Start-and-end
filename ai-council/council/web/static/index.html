@@ -320,6 +320,11 @@
       <section id="failSec" class="card" hidden aria-labelledby="failTitle">
         <h2 id="failTitle">Сбои</h2>
         <ul id="failures" class="failures"></ul>
+        <div id="redoBox" class="redo" hidden>
+          <p class="muted small">Можно доделать заседание: уже оплаченные ответы возьмутся из сохранённого, заново
+            спросим только те шаги, где модели не ответили. Новый итог заменит этот.</p>
+          <button id="redoBtn" type="button" class="primary">Доделать заседание</button>
+        </div>
       </section>
 
       <details id="logSec" class="card fold">

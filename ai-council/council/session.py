@@ -155,7 +155,10 @@ class Council:
         seed: int | None = None,
         vision: dict[str, bool | None] | None = None,
         journal: Journal | None = None,
+        labels: dict[str, str] | None = None,
     ) -> None:
+        """labels — метки вариантов, как в прошлом прогоне («доделать» заседание из архива: ответы из стенограммы
+        ссылаются на эти метки)."""
         """vision: модель -> умеет ли принимать картинки (из каталога OpenRouter); неизвестно — пробуем."""
         self.cfg = config
         self.client = client
@@ -166,6 +169,8 @@ class Council:
         self.budget = config.max_cost_usd  # можно поднять на ходу: set_budget()
         self._budget_warned = False
         self.replayed = 0  # сколько ответов взято из журнала
+        self.forced_labels = dict(labels or {})
+        self._seen: dict[tuple[str, str], int] = {}  # (этап, участник) -> сколько обращений уже было
         self._sem = asyncio.Semaphore(config.max_concurrency)
         self.stats: dict[str, MemberStats] = {m.name: MemberStats() for m in config.active_members}
         if config.fact_check.enabled:
@@ -270,9 +275,16 @@ class Council:
         messages = list(base_messages)
         meta = {"stage": stage, "member": member.name, **(meta or {})}
         key = call_key(member.model, stage, schema.__name__, base_messages)
-        if key in self.journal.results:  # ответ уже получен и оплачен до приостановки
+        n = self._seen.get((stage, member.name), 0)
+        self._seen[(stage, member.name)] = n + 1
+        cached = self.journal.results.get(key)
+        if cached is None:  # «доделать» из архива: ответ того же участника на том же этапе по порядку
+            cached = self.journal.loose.get((stage, member.name, n))
+        if cached is not None:  # ответ уже получен и оплачен раньше
             try:
-                obj = schema.model_validate(self.journal.results[key])
+                obj = schema.model_validate(cached)
+                if check and (stage, member.name, n) in self.journal.loose:
+                    obj = check(obj)  # тот же ли набор меток и критериев — иначе спросим заново
             except ValueError:
                 obj = None
             if obj is not None:
@@ -527,7 +539,14 @@ class Council:
             else:
                 ok[name] = res
                 self._emit("member_done", stage=stage, member=name, result=res)
+        if names and not ok and stage != "proposal":  # у предложений своя проверка кворума
+            # Не ответил никто — причина общая (сеть, ключ, провайдер), а не в отдельных моделях: идти дальше
+            # вхолостую бессмысленно. Заседание встаёт на паузу; при продолжении этап спросят заново.
+            first = next((str(r) for r in results if isinstance(r, BaseException)), "")
+            raise CouncilError(f"на этапе «{self.STAGE_TITLE.get(stage, stage)}» не ответил ни один участник: {first[:300]}")
         return ok
+
+    STAGE_TITLE = {"critique": "Критика", "revision": "Доработка", "vote": "Голосование", "factcheck": "Проверка фактов"}
 
     # ------------------------------------------------------------------ main flow
 
@@ -612,6 +631,14 @@ class Council:
             if len(got) < self.cfg.min_quorum:
                 raise CouncilError(f"нет кворума: ответили {len(got)} из {len(proposers)}, нужно {self.cfg.min_quorum}")
             labels = assign_labels(list(got), self.rng)
+            if self.forced_labels:
+                # прежние варианты сохраняют свои метки (на них ссылается критика из стенограммы), новые — следующие
+                labels = {l: n for l, n in self.forced_labels.items() if n in got}
+                free = [c for c in string.ascii_uppercase if c not in self.forced_labels]
+                fresh = [n for n in got if n not in labels.values()]
+                self.rng.shuffle(fresh)
+                labels.update(zip(free, fresh))
+                labels = dict(sorted(labels.items()))
             authors = dict(labels)
             proposals = {l: got[name] for l, name in labels.items()}
         initial = dict(proposals)

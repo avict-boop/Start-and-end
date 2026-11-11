@@ -34,6 +34,7 @@ LOCK = ".lock"
 REASON_TEXT = {
     "budget": "достигнут лимит бюджета заседания",
     "credits": "на балансе OpenRouter кончились деньги",
+    "key_limit": "API-ключ OpenRouter не пускает дальше (лимит расходов ключа или неверный ключ)",
     "stopped": "остановлено вручную",
     "error": "сбой",
     "interrupted": "прервано перезапуском программы (например, при обновлении)",
@@ -55,8 +56,26 @@ class Journal:
         self.failures: dict[str, str] = {}
         self.costs: list[dict[str, Any]] = []
         self.transcript: list[dict[str, Any]] = []
+        # Ответы из стенограммы архивного заседания (для «доделать»): (этап, участник, номер обращения) -> ответ
+        self.loose: dict[tuple[str, str, int], dict[str, Any]] = {}
         if path is not None and path.is_file():
             self._load()
+        loose = (path.parent / "archive_transcript.json") if path is not None else None
+        if loose is not None and loose.is_file():
+            try:
+                self.load_transcript(json.loads(loose.read_text(encoding="utf-8")))
+            except ValueError:
+                pass
+
+    def load_transcript(self, transcript: list[dict[str, Any]]) -> None:
+        """Готовые ответы из стенограммы: по каждому участнику и этапу — по порядку обращений."""
+        count: dict[tuple[str, str], int] = {}
+        for e in transcript:
+            if not isinstance(e, dict) or e.get("parsed") is None or e.get("continuation"):
+                continue
+            k = (e.get("stage", ""), e.get("member", ""))
+            self.loose[(*k, count.get(k, 0))] = e["parsed"]
+            count[k] = count.get(k, 0) + 1
 
     def _load(self) -> None:
         assert self.path is not None
@@ -160,6 +179,40 @@ class Checkpoint:
         return cp
 
     @classmethod
+    def from_archive(cls, runs_dir: Path, sid: str, data: dict[str, Any], base: CouncilConfig, *, budget: float,
+                     vision: dict[str, Any], origin: str = "web", chat_id: int | None = None) -> Checkpoint:
+        """«Доделать» заседание из архива: оплаченные ответы берутся из его стенограммы, заново спрашиваются
+        только шаги, где модели не ответили (например, кончился лимит ключа). Итог заменит архивную запись."""
+        from .config import with_overrides
+        req = data.get("request") or {}
+        known = {m.name for m in base.members}
+        members = [m for m in req.get("members") or [] if m in known] or None
+        chair = req.get("chair") if req.get("chair") in known else None
+        cfg = with_overrides(base, members=members, chair=chair,
+                             devil_advocate=req.get("devil_advocate") if req.get("devil_advocate") in known else "",
+                             budget=budget, chair_proposes=req.get("chair_proposes"),
+                             fact_check=req.get("fact_check"), compact=req.get("compact_proposals"))
+        folder = Path(runs_dir) / f"{sid}.files"
+        atts = load_from_dir(folder, data.get("attachments") or []) if folder.is_dir() else []
+        authors = {k: v for k, v in (data.get("authors") or {}).items() if v}
+        cp = cls.create(runs_dir, sid, cfg=cfg, question=data.get("question", ""), mode=req.get("mode") or data.get("mode"),
+                        rounds=req.get("rounds") or 1, criteria=req.get("criteria") or None,
+                        options=req.get("options") or None, context=req.get("context") or None, attachments=atts,
+                        history=data.get("thread") or [], followup_of=data.get("followup_of") or "", vision=vision,
+                        request={**req, "budget": budget}, origin=origin, chat_id=chat_id,
+                        extra={"redo_of": sid, "labels": authors, "resumes": 1})
+        transcript = data.get("transcript") or []
+        (cp.dir / "archive_transcript.json").write_text(json.dumps(transcript, ensure_ascii=False), encoding="utf-8")
+        j = Journal(cp.journal_path)
+        for name, st in (data.get("stats") or {}).items():  # уже потраченное остаётся в счёте заседания
+            j.cost(name, int(st.get("calls") or 0), int(st.get("prompt_tokens") or 0), int(st.get("completion_tokens") or 0),
+                   int(st.get("cached_tokens") or 0), float(st.get("cost") or 0))
+        for e in transcript:
+            j.entry(e)
+        cp.update(spent=round(j.spent, 6))
+        return cp
+
+    @classmethod
     def load(cls, runs_dir: Path, sid: str) -> Checkpoint | None:
         d = Path(runs_dir) / PAUSED_DIR / sid
         try:
@@ -253,11 +306,13 @@ class Checkpoint:
 
 def classify(exc: BaseException) -> tuple[str, str]:
     """Причина остановки и текст для человека."""
-    from .client import OutOfCredits
+    from .client import KeyLimit, OutOfCredits
     from .session import BudgetExceeded
     import asyncio
     if isinstance(exc, BudgetExceeded):
         return "budget", str(exc)
+    if isinstance(exc, KeyLimit):
+        return "key_limit", str(exc)
     if isinstance(exc, OutOfCredits):
         return "credits", str(exc)
     if isinstance(exc, asyncio.CancelledError):

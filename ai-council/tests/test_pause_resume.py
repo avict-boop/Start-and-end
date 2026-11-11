@@ -103,3 +103,57 @@ def test_resume_after_lost_quorum_asks_failed_models_again(tmp_path):
         run(Council(make_cfg(), broken, seed=5, journal=Journal(j)).run("Вопрос?"))
     res = run(Council(make_cfg(), CountingMock(), seed=5, journal=Journal(j)).run("Вопрос?"))
     assert len(res.proposals) == 4 and res.verdict.winner
+
+
+def test_key_limit_403_is_recognized():
+    import json as _json
+
+    from council.client import KeyLimit, _key_error
+    body = _json.dumps({"error": {"message": "Key limit exceeded (weekly limit). $50.38 of $50.00 used", "code": 403,
+                                  "metadata": {"limit_source": "openrouter_key_limit", "scope": "key_limit", "limit_usd": 50,
+                                               "spend_usd": 50.378, "resets_at": "2026-11-16T00:00:00.000Z"}}})
+    e = _key_error(403, body, "m/x")
+    assert isinstance(e, KeyLimit) and isinstance(e, OutOfCredits)
+    assert "$50.38 из $50" in str(e) and "16.11.2026" in str(e) and classify(e)[0] == "key_limit"
+    assert _key_error(403, '{"error": {"message": "region not supported"}}', "m/x") is None
+    assert isinstance(_key_error(401, "{}", "m/x"), KeyLimit)
+
+
+def test_key_limit_mid_session_pauses_instead_of_hollow_result(tmp_path):
+    from council.client import KeyLimit
+    j = tmp_path / "j.jsonl"
+    client = CountingMock(fail_after=10, exc=KeyLimit("достигнут лимит расходов API-ключа OpenRouter"))
+    with pytest.raises(KeyLimit):
+        run(Council(make_cfg(), client, seed=2, journal=Journal(j)).run("Вопрос?"))
+    res = run(Council(make_cfg(), CountingMock(), seed=2, journal=Journal(j)).run("Вопрос?"))
+    assert res.ballots and not any(s.failures for s in res.stats.values())
+
+
+def test_whole_stage_failure_pauses():
+    from council.session import CouncilError
+
+    class VoteDown(MockClient):
+        async def complete(self, model, messages, **kw):
+            if (kw.get("meta") or {}).get("stage") == "vote":
+                from council.client import ProviderError
+                raise ProviderError(f"{model}: HTTP 500")
+            return await super().complete(model, messages, **kw)
+    with pytest.raises(CouncilError, match="Голосование"):
+        run(Council(make_cfg(), VoteDown(delay=0), seed=1).run("Вопрос?"))
+
+
+def test_redo_archived_session_reuses_paid_answers(tmp_path):
+    """Заседание дошло до архива со сбоями (модель c не отвечала) — «доделать»: старые ответы из стенограммы."""
+    broken = CountingMock()
+    broken.fail_models = {"m/c"}
+    old = run(Council(make_cfg(), broken, seed=4).run("Вопрос?"))
+    assert any(s.failures for s in old.stats.values())
+    data = old.to_dict()
+    j = Journal(None)
+    j.load_transcript(data["transcript"])
+    fresh = CountingMock()
+    c = Council(make_cfg(), fresh, seed=99, journal=j, labels={k: v for k, v in data["authors"].items() if v})
+    res = run(c.run("Вопрос?"))
+    assert c.replayed > 0 and fresh.n < broken.n + 20
+    assert "c" in res.authors.values() and len(res.proposals) == 4  # пропущенный вариант модели c доспросили
+    assert {k: v for k, v in res.authors.items() if v != "c"} == old.authors  # прежние варианты — под прежними метками
