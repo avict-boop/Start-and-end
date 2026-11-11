@@ -365,6 +365,14 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         from ..stats import compute
         return await asyncio.to_thread(compute, archive())
 
+    @app.get("/api/sessions/{sid}/request")
+    async def session_request(sid: str) -> dict[str, Any]:
+        """Настройки заседания (модели, роли, режим) — для уточнения: по умолчанию тот же состав."""
+        arch = archive()
+        if not arch.exists(sid):
+            raise HTTPException(404, "заседание не найдено")
+        return await asyncio.to_thread(arch.request_of, sid)
+
     @app.post("/api/sessions/{sid}/repeat")
     async def repeat(sid: str) -> dict[str, Any]:
         """Данные для «Повторить»: исходные настройки и вложения (скопированы в черновики формы)."""

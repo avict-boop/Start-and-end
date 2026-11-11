@@ -170,6 +170,9 @@ def test_advise_in_demo_then_run_with_the_recommended_lineup(site):
     assert s.status_code == 200, s.text
     sid = s.json()["id"]
     assert read_events(site, sid)[-1]["type"] == "done"
+    lineup = site.get(f"/api/sessions/{sid}/request").json()  # для уточнения: тот же состав
+    assert lineup["members"] == plan["members"] + ["qwen"] and lineup["chair"] == plan["chair"]
+    assert site.get("/api/sessions/nope/request").status_code == 404
     req = site.post(f"/api/sessions/{sid}/repeat").json()["request"]
     assert req["extra_members"] == [{"name": "qwen", "model": "qwen/qwen4-max"}] and req["web_search"] == ["qwen"]
     assert req["models"]["deepseek"] == plan["models"].get("deepseek", "deepseek/deepseek-v4-flash")

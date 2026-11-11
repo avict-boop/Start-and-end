@@ -414,6 +414,42 @@ function payload() {
 
 /* ------------------------------------------------------------ уточнение и повтор */
 
+// состав и роли из запроса прошлого заседания: при повторе и уточнении по умолчанию — те же модели
+function applyLineup(r) {
+  if (r.members && r.members.length) {
+    const base = Object.fromEntries(config.members.map((m) => [m.name, m.model]));
+    lineup = {
+      models: Object.fromEntries(Object.entries(r.models || {}).filter(([n, mdl]) => base[n] && base[n] !== mdl)),
+      extra: (r.extra_members || []).filter((x) => !base[x.name]),
+      web: new Set(r.web_search || []),
+    };
+    renderMembers(new Set(r.members.filter((n) => base[n] || lineup.extra.some((x) => x.name === n))));
+    refreshRoleSelects();
+  }
+  if (r.chair && selectedMembers().includes(r.chair)) $("chair").value = r.chair;
+  if (r.devil_advocate !== undefined) $("devil").value = selectedMembers().includes(r.devil_advocate) ? r.devil_advocate : "";
+  if (r.chair_proposes !== undefined) $("chairProposes").checked = !!r.chair_proposes;
+  if (r.fact_check !== undefined) $("factCheck").checked = !!r.fact_check;
+  if (r.compact_proposals !== undefined) $("compact").checked = !!r.compact_proposals;
+  if (r.research_words) { $("researchWords").value = r.research_words; updateShortenHint(); }
+  if (r.research_shorten !== undefined) $("researchShorten").checked = !!r.research_shorten;
+  updateChairHint();
+}
+
+// новая задача (не уточнение и не повтор) — состав из настроек; изменить его можно «Подобрать состав»
+function resetLineup() {
+  if (!config) return;
+  lineup = { models: {}, extra: [], web: new Set(config.members.filter((m) => m.enabled && m.web_search).map((m) => m.name)) };
+  renderMembers();
+  $("chair").value = "";
+  $("devil").value = "";
+  refreshRoleSelects();
+  resetToggles();
+  $("budget").value = config.budget;
+  $("adviceBox").hidden = true;
+  setMode(config.mode === "evaluate" ? "debate" : config.mode);
+}
+
 let formMode = null;  // {kind: "followup" | "repeat", id, title}
 
 function setFormMode(mode) {
@@ -421,11 +457,11 @@ function setFormMode(mode) {
   $("formBanner").hidden = !mode;
   if (mode) {
     $("formBannerText").innerHTML = mode.kind === "followup"
-      ? `↳ <b>Уточнение</b> к заседанию «${esc(mode.title)}». Совет учтёт его решение и вложения.`
-      : `🔁 <b>Повтор</b> заседания «${esc(mode.title)}». Можно поменять модели, режим или вопрос.`;
+      ? `↳ <b>Уточнение</b> к заседанию «${esc(mode.title)}». Совет учтёт его решение и вложения. Модели — те же, что в нём; поменять можно в «Параметрах» или «Подобрать состав».`
+      : `🔁 <b>Повтор</b> заседания «${esc(mode.title)}». Модели — те же, что в нём; можно поменять модели, режим или вопрос.`;
   }
 }
-$("formBannerX").addEventListener("click", () => setFormMode(null));
+$("formBannerX").addEventListener("click", () => { setFormMode(null); resetLineup(); });
 
 function focusForm() {
   goCompose();
@@ -434,9 +470,15 @@ function focusForm() {
   formChanged();
 }
 
-$("followBtn").addEventListener("click", () => {
+$("followBtn").addEventListener("click", async () => {
   if (!current) return;
-  setFormMode({ kind: "followup", id: current.id, title: shortTitle(current.question) });
+  const sid = current.id;
+  try {
+    const r = await api(`/api/sessions/${encodeURIComponent(sid)}/request`);
+    if (r.mode && r.mode !== "evaluate") setMode(r.mode);
+    applyLineup(r);
+  } catch (e) { toast(`Состав исходного заседания не загружен: ${e.message}`); }
+  setFormMode({ kind: "followup", id: sid, title: shortTitle(current ? current.question : "") });
   $("question").value = "";
   $("question").placeholder = "Например: а если бюджет вдвое меньше? Раскрой подробнее вариант B";
   focusForm();
@@ -454,23 +496,7 @@ $("repeatBtn").addEventListener("click", async () => {
   $("criteria").value = (r.criteria || []).join(", ");
   $("options").value = (r.options || []).join("\n---\n");
   $("context").value = r.context || "";
-  if (r.members && r.members.length) {
-    const base = Object.fromEntries(config.members.map((m) => [m.name, m.model]));
-    lineup = {
-      models: Object.fromEntries(Object.entries(r.models || {}).filter(([n, mdl]) => base[n] && base[n] !== mdl)),
-      extra: (r.extra_members || []).filter((x) => !base[x.name]),
-      web: new Set(r.web_search || []),
-    };
-    renderMembers(new Set(r.members));
-    refreshRoleSelects();
-  }
-  if (r.chair) $("chair").value = r.chair;
-  if (r.devil_advocate !== undefined) $("devil").value = r.devil_advocate || "";
-  if (r.chair_proposes !== undefined) $("chairProposes").checked = !!r.chair_proposes;
-  if (r.fact_check !== undefined) $("factCheck").checked = !!r.fact_check;
-  if (r.compact_proposals !== undefined) $("compact").checked = !!r.compact_proposals;
-  if (r.research_words) { $("researchWords").value = r.research_words; updateShortenHint(); }
-  if (r.research_shorten !== undefined) $("researchShorten").checked = !!r.research_shorten;
+  applyLineup(r);
   if (r.budget) $("budget").value = r.budget;
   uploads = (data.uploads || []).map((m) => ({ key: ++uploadSeq, name: m.name, status: "ready", meta: m }));
   renderUploads();
@@ -734,6 +760,7 @@ $("form").addEventListener("submit", async (ev) => {
     const { id } = await api("/api/sessions", { method: "POST", body: p });
     uploads = []; renderUploads();  // файлы ушли в заседание
     setFormMode(null);
+    resetLineup();
     $("question").value = ""; $("question").style.height = ""; $("context").value = ""; $("options").value = "";
     lastEstimate = null; $("estimate").hidden = true; $("estLine").textContent = "Напишите вопрос — покажу примерную стоимость";
     openSession(id);
@@ -798,7 +825,7 @@ function goHome() {
   window.scrollTo({ top: 0 });
   if (wasHere || !matchMedia("(max-width: 899px)").matches) $("question").focus();
 }
-$("newBtn").addEventListener("click", goHome);
+$("newBtn").addEventListener("click", () => { if (formMode) { setFormMode(null); resetLineup(); } goHome(); });
 $("brandLink").addEventListener("click", (e) => { e.preventDefault(); goHome(); });
 
 // part: "" — полный отчёт, "summary" — итог с обоснованием, "decision" — только решение совета
