@@ -7,6 +7,14 @@ import pytest
 from council.client import OpenRouterClient, ProviderError
 
 
+@pytest.fixture(autouse=True)
+def _fresh_reasoning_memory():
+    from council import client as cl
+    cl._REASONING_FIX.clear()
+    yield
+    cl._REASONING_FIX.clear()
+
+
 def make(handler, retries=2):
     return OpenRouterClient("k", transport=httpx.MockTransport(handler), max_retries=retries, retry_base_delay=0)
 
@@ -210,6 +218,8 @@ def test_balance():
 
 def test_reasoning_runaway_gets_thinking_budget_then_clear_error():
     """Случай deepseek-v4.1-flash: каждый раз весь лимит уходит в рассуждения — не жжём попытки бесконечно."""
+    from council import client as cl
+    cl._REASONING_FIX.clear()
     bodies = []
 
     def handler(req):
@@ -221,11 +231,47 @@ def test_reasoning_runaway_gets_thinking_budget_then_clear_error():
                          max_tokens_cap=32000)
     with pytest.raises(ProviderError, match="скрытые рассуждения") as e:
         asyncio.run(c.complete("deepseek/x", [], temperature=0, max_tokens=8000, reasoning_effort="low"))
-    assert len(bodies) == 3  # не 6: после двух ограничений рассуждений — понятная ошибка
+    assert len(bodies) == 3  # не 6: ограничить рассуждения, выключить их — и понятная ошибка
     assert bodies[0]["reasoning"] == {"effort": "low"}
     assert bodies[1]["max_tokens"] == 16000 and bodies[1]["reasoning"] == {"max_tokens": 8000}
-    assert bodies[2]["max_tokens"] == 32000 and bodies[2]["reasoning"] == {"max_tokens": 2048}
+    assert bodies[2]["reasoning"] == {"enabled": False}
     assert "Глубина рассуждений" in str(e.value) and e.value.spent.cost == pytest.approx(0.03)
+
+
+def test_reasoning_off_rescues_runaway_model_and_is_remembered():
+    from council import client as cl
+    cl._REASONING_FIX.clear()
+    bodies = []
+
+    def handler(req):
+        b = json.loads(req.content)
+        bodies.append(b)
+        if b.get("reasoning") == {"enabled": False}:
+            return httpx.Response(200, json=ok_body("ответ"))
+        return httpx.Response(200, json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                                         "usage": {"cost": 0.01}})
+
+    c = make(handler, retries=5)
+    comp = asyncio.run(c.complete("deepseek/v", [], temperature=0, max_tokens=8000, reasoning_effort="low"))
+    assert comp.text == "ответ" and len(bodies) == 3
+    comp = asyncio.run(c.complete("deepseek/v", [], temperature=0, max_tokens=8000, reasoning_effort="low"))
+    assert comp.text == "ответ" and len(bodies) == 4 and bodies[3]["reasoning"] == {"enabled": False}  # сразу
+    cl._REASONING_FIX.clear()
+
+
+def test_model_that_cannot_disable_reasoning_gets_clear_error():
+    from council import client as cl
+    cl._REASONING_FIX.clear()
+
+    def handler(req):
+        b = json.loads(req.content)
+        if b.get("reasoning") == {"enabled": False}:
+            return httpx.Response(400, json={"error": {"message": "Reasoning is mandatory for this endpoint"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                                         "usage": {"cost": 0.01}})
+
+    with pytest.raises(ProviderError, match="скрытые рассуждения"):
+        asyncio.run(make(handler, retries=5).complete("o/x", [], temperature=0, max_tokens=8000, reasoning_effort="low"))
 
 
 def test_thinking_budget_lets_model_answer():

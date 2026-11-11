@@ -161,6 +161,12 @@ class LLMClient(Protocol):
     async def aclose(self) -> None: ...
 
 
+# Модели, которые уходили в бесконечные скрытые рассуждения: какой параметр «reasoning» им помог.
+# Следующие запросы к ним сразу идут с ним — без оплаты пустых попыток (живёт до перезапуска программы).
+_REASONING_FIX: dict[str, dict[str, Any]] = {}
+REASONING_OFF = {"enabled": False}  # выключить рассуждения (гибридные модели вроде DeepSeek отвечают сразу)
+
+
 class OpenRouterClient:
     def __init__(
         self,
@@ -221,6 +227,8 @@ class OpenRouterClient:
         if reasoning_effort:
             # Единый параметр OpenRouter для глубины рассуждений; модели без рассуждений его игнорируют.
             payload["reasoning"] = {"effort": reasoning_effort}
+        if model in _REASONING_FIX:
+            payload["reasoning"] = dict(_REASONING_FIX[model])
         spent = Completion(text="")  # расходы всех попыток, включая неудачные
         last_error = "неизвестная ошибка"
         wait = 0.0
@@ -256,6 +264,9 @@ class OpenRouterClient:
                 continue
             except ProviderError as e:
                 e.spent = spent
+                if payload.get("reasoning") == REASONING_OFF and empty_runs and " 400" in str(e):
+                    # модель не умеет отвечать без рассуждений — понятная ошибка вместо «HTTP 400»
+                    raise ProviderError(self._runaway_text(model), spent=spent) from e
                 raise
             spent.prompt_tokens += res["prompt_tokens"]
             spent.cached_tokens += res.get("cached_tokens", 0)
@@ -269,21 +280,27 @@ class OpenRouterClient:
                     # Просто поднимать лимит бесполезно — она рассуждает ещё дольше (и это оплачивается).
                     # Поэтому вместе с лимитом ограничиваем сами рассуждения, оставляя место для ответа.
                     empty_runs += 1
-                    if empty_runs > 2:
-                        raise ProviderError(
-                            f"{model}: модель тратит весь лимит на скрытые рассуждения и не даёт ответа даже при "
-                            "ограничении рассуждений. В «Настройки → Участники» поставьте этому участнику "
-                            "«Глубина рассуждений: не задавать» или «низкая», либо выберите другую модель.",
-                            spent=spent)
-                    payload["max_tokens"] = min(max(limit * 2, 4000), self.max_tokens_cap)
-                    budget = max(1024, payload["max_tokens"] // 2) if empty_runs == 1 else 2048
-                    payload["reasoning"] = {"max_tokens": budget}
-                    last_error = (f"пустой ответ: модель израсходовала лимит {limit} токенов на скрытые рассуждения — "
-                                  f"повтор с лимитом {payload['max_tokens']}, рассуждения ограничены {budget} токенами")
+                    _REASONING_FIX.pop(model, None)  # то, что помогало раньше, больше не помогает
+                    if empty_runs > 2 or payload.get("reasoning") == REASONING_OFF:
+                        raise ProviderError(self._runaway_text(model), spent=spent)
+                    if empty_runs == 1:
+                        payload["max_tokens"] = min(max(limit * 2, 4000), self.max_tokens_cap)
+                        budget = max(1024, payload["max_tokens"] // 2)
+                        payload["reasoning"] = {"max_tokens": budget}
+                        last_error = (f"пустой ответ: модель израсходовала лимит {limit} токенов на скрытые рассуждения — "
+                                      f"повтор с лимитом {payload['max_tokens']}, рассуждения ограничены {budget} токенами")
+                    else:
+                        # Даже ограниченные рассуждения съедают весь лимит (так бывает у deepseek-v4.1-flash):
+                        # выключаем их совсем — гибридные модели тогда сразу пишут ответ.
+                        payload["reasoning"] = dict(REASONING_OFF)
+                        last_error = ("пустой ответ: рассуждения снова съели весь лимит — повтор с выключенными "
+                                      "рассуждениями (модель ответит сразу)")
                     wait = 0.0  # повторяем сразу (причина уйдёт в событие retry)
                 else:
                     last_error = f"пустой ответ модели (finish_reason={finish}, лимит {limit} токенов)"
                 continue
+            if empty_runs and payload.get("reasoning"):
+                _REASONING_FIX[model] = dict(payload["reasoning"])  # следующие запросы — сразу так
             return Completion(
                 text=text,
                 prompt_tokens=spent.prompt_tokens,
@@ -298,6 +315,12 @@ class OpenRouterClient:
             f"{model}: не удалось получить ответ после {self.max_retries + 1} попыток: {last_error}",
             spent=spent,
         )
+
+    @staticmethod
+    def _runaway_text(model: str) -> str:
+        return (f"{model}: модель тратит весь лимит на скрытые рассуждения и не даёт ответа — ни с ограничением "
+                "рассуждений, ни с выключенными. В «Настройки → Участники» поставьте этому участнику «Глубина "
+                "рассуждений: низкая» или выберите другую модель.")
 
     async def _attempt(self, payload: dict[str, Any], report: ProgressFn) -> dict[str, Any]:
         """Одна попытка. Возвращает текст и расходы; бросает _Retryable или ProviderError."""
