@@ -99,6 +99,7 @@ class SessionResult:
     co_leaders: list[str] = field(default_factory=list)               # ничья за 1-е место (если была)
     decisive: dict[str, str] = field(default_factory=dict)            # голосующий -> лидер без его бюллетеня
     coverage: dict[str, int] | None = None                            # сколько раз сравнивались пары
+    ideas: list[dict[str, Any]] = field(default_factory=list)         # идеи «стоит сохранить» и решение по ним
 
     @property
     def total_cost(self) -> float:
@@ -138,6 +139,7 @@ class SessionResult:
             "co_leaders": self.co_leaders,
             "decisive": self.decisive,
             "coverage": self.coverage,
+            "ideas": self.ideas,
             "transcript": self.transcript,
         }
 
@@ -662,6 +664,10 @@ class Council:
 
         leader = rows[0].label
         follow = self.cfg.chair_follows_vote
+        ideas = collect_ideas(critiques, exclude={leader})
+        ideas_text = "\n".join(f"{i['id']} (from {i['label']}): {i['idea']}" for i in ideas)
+        idea_ids = [i["id"] for i in ideas]
+        verdict_checks = [0]
 
         def check_verdict(v: Verdict) -> Verdict:
             w = normalize_label(v.winner)
@@ -674,7 +680,9 @@ class Council:
                 raise ValueError(
                     f"the winner must be the voting leader {leader}; choosing {w} requires 'deviation' that starts with "
                     f"fact, risk or process and explains the specific reason, otherwise set winner to {leader}")
-            return v.model_copy(update={"winner": w, "deviation": deviation})
+            verdict_checks[0] += 1
+            decided = normalize_ideas(v.ideas, idea_ids, strict=verdict_checks[0] <= self.cfg.json_retries)
+            return v.model_copy(update={"winner": w, "deviation": deviation, "ideas": decided})
 
         try:
             verdict = await self._ask(
@@ -684,10 +692,11 @@ class Council:
                                 (f"{agree['level']} (mean Kendall tau between ballots = {agree['tau']:.2f}; "
                                  "1 = identical rankings, 0 = unrelated)") if agree else "",
                                 prompts.factcheck_block(facts), ballot_notes, leader=leader, follow_vote=follow,
-                                compact=bool(self.compact), req=req, co_leaders=tied if len(tied) > 1 else None),
+                                compact=bool(self.compact), req=req, co_leaders=tied if len(tied) > 1 else None,
+                                ideas=ideas_text),
                 Verdict,
                 check=check_verdict,
-                meta={"labels": valid, "leader": rows[0].label},
+                meta={"labels": valid, "leader": rows[0].label, "ideas": idea_ids},
             )
         except (ProviderError, InvalidResponse) as e:
             # Председатель недоступен — итог по результатам голосования без синтеза.
@@ -700,7 +709,11 @@ class Council:
                 risks=top.risks,
             )
 
-        self._emit("verdict", verdict=verdict)
+        by_id = {d.id: d for d in verdict.ideas}
+        for i in ideas:
+            d = by_id.get(i["id"])
+            i["decision"], i["reason"] = (d.decision, d.reason) if d else ("not_addressed", "")
+        self._emit("verdict", verdict=verdict, ideas=ideas)
         return SessionResult(
             question=question,
             refined_question=refined,
@@ -732,6 +745,7 @@ class Council:
             coverage=cover,
             fact_check=facts,
             fact_checker=self.cfg.fact_check.model if facts else "",
+            ideas=ideas,
         )
 
     async def _fact_check(self, question: str, proposals: dict[str, Proposal], rows: list[TallyRow]) -> dict[str, dict]:
@@ -808,6 +822,79 @@ def readable_error(e: Exception) -> str:
 
 def normalize_status(raw: str) -> str:
     return STATUS_ALIASES.get(str(raw).strip().lower(), "unclear")
+
+
+IDEAS_PER_LABEL = 3
+IDEAS_MAX = 15
+
+
+def _idea_key(text: str) -> str:
+    return re.sub(r"\W+", " ", text.lower()).strip()
+
+
+def collect_ideas(critiques: dict[str, CritiqueSet], exclude: set[str] = frozenset()) -> list[dict[str, Any]]:
+    """Идеи «стоит сохранить» из критики: по каждому варианту (кроме лидера) — до трёх, поровну от разных критиков,
+    без повторов. Возвращает [{"id": "I1", "label": "B", "idea": "…", "by": [критики]}]."""
+    per_label: dict[str, list[tuple[str, list[str]]]] = {}
+    for critic, cs in sorted(critiques.items()):
+        for r in cs.reviews:
+            if r.label in exclude:
+                continue
+            items = [k.strip() for k in r.keep if k and k.strip()]
+            if items:
+                per_label.setdefault(r.label, []).append((critic, items))
+    out: list[dict[str, Any]] = []
+    for label in sorted(per_label):
+        picked: dict[str, dict[str, Any]] = {}
+        lists = per_label[label]
+        for depth in range(max(len(x[1]) for x in lists)):  # по кругу: первая идея каждого критика, потом вторая…
+            for critic, items in lists:
+                if depth >= len(items):
+                    continue
+                key = _idea_key(items[depth])
+                if key in picked:
+                    picked[key]["by"].append(critic)
+                elif len(picked) < IDEAS_PER_LABEL:
+                    picked[key] = {"label": label, "idea": items[depth], "by": [critic]}
+        out += list(picked.values())
+    out = out[:IDEAS_MAX]
+    for n, i in enumerate(out, 1):
+        i["id"] = f"I{n}"
+    return [{"id": i["id"], **{k: v for k, v in i.items() if k != "id"}} for i in out]
+
+
+DECISION_WORDS = {"included": "included", "include": "included", "accepted": "included", "used": "included",
+                  "yes": "included", "включена": "included", "включено": "included", "взята": "included",
+                  "rejected": "rejected", "reject": "rejected", "not included": "rejected", "no": "rejected",
+                  "отклонена": "rejected", "отклонено": "rejected"}
+
+
+def normalize_ideas(decisions: list, ids: list[str], *, strict: bool) -> list:
+    """Решение по каждой идее; strict — пропущенные идеи считаются ошибкой ответа (председатель ответит заново),
+    иначе (последняя попытка) отмечаются как «не рассмотрена», чтобы не потерять всё решение."""
+    from .schemas import IdeaDecision
+    if not ids:
+        return []
+    got: dict[str, IdeaDecision] = {}
+    for d in decisions:
+        m = re.search(r"\d+", d.id or "")
+        key = f"I{m.group(0)}" if m else ""
+        if key not in ids or key in got:
+            continue
+        word = DECISION_WORDS.get(d.decision.strip().lower(), "")
+        if not word:
+            word = "rejected" if re.search(r"reject|not|отклон|не ", d.decision, re.I) else "included"
+        got[key] = d.model_copy(update={"id": key, "decision": word, "reason": d.reason.strip()})
+    missing = [i for i in ids if i not in got]
+    no_reason = [k for k, d in got.items() if d.decision == "rejected" and not d.reason]
+    if strict and (missing or no_reason):
+        parts = []
+        if missing:
+            parts.append(f'"ideas" must contain a decision for every idea; missing: {", ".join(missing)}')
+        if no_reason:
+            parts.append(f'rejected ideas need a specific "reason": {", ".join(no_reason)}')
+        raise ValueError("; ".join(parts))
+    return [got.get(i) or IdeaDecision(id=i, decision="not_addressed") for i in ids]
 
 
 def _critique_notes(critiques: dict[str, CritiqueSet], per_label: int = 6) -> str:

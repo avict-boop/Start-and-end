@@ -72,6 +72,8 @@ class MockClient:
                         "scores": {c: 3 + _h(who, l, c) % 8 for c in crit},
                         "strengths": [f"сильная сторона {l}"],
                         "weaknesses": [f"слабое место {l}"],
+                        "keep": ([f"проверить спрос лендингом до разработки (идея из {l})"] if _h(who, l) % 3 == 0 else
+                                 [f"договориться о пилоте с первыми клиентами заранее (идея из {l})"] if _h(who, l) % 3 == 1 else []),
                     }
                     for l in meta["labels"]
                 ]
@@ -105,6 +107,10 @@ class MockClient:
                 "why": "Набрал больше всего голосов и лучшие оценки.",
                 "dissent": ["Часть участников предпочла другой вариант."],
                 "risks": ["Нужно проверить допущения на реальных данных."],
+                "ideas": [{"id": i, "decision": "included" if n % 2 == 0 else "rejected",
+                           "reason": "добавлено в раздел «Что делать» (демо)" if n % 2 == 0 else
+                           "противоречит выбранному подходу: бюджет уже распределён (демо)"}
+                          for n, i in enumerate(meta.get("ideas") or [])],
             }
         else:
             out = {}

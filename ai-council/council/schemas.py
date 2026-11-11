@@ -228,6 +228,7 @@ class Review(BaseModel):
     scores: dict[str, float]
     strengths: list[str] = Field(default_factory=list)
     weaknesses: list[str] = Field(default_factory=list)
+    keep: list[str] = Field(default_factory=list)  # что стоит сохранить из варианта, даже если он не победит
 
     @field_validator("label", mode="before")
     @classmethod
@@ -244,7 +245,7 @@ class Review(BaseModel):
             return {str(k): _score(x) for k, x in v.items()}
         return v
 
-    @field_validator("strengths", "weaknesses", mode="before")
+    @field_validator("strengths", "weaknesses", "keep", mode="before")
     @classmethod
     def _list(cls, v: Any) -> list[str]:
         return to_list(v)
@@ -338,6 +339,32 @@ class FactCheck(BaseModel):
         return to_text(v)
 
 
+class IdeaDecision(BaseModel):
+    """Решение председателя по идее, которую критики советовали сохранить: включена в ответ или отклонена."""
+
+    id: str
+    decision: str = "included"  # included | rejected | not_addressed (нормализуется в session)
+    reason: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _shape(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            data = dict(data)
+            if data.get("id") in (None, ""):
+                data["id"] = _pick(data, "idea_id", "ref", "key", "idea") or ""
+            if data.get("reason") in (None, ""):
+                data["reason"] = _pick(data, "why", "note", "comment", "explanation") or ""
+            if data.get("decision") in (None, ""):
+                data["decision"] = _pick(data, "status", "verdict", "action") or "included"
+        return data
+
+    @field_validator("id", "decision", "reason", mode="before")
+    @classmethod
+    def _text(cls, v: Any) -> str:
+        return to_text(v)
+
+
 class Verdict(BaseModel):
     """Шаг 6: итоговое решение председателя."""
 
@@ -347,6 +374,7 @@ class Verdict(BaseModel):
     dissent: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     deviation: str = ""   # если победитель не лидер голосования — причина (fact | risk | process) и пояснение
+    ideas: list[IdeaDecision] = Field(default_factory=list)  # по каждой идее «стоит сохранить» — взята или нет
 
     @model_validator(mode="before")
     @classmethod

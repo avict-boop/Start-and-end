@@ -89,6 +89,12 @@ COMPACT_JUDGE = ("Proposals are compact on purpose (the chair writes the final f
 FORMAT_RULE = ("If the user's request specifies a structure, sections, a table or another format for the answer, "
                "follow it exactly and cover every requested item.")
 
+KEEP_RULE = """"keep": 0-3 specific ideas, facts, steps or warnings from this proposal that the council's final answer
+should keep EVEN IF this proposal does not win — something the other proposals lack. Be concrete and self-contained
+(the chair must understand it without rereading the proposal); no general praise. Leave it empty if there is nothing
+unique worth keeping.
+"""
+
 SCALE = """Scoring scale (use the whole range; most real answers are not 9-10):
 - 1-2: wrong, irrelevant or unusable for this criterion;
 - 3-4: serious flaws or important gaps;
@@ -178,11 +184,11 @@ Score every proposal on every criterion from 1 to 10:
 {SCALE}
 {note}{REQ_CHECK if req else ""}
 You must review exactly these labels: {labels}. Use the criteria names exactly as written.
-
+{KEEP_RULE}
 JSON format:
 {{"reviews": [
   {{"label": "A", "scores": {{{example_scores}}},
-    "strengths": ["..."], "weaknesses": ["..."]}}
+    "strengths": ["..."], "weaknesses": ["..."], "keep": ["..."]}}
 ]}}"""
 
 
@@ -271,6 +277,7 @@ def verdict(
     compact: bool = False,
     req: list[str] | None = None,
     co_leaders: list[str] | None = None,
+    ideas: str = "",
 ) -> str:
     labels = ", ".join(proposals)
     if follow_vote and leader:
@@ -312,7 +319,7 @@ Voting results, in final order (schulze wins = how many rivals the proposal beat
 {agree}
 Key critique points:
 {critique_notes or "(no critique round)"}
-
+{_ideas_block(ideas)}
 Write the council's final verdict.
 {winner_rule}
 - "final_answer": the complete, ready-to-use final answer for the user, based on the winner and improved with the best ideas from other proposals (markdown allowed). {FORMAT_RULE} Do not drop requested sections even if the proposals skipped them — write them yourself.
@@ -328,7 +335,24 @@ Write the council's final verdict.
 - "risks": main risks and how to mitigate them.
 
 JSON format:
-{{"winner": "A", "final_answer": "...", "why": "...", "dissent": ["..."], "risks": ["..."], "deviation": ""}}"""
+{{"winner": "A", "final_answer": "...", "why": "...", "dissent": ["..."], "risks": ["..."], "deviation": ""{', "ideas": [{"id": "I1", "decision": "included", "reason": "..."}]' if ideas else ""}}}"""
+
+
+def _ideas_block(ideas: str) -> str:
+    """Идеи, которые критики советовали сохранить: председатель решает по каждой."""
+    if not ideas:
+        return ""
+    return f"""
+Ideas worth keeping from the other proposals (critics flagged them; they refer to versions BEFORE revision):
+{ideas}
+
+This is research, not only a vote: valuable findings of proposals that did not win must not be lost silently.
+Decide on EVERY idea above, in "ideas" (one entry per id):
+- "included": the idea is used in final_answer — integrate it where it belongs (not as a separate appended list);
+  "reason": where and how it was used. If the winner already contains it, say so.
+- "rejected": not used; "reason": the specific reason (contradicts the chosen approach, refuted by the fact-check,
+  out of scope, violates a requirement, not supported…). "Not important" without an argument is not a reason.
+"""
 
 
 FACTCHECK_SYSTEM = """You are an independent fact-checker for an expert council of AI models. Use web search.
