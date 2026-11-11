@@ -725,3 +725,4 @@ a.brand:hover .brand-name { color: var(--accent); }
 @media (max-width: 760px) { .kcu { grid-template-columns: 1fr; } }
 .research .rq { font-size: .75rem; font-weight: 800; padding: .1rem .45rem; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line-strong); }
 .research .lbl { display: inline-grid; width: auto; height: auto; padding: 0 .35rem; font-size: .75rem; border-radius: 6px; }
+.w.note { display: block; padding: .15rem 0; }

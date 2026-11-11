@@ -30,11 +30,11 @@ VOLATILITY = ("stable", "changes_fast", "unknown")
 CLAIM_STATUS = ("confirmed", "refuted", "contested_in_sources", "unclear", "user_doc", "search_unavailable")
 STATUS_RANK = {"confirmed": 0, "refuted": 1, "contested_in_sources": 2, "user_doc": 3, "unclear": 4,
                "search_unavailable": 5, "not_checked": 6}
-DEFAULT_LENSES = [
-    "first-hand data and market facts: numbers, sizes, prices, who does what",
-    "technology and constraints: how it actually works, limits, dependencies",
-    "economics and calculations: costs, returns, unit economics, explicit formulas",
-    "methodology skeptic and pre-mortem: how this could be wrong, weak evidence, failure scenarios",
+DEFAULT_LENSES = [  # по-русски: их видит и пользователь; ключ — чтобы не добавлять угол, который уже есть
+    ("рынок", "рынок и первичные данные: цифры, размеры, цены, кто что делает"),
+    ("технолог", "технология и ограничения: как это устроено на деле, пределы, зависимости"),
+    ("эконом", "экономика и расчёты: затраты, отдача, юнит-экономика, явные формулы"),
+    ("скептик", "скептик и разбор провала: где вывод может быть неверен, слабые данные, сценарии неудачи"),
 ]
 DEFAULT_CRITERIA = ["Полнота покрытия", "Качество доказательств", "Калибровка неопределённости", "Практическая ценность"]
 
@@ -347,6 +347,22 @@ class ResearchVerdict(Verdict):
 
 
 # ---------------------------------------------------------------- запросы
+
+def fill_lenses(lenses: list[str], authors: int) -> list[str]:
+    """Углов зрения не меньше, чем авторов: если председатель придумал меньше, добавляем стандартные."""
+    out = [l for l in lenses if l.strip()]
+    for key, text in DEFAULT_LENSES:
+        if len(out) >= authors:
+            break
+        if not any(key in l.lower() for l in out):
+            out.append(text)
+    for _, text in DEFAULT_LENSES:  # всё равно меньше авторов — повторяем стандартные
+        if len(out) >= authors:
+            break
+        if text not in out:
+            out.append(text)
+    return out
+
 
 def subq_block(subquestions: list[str]) -> str:
     return "\n".join(f"Q{i}. {q}" for i, q in enumerate(subquestions, 1))

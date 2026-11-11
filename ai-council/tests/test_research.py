@@ -135,3 +135,11 @@ def test_memory_urls_are_marked_unless_found_by_search():
     assert "https://real.example/a" + R.MEMORY_URL_NOTE not in out and "](https://x.io)" in out
     again = R.mark_memory_urls(R.ResearchProposal(title="t", summary=out), {"https://real.example/a"}).summary
     assert again == out  # повторная разметка метку не удваивает
+
+
+def test_every_author_gets_a_distinct_lens():
+    out = R.fill_lenses(["рынок и первичные данные", "экономика и расчёты", "скептик"], 4)
+    assert len(out) == 4 and out[3].startswith("технология")  # добавлен недостающий угол, а не повтор «рынка»
+    res = run(Council(make_cfg(mode="research"), MockClient(delay=0), seed=3).run("Вопрос?"))
+    lenses = list(res.research["lens_of"].values())
+    assert len(lenses) == 4 and len(set(lenses)) == 4

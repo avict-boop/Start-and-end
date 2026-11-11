@@ -1355,6 +1355,9 @@ function workerRows(s, now) {
     const cls = ["w", active ? "active" : "", c.phase].join(" ");
     rows.push(`<li class="${cls}"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">${esc(phaseText(c))}</span><span class="w-time" title="время этого обращения">${fmtSec(secs)}</span></li>`);
   }
+  // председатель без своего варианта: показываем, почему его нет в списке
+  if (["proposal", "revision"].includes(s.stage) && s.chairJudge && s.chair)
+    rows.push(`<li class="w note"><span class="muted small"><b>${esc(s.chair)}</b> — председатель: своего варианта не предлагает, чтобы не судить самого себя; оценивает чужие и пишет итог</span></li>`);
   return rows;
 }
 

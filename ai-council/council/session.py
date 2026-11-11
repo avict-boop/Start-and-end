@@ -560,6 +560,10 @@ class Council:
             raise CouncilError(f"на этапе «{self.STAGE_TITLE.get(stage, stage)}» не ответил ни один участник: {first[:300]}")
         return ok
 
+    def _n_proposers(self) -> int:
+        members = self.cfg.active_members
+        return len([m for m in members if m.name != self.cfg.chair]) if self.chair_judge else len(members)
+
     def _labels(self, got: dict[str, Any]) -> dict[str, str]:
         """Случайные метки вариантов; при «доделке» из архива прежние варианты сохраняют свои метки."""
         labels = assign_labels(list(got), self.rng)
@@ -891,7 +895,7 @@ class Council:
         self.requirements = [r.strip() for r in (fr.requirements if fr else []) if r.strip()]
         subq = (fr.subquestions if fr else [])[:5] or [refined]
         scope, as_of = (fr.scope if fr else ""), (fr.as_of if fr else "")
-        lenses = ((fr.lenses if fr else []) or list(R.DEFAULT_LENSES)) if rc.lenses else []
+        lenses = R.fill_lenses(fr.lenses if fr else [], self._n_proposers()) if rc.lenses else []
         self._emit("framing", refined_question=refined, criteria=criteria, requirements=self.requirements,
                    scope=scope, as_of=as_of, subquestions=subq, lenses=lenses)
         req = self.requirements or None
