@@ -18,7 +18,7 @@ from typing import Any, Callable
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 
-from ..catalog import date, is_text_model, modalities, sort_newest, upgrades
+from ..catalog import created, date, family, is_text_model, modalities, provider, sort_newest, upgrades
 from ..config import CouncilConfig
 from ..estimate import ModelCatalog, unknown_models
 from ..settings import SettingsError, editable, save
@@ -31,10 +31,17 @@ LOGO_MAX = 2 * 1024 * 1024
 def _model_row(m: dict[str, Any]) -> dict[str, Any]:
     pr = m.get("pricing") or {}
     mod = modalities(m)
+    params = set(m.get("supported_parameters") or [])
     return {"id": m["id"], "name": m.get("name") or "", "date": date(m), "context": m.get("context_length"),
             "prompt": round(float(pr.get("prompt") or 0) * 1e6, 3),
             "completion": round(float(pr.get("completion") or 0) * 1e6, 3),
-            "image": "image" in mod, "audio": "audio" in mod}
+            "image": "image" in mod, "audio": "audio" in mod,
+            "reasoning": bool(params & {"reasoning", "include_reasoning"}),
+            "max_out": (m.get("top_provider") or {}).get("max_completion_tokens")}
+
+
+def created_of(models: list[dict[str, Any]], mid: str) -> int:
+    return next((created(m) for m in models if m.get("id") == mid), 0)
 
 
 def _repo_of(remote: str) -> str | None:
@@ -125,6 +132,23 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         items = [_model_row(m) for m in sort_newest(models) if is_text_model(m)
                  and (not q or q in m["id"].lower() or q in (m.get("name") or "").lower())]
         return {"available": True, "items": items[:max(1, min(limit, 2000))]}
+
+    @app.get("/api/models/family")
+    async def model_family(model: str) -> dict[str, Any]:
+        """Все доступные сейчас модели того же разработчика, что и model (deepseek/…, anthropic/…), по линейкам,
+        новые сверху: чтобы выбрать любую — Pro вместо Flash, старшую или младшую версию."""
+        models = await catalog.get()
+        if models is None:
+            return {"available": False, "groups": []}
+        prov = provider(model)
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for m in sort_newest(models):
+            if is_text_model(m) and provider(m["id"]) == prov:
+                groups.setdefault(family(m["id"]), []).append(_model_row(m))
+        cur_fam = family(model)
+        order = sorted(groups, key=lambda f: (f != cur_fam, -max(created_of(models, r["id"]) for r in groups[f]), f))
+        return {"available": True, "provider": prov, "current": model,
+                "groups": [{"family": f.split("/", 1)[-1], "items": groups[f]} for f in order]}
 
     @app.get("/api/models/upgrades")
     async def model_upgrades() -> dict[str, Any]:

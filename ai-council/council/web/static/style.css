@@ -726,3 +726,14 @@ a.brand:hover .brand-name { color: var(--accent); }
 .research .rq { font-size: .75rem; font-weight: 800; padding: .1rem .45rem; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line-strong); }
 .research .lbl { display: inline-grid; width: auto; height: auto; padding: 0 .35rem; font-size: .75rem; border-radius: 6px; }
 .w.note { display: block; padding: .15rem 0; }
+
+/* выбор модели из линейки разработчика */
+.fam-list { max-height: min(60vh, 520px); overflow: auto; margin-top: .5rem; }
+.fam-list h4 { margin: .8rem 0 .3rem; font-size: .9rem; color: var(--muted); text-transform: none; }
+.fam-list ul { list-style: none; padding: 0; margin: 0; display: grid; gap: .35rem; }
+.fam-item { display: flex; gap: .6rem; align-items: center; justify-content: space-between; padding: .45rem .6rem;
+  border-radius: 8px; background: var(--surface-2); }
+.fam-item.cur { outline: 2px solid var(--accent-soft); }
+.fam-main { min-width: 0; overflow-wrap: anywhere; }
+#famSearch { width: 100%; }
+.set-members .w-tok { width: 7.5rem; }

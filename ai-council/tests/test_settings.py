@@ -213,3 +213,27 @@ def test_web_control_update_keeps_user_config(tmp_path):
     assert "compose build -q" in calls and "compose up -d --force-recreate" in calls
     # без заявки скрипт ничего не делает
     assert subprocess.run(["bash", str(app / "deploy" / "web-control.sh"), "run"], env=env).returncode == 0
+
+
+def test_pick_any_model_of_the_same_developer(web, monkeypatch):
+    """DeepSeek Pro вышла раньше v4.1-flash и считается другой линейкой — но выбрать её можно."""
+    c, _ = web
+    from council.estimate import ModelCatalog
+
+    async def fake_get(self):
+        return [{"id": "deepseek/deepseek-v4.1-flash", "created": 1790000000, "context_length": 128000,
+                 "pricing": {"prompt": "0.00000015", "completion": "0.0000006"}, "supported_parameters": ["reasoning"]},
+                {"id": "deepseek/deepseek-v4-pro", "created": 1785000000, "context_length": 128000,
+                 "pricing": {"prompt": "0.0000005", "completion": "0.000002"}, "supported_parameters": ["reasoning"],
+                 "top_provider": {"max_completion_tokens": 64000}},
+                {"id": "deepseek/deepseek-v4-flash", "created": 1780000000, "pricing": {}},
+                {"id": "deepseek/deepseek-embed", "created": 1790000001, "pricing": {}},
+                {"id": "openai/gpt-5", "created": 1754000000, "pricing": {}}]
+    monkeypatch.setattr(ModelCatalog, "get", fake_get)
+    r = c.get("/api/models/family", params={"model": "deepseek/deepseek-v4.1-flash"}).json()
+    groups = {g["family"]: [m["id"] for m in g["items"]] for g in r["groups"]}
+    assert r["provider"] == "deepseek" and r["groups"][0]["family"] == "deepseek-flash"  # своя линейка первой
+    assert groups["deepseek-flash"] == ["deepseek/deepseek-v4.1-flash", "deepseek/deepseek-v4-flash"]
+    assert groups["deepseek-pro"] == ["deepseek/deepseek-v4-pro"] and not any("embed" in i for v in groups.values() for i in v)
+    pro = r["groups"][1]["items"][0]
+    assert pro["reasoning"] and pro["max_out"] == 64000 and pro["prompt"] == 0.5

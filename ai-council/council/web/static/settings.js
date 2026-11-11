@@ -77,15 +77,19 @@ function renderSettings() {
     const enabled = d.members.filter((m) => m.enabled).map((m) => [m.name, m.name]);
     html = `
       <p class="muted small">Модель — id на OpenRouter (начните вводить, появятся подсказки: дата выхода и цена за 1M токенов вход/выход).
+        «Лимит ответа» — сколько токенов модель может потратить на ответ вместе со скрытыми рассуждениями (пусто — как в общих настройках);
+        думающим моделям с глубиной «средняя» или «высокая» лучше 16 000–24 000.
         Изменения действуют со следующего заседания.</p>
       <div class="table-wrap"><table class="table set-members">
-        <thead><tr><th>Вкл.</th><th>Имя</th><th>Модель</th><th>Глубина рассуждений</th><th><span class="sr-only">Удалить</span></th></tr></thead>
+        <thead><tr><th>Вкл.</th><th>Имя</th><th>Модель</th><th>Глубина рассуждений</th><th title="Сколько токенов модель может потратить на ответ вместе со скрытыми рассуждениями">Лимит ответа</th><th><span class="sr-only">Удалить</span></th></tr></thead>
         <tbody>${d.members.map((m, i) => `<tr class="${m.enabled ? "" : "off"}">
           <td class="c-on"><label class="switch small" title="Участвует в заседаниях"><input type="checkbox" data-mi="${i}" data-f="enabled" ${m.enabled ? "checked" : ""} ${ro} aria-label="${esc(m.name)} участвует"><span class="sw" aria-hidden="true"></span></label></td>
           <td class="c-name" data-th="Имя"><input type="text" data-mi="${i}" data-f="name" value="${esc(m.name)}" ${m._new ? "" : "readonly"} ${ro} class="w-name" aria-label="Имя участника"></td>
           <td data-th="Модель на OpenRouter"><input type="text" data-mi="${i}" data-f="model" value="${esc(m.model)}" list="modelList" ${ro} class="w-model" aria-label="Модель ${esc(m.name)}">
-            <div class="muted small" data-info="${i}">${modelInfo(m.model)}</div></td>
+            <div class="muted small" data-info="${i}">${modelInfo(m.model)}</div>
+            ${SET.writable && m.model.includes("/") ? `<button type="button" class="link small" data-family="${i}">Выбрать другую модель этого разработчика…</button>` : ""}</td>
           <td data-th="Глубина рассуждений">${sel(`eff${i}`, EFFORTS, m.reasoning_effort || "", `data-mi="${i}" data-f="reasoning_effort" ${ro} aria-label="Глубина рассуждений ${esc(m.name)}"`)}</td>
+          <td data-th="Лимит ответа, токенов"><input type="number" min="500" max="128000" step="1000" data-mi="${i}" data-f="max_tokens" value="${m.max_tokens ?? ""}" placeholder="${d.max_tokens}" ${ro} class="w-tok" aria-label="Лимит ответа ${esc(m.name)}"></td>
           <td class="c-del"><button type="button" class="icon-btn" data-del="${i}" ${ro} title="Удалить участника" aria-label="Удалить участника ${esc(m.name)}"><svg class="ic"><use href="#i-trash"/></svg></button></td></tr>`).join("")}</tbody>
       </table></div>
       <button type="button" class="secondary" id="addMember" ${ro} style="margin-top:.4rem"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>Добавить участника</button>
@@ -186,7 +190,8 @@ function bindSettings() {
     el.addEventListener(el.type === "checkbox" ? "change" : "input", () => {
       const m = d.members[+el.dataset.mi];
       const f = el.dataset.f;
-      m[f] = el.type === "checkbox" ? el.checked : (f === "reasoning_effort" ? (el.value || null) : el.value.trim());
+      m[f] = el.type === "checkbox" ? el.checked : f === "reasoning_effort" ? (el.value || null)
+        : f === "max_tokens" ? (el.value ? Number(el.value) : null) : el.value.trim();
       if (f === "model") { const info = $("setBody").querySelector(`[data-info="${el.dataset.mi}"]`); if (info) info.innerHTML = modelInfo(m.model); }
       if (f === "enabled" || f === "name") { fixRoles(); setDirty(); renderSettings(); return; }
       setDirty();
@@ -209,6 +214,7 @@ function bindSettings() {
   on("sChairProposes", "change", (e) => { d.chair_proposes = e.target.checked; setDirty(); });
   on("sChairFollows", "change", (e) => { d.chair_follows_vote = e.target.checked; setDirty(); });
   on("checkUpgrades", "click", checkUpgrades);
+  for (const b of $("setBody").querySelectorAll("[data-family]")) b.addEventListener("click", () => pickFromFamily(+b.dataset.family));
   const bindVal = (id, fn) => on(id, id.startsWith("f") && $(id) && $(id).type === "checkbox" ? "change" : "input", (e) => { fn(e.target); setDirty(); });
   bindVal("sMode", (t) => { d.mode = t.value; });
   bindVal("sRounds", (t) => { d.debate_rounds = num(t.value); });
@@ -291,6 +297,37 @@ async function uploadLogo(e) {
     notice("✓ Логотип загружен.", "ok");
     renderSettings(); setDirty();
   } catch (err) { notice(`Логотип не загружен: ${esc(err.message)}`, "bad"); }
+}
+
+// выбор любой доступной модели того же разработчика: линейки, новые сверху, цены, контекст, рассуждения
+async function pickFromFamily(i) {
+  const m = SET.data.members[i];
+  let r;
+  try { r = await api(`/api/models/family?model=${encodeURIComponent(m.model)}`); } catch (e) { toast(e.message); return; }
+  if (!r.available) { toast("Каталог OpenRouter сейчас недоступен"); return; }
+  const k = (n) => (n == null ? "—" : n >= 1000 ? `${Math.round(n / 1000)}K` : String(n));
+  const row = (x) => `<li class="fam-item${x.id === m.model ? " cur" : ""}" data-text="${esc((x.id + " " + x.name).toLowerCase())}">
+      <div class="fam-main"><code>${esc(x.id)}</code>${x.id === m.model ? ' <span class="badge plain">сейчас</span>' : ""}
+        <div class="muted small">${esc(x.date)} · $${x.prompt} / $${x.completion} за 1M · контекст ${k(x.context)}${x.max_out ? ` · ответ до ${k(x.max_out)}` : ""}${x.reasoning ? " · 🧠 рассуждения" : ""}${x.image ? " · 🖼" : ""}</div></div>
+      ${x.id === m.model ? "" : `<button type="button" class="secondary small-btn" data-pick="${esc(x.id)}">Выбрать</button>`}</li>`;
+  const html = `<p class="muted small">Все модели <b>${esc(r.provider)}</b>, доступные сейчас на OpenRouter, по линейкам, новые сверху.
+      🧠 — умеет рассуждать (глубину задайте в столбце «Глубина рассуждений»).</p>
+    <input type="search" id="famSearch" placeholder="Поиск: pro, flash, r1…" aria-label="Поиск модели">
+    <div class="fam-list">${r.groups.map((g) => `<h4>${esc(g.family)}</h4><ul>${g.items.map(row).join("")}</ul>`).join("")}</div>`;
+  let chosen = null;
+  const done = ask({ title: `Модель для «${m.name}»`, html, ok: "Закрыть", cancel: null });
+  const body = $("dBody");
+  body.querySelector("#famSearch").addEventListener("input", (e) => {
+    const q = e.target.value.toLowerCase().trim();
+    for (const li of body.querySelectorAll(".fam-item")) li.hidden = !!q && !li.dataset.text.includes(q);
+    for (const h of body.querySelectorAll(".fam-list h4")) h.hidden = ![...h.nextElementSibling.children].some((li) => !li.hidden);
+  });
+  for (const b of body.querySelectorAll("[data-pick]")) b.addEventListener("click", () => { chosen = b.dataset.pick; $("dOk").click(); });
+  await done;
+  if (!chosen) return;
+  m.model = chosen;
+  renderSettings(); setDirty();
+  notice(`Модель участника «${esc(m.name)}» — <code>${esc(chosen)}</code>. Нажмите «Сохранить», а затем «Программа → Перезапустить», чтобы сбросить запомненные настройки рассуждений.`, "ok");
 }
 
 async function checkUpgrades() {
