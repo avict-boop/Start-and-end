@@ -5,20 +5,20 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const money = (x) => (x == null ? "—" : `$${Number(x).toFixed(4)}`);
 
 const STAGES = [
-  ["framing", "Постановка"],
-  ["proposal", "Предложения"],
-  ["critique", "Критика"],
+  ["framing", "Уточняем задачу"],
+  ["proposal", "Варианты ответа"],
+  ["critique", "Ищем слабые места"],
   ["revision", "Доработка"],
   ["vote", "Голосование"],
-  ["verdict", "Вердикт"],
+  ["verdict", "Готовим вывод"],
 ];
-const ARB_STAGE = ["arbitration", "Арбитраж доказательств"];
+const ARB_STAGE = ["arbitration", "Проверяем утверждения по источникам"];
 // проверка ссылок реестра: открывается ли страница
 const LINK_BADGE = { dead: ' <span class="badge bad">ссылка не открывается</span>', blocked: ' <span class="badge plain" title="Сайт не пускает автоматическую проверку — сама ссылка может быть верной">сайт не пускает проверку</span>',
   error: ' <span class="badge plain">не открылась при проверке</span>',
   refused: ' <span class="badge bad" title="Ссылка ведёт внутрь сети сервера — такие адреса не открываются">внутренний адрес</span>' };
 const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения",
-  factcheck: "Проверка фактов", arbitration: "Арбитраж доказательств", recheck: "Проверка новых утверждений" };
+  factcheck: "Проверка фактов", arbitration: "Проверяем утверждения по источникам", recheck: "Проверяем новые утверждения" };
 // что происходит на этапе — простыми словами
 const STAGE_HINT = {
   framing: "председатель уточняет вопрос и критерии",
@@ -33,12 +33,12 @@ const STAGE_HINT = {
 };
 // исследование: этапы те же по смыслу, но работа на них другая — свои названия и пояснения
 const RESEARCH_STAGE = {
-  framing: ["Постановка", "председатель задаёт рамки, подвопросы и углы зрения авторов"],
-  proposal: ["Предложения", "каждый автор со своего угла зрения пишет вариант с проверяемыми утверждениями"],
-  critique: ["Критика", "модели оценивают чужие варианты, отмечают спорные утверждения и пропущенные подвопросы"],
+  framing: ["Уточняем задачу", "председатель задаёт рамки, подвопросы и углы зрения авторов"],
+  proposal: ["Варианты ответа", "каждый автор со своего угла зрения пишет вариант с проверяемыми утверждениями"],
+  critique: ["Ищем слабые места", "модели оценивают чужие варианты, отмечают спорные утверждения и пропущенные подвопросы"],
   revision: ["Доработка", "авторы дорабатывают варианты по найденным доказательствам и выжимкам чужих вариантов"],
   vote: ["Голосование", "модели ранжируют варианты и выбирают лучший по каждому подвопросу"],
-  verdict: ["Синтез", "председатель собирает итог: известно, спорно, неизвестно — с источниками"],
+  verdict: ["Готовим вывод", "председатель собирает итог: известно, спорно, неизвестно — с источниками"],
 };
 const stageHint = (s, key) => (s.mode === "research" && RESEARCH_STAGE[key] ? RESEARCH_STAGE[key][1] : STAGE_HINT[key]) || "";
 const MODE_HINT = {
@@ -351,10 +351,12 @@ function selectedMembers() {
 function updateParamsSummary() {
   if (!config) return;
   const n = selectedMembers().length;
-  const bits = [`${n} ${plural(n, "модель", "модели", "моделей")}`];
+  const custom = Object.keys(lineup.models).length || lineup.extra.length
+    || config.members.some((m) => m.enabled !== selectedMembers().includes(m.name));
+  const bits = [`${custom ? "Ваш состав" : "Готовый состав"} · ${n} ${plural(n, "модель", "модели", "моделей")}`];
   if ($("chair").value) bits.push(`председатель ${$("chair").value}`);
   if (mode === "debate") { const r = Number($("rounds").value) || 1; bits.push(`${r} ${plural(r, "раунд", "раунда", "раундов")}`); }
-  bits.push(`лимит $${Number($("budget").value) || config.budget}`);
+  bits.push(`бюджет $${Number($("budget").value) || config.budget}`);
   if ($("compact").checked && mode !== "research") bits.push("компактно");
   if (mode === "research") bits.push(`вариант до ${Number($("researchWords").value) || "—"} слов${$("researchShorten").checked ? ", длинные — на сокращение" : ""}`);
   if (mode === "research" && researchTuned.arbitration_claims) bits.push(`проверка ${researchTuned.arbitration_claims} утв.`);
@@ -373,6 +375,7 @@ function formChanged() {
   updateParamsSummary();
   lastEstimate = null;
   clearTimeout(estTimer);
+  if ($("question").value.trim().length >= 3) { $("estLine").textContent = "Оцениваем стоимость…"; $("estimateBtn").className = "est-line"; }
   estTimer = setTimeout(autoEstimate, 700);
 }
 
@@ -380,7 +383,7 @@ async function autoEstimate() {
   const p = payload();
   const line = $("estLine");
   $("estimateBtn").className = "est-line";
-  if (p.question.length < 3) { line.textContent = "Напишите вопрос — покажу примерную стоимость"; $("estimate").hidden = true; return; }
+  if (p.question.length < 3) { line.textContent = "Напишите вопрос — оценим стоимость"; $("estimate").hidden = true; return; }
   if (p.members.length < 2) { line.textContent = "Выберите хотя бы двух участников"; $("estimateBtn").classList.add("warn"); return; }
   const seq = ++estSeq;
   line.textContent = "Считаю стоимость…";
@@ -397,7 +400,7 @@ async function autoEstimate() {
 function estimateSummary(e) {
   if ((Object.keys(e.unknown || {})).length) return ["Есть модели, которых нет на OpenRouter — нажмите, чтобы посмотреть", "bad"];
   if (e.low == null) return [$("mock").checked ? `Демо-режим: бесплатно · ${e.calls} обращений к моделям` : `${e.calls} обращений · цены неизвестны`, ""];
-  let txt = `Оценка: $${e.low.toFixed(2)} – $${e.high.toFixed(2)}`;
+  let txt = `Оценка: $${e.low.toFixed(2)} – $${e.high.toFixed(2)} · бюджет $${e.budget}`;
   let kind = "";
   const kl = e.key_limit;
   if (e.balance != null && e.balance < e.high) { txt += " · баланса может не хватить"; kind = "bad"; }
@@ -846,7 +849,7 @@ $("form").addEventListener("submit", async (ev) => {
     setFormMode(null);
     resetLineup();
     $("question").value = ""; $("question").style.height = ""; $("context").value = ""; $("options").value = "";
-    lastEstimate = null; $("estimate").hidden = true; $("estLine").textContent = "Напишите вопрос — покажу примерную стоимость";
+    lastEstimate = null; $("estimate").hidden = true; $("estLine").textContent = "Напишите вопрос — оценим стоимость";
     openSession(id);
     loadHistory();
   } catch (e) {
@@ -864,7 +867,7 @@ function showView(name) {
   view = name;
   for (const v of ["empty", "session", "archive", "stats", "settings"]) $(v).hidden = name !== v;
   // в меню подсвечен текущий раздел; заседание открывается из «Нового» или архива — подсвечиваем «Архив»
-  const navOf = { empty: "newBtn", archive: "archiveBtn", stats: "statsBtn", settings: "settingsBtn", session: "" };
+  const navOf = { empty: "newBtn", archive: "archiveBtn", stats: "statsBtn", settings: "settingsBtn", session: "archiveBtn" };
   for (const b of document.querySelectorAll(".nav-item")) {
     if (b.id === navOf[name]) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   }
@@ -981,7 +984,7 @@ async function loadHistory() {
   if (!items.length) { ul.innerHTML = '<li class="muted small" style="padding:0 .75rem">Пока пусто</li>'; return; }
   ul.innerHTML = items.slice(0, HISTORY_LIMIT).map((it) => {
     const meta = it.status === "done"
-      ? `${esc(niceDate(it))}${it.winner ? (it.unacceptable ? " · ни один не подходит" : ` · решение ${esc(it.winner)}`) : ""}`
+      ? `${esc(niceDate(it))} · ${esc(MODE_NAME[it.mode] || it.mode_name || "")}${it.unacceptable ? " · ни один не подходит" : ""}`
       : `${it.status === "running" ? '<span class="dot-run"></span>' : ""}${esc(niceDate(it))} · ${STATUS_TEXT[it.status] || esc(it.status)}${it.spent ? ` · ${money(it.spent)}` : ""}`;
     return `<li class="item" data-id="${esc(it.id)}"><button type="button" class="open" data-open-id="${esc(it.id)}" title="${esc(shortTitle(it.question, 300))}">
       <span class="q">${esc(shortTitle(it.question))}</span><span class="meta">${meta}</span></button>
@@ -1258,7 +1261,7 @@ function apply(s, ev) {
     case "ledger":
       s.ledger = ev.ledger || null;
       if (s.stage === "arbitration") s.work = {};
-      logAdd(s, `Арбитраж доказательств: проверено ${(s.ledger && s.ledger.claims || []).length} утверждений, источников ${(s.ledger && s.ledger.evidence || []).length}`, "k-ok");
+      logAdd(s, `Проверка по источникам: проверено ${(s.ledger && s.ledger.claims || []).length} утверждений, источников ${(s.ledger && s.ledger.evidence || []).length}`, "k-ok");
       break;
     case "factcheck":
       s.facts = ev.results || {};
@@ -1343,11 +1346,19 @@ function render(s) {
       const b = $("sQueryBody");
       const clipped = b.scrollHeight > b.clientHeight + 2;
       b.classList.toggle("clipped", clipped);
-      $("sQueryToggle").hidden = !clipped;
-      $("sQueryToggle").textContent = "Показать запрос полностью";
+      b.dataset.clipped = clipped ? "1" : "";
+      queryToggle(finished);
     });
   }
-  $("sCost").textContent = money(s.cost);
+  // после завершения исходный вопрос свёрнут: первым на экране — вывод
+  if (longQuery && $("sQuery").classList.contains("folded") !== finished && !$("sQueryBody").classList.contains("open")) {
+    $("sQuery").classList.toggle("folded", finished);
+    queryToggle(finished);
+  }
+  // на основном экране — округлённо; точная сумма — в подсказке и в «Куда ушли деньги»
+  $("sCost").textContent = s.cost == null ? "—" : s.cost > 0 && s.cost < 0.01 ? "<$0.01" : `$${Number(s.cost).toFixed(2)}`;
+  $("sCost").title = money(s.cost);
+  $("session").classList.toggle("finished", finished);
   const running = !finished;
   $("sBudget").textContent = s.budget && !s.done ? ` из ${money(s.budget)}` : "";
   $("budgetBtn").hidden = !running || !s.budget;
@@ -1444,16 +1455,18 @@ function renderResearch(s) {
   const box = $("vResearch");
   const isR = s.mode === "research" && (v.known || v.contested || v.unknown);
   box.hidden = !isR;
+  $("vCard").innerHTML = "";
   if (!isR) { box.innerHTML = ""; return; }
   const ev = Object.fromEntries(((s.ledger && s.ledger.evidence) || []).map((e) => [e.id, e]));
   const refs = (ids) => (ids || []).map((i) => i === "DOC" ? '<span class="lbl">DOC</span>'
     : ev[i] ? `<a href="${esc(ev[i].url)}" target="_blank" rel="noopener" title="${esc(ev[i].title || ev[i].url)}">[${esc(i)}]</a>` : "").join(" ");
   const card = v.decision_card || {};
   const cardList = (t, xs) => ((xs || []).length ? `<div><h4>${t}</h4><ul>${xs.map((x) => `<li>${inline(x)}</li>`).join("")}</ul></div>` : "");
-  let h = card.summary_decision || (card.top_known || []).length
+  // карточка решения — первой, до текста итога: решение, известное, пробелы, шаги
+  $("vCard").innerHTML = card.summary_decision || (card.top_known || []).length
     ? `<div class="decision-card"><div class="dc-title">Карточка решения</div>${card.summary_decision ? `<p class="dc-sum">${inline(card.summary_decision)}</p>` : ""}
       <div class="dc-grid">${cardList("Известно", card.top_known)}${cardList("Главные пробелы", card.key_unknowns)}${cardList("Следующие шаги", card.next_steps)}</div></div>` : "";
-  h += `<h3>Что известно, что спорно, чего не знает никто</h3><p class="muted small">«Известно» — только то, что подтвердили найденные источники или ваши документы; согласие моделей сюда не попадает.</p>`;
+  let h = `<h3>Что известно, что спорно, чего не знает никто</h3><p class="muted small">«Известно» — только то, что подтвердили найденные источники или ваши документы; согласие моделей сюда не попадает.</p>`;
   h += `<div class="kcu"><div class="kcu-col ok"><h4>Известно</h4>${(v.known || []).length ? `<ul>${v.known.map((k) => `<li>${inline(k.statement)} ${refs(k.evidence_ids)}${k.volatility === "changes_fast" ? ' <span class="muted small">· быстро меняется</span>' : ""}${knownBasis(k)}</li>`).join("")}</ul>` : '<p class="muted small">Подтверждённых источниками утверждений нет.</p>'}</div>`;
   h += `<div class="kcu-col warn"><h4>Спорно</h4>${(v.contested || []).length ? `<ul>${v.contested.map((c) => `<li><b>${inline(c.issue)}</b>${(c.positions || []).length ? `<div class="small">${c.positions.map(inline).join(" · ")}</div>` : ""}${c.why_they_differ ? `<div class="muted small">почему: ${inline(c.why_they_differ)}</div>` : ""} ${refs(c.evidence_ids)}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div>`;
   h += `<div class="kcu-col bad"><h4>Неизвестно</h4>${(v.unknown || []).length ? `<ul>${v.unknown.map((u) => `<li>${inline(u.gap)}${u.reason ? ` <span class="muted small">· ${esc(GAP_WORD[u.reason] || u.reason)}</span>` : ""}${u.how_to_check ? `<div class="muted small">как узнать: ${inline(u.how_to_check)}</div>` : ""}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div></div>`;
@@ -1690,10 +1703,11 @@ function renderActivity(s) {
 $("logSec").addEventListener("toggle", () => { if ($("logSec").open && current) { $("log").dataset.n = ""; renderActivity(current); } });
 
 const IDEA_BADGE = { included: ["ok", "Включена"], rejected: ["bad", "Отклонена"], not_addressed: ["plain", "Не рассмотрена"] };
+// согласие моделей — не подтверждение фактов: нейтральная метка, основания вывода — отдельной
 const AGREE_BADGE = {
-  high: ["ok", "Мнения совета совпадают"],
-  medium: ["warn", "Мнения частично расходятся"],
-  low: ["bad", "Мнения совета разошлись"],
+  high: ["plain", "Модели согласны с выбором"],
+  medium: ["warn", "Модели частично расходятся"],
+  low: ["bad", "Модели разошлись"],
 };
 const AGREE_NAME = { high: "высокое", medium: "среднее", low: "низкое" };
 const AGREE_HINT = {
@@ -1713,8 +1727,8 @@ function renderVerdict(s) {
   const firsts = row && row.ballots ? `${row.first_places} из ${row.ballots} ${plural(row.ballots, "голоса", "голосов", "голосов")} за первое место` : "";
   if (s.mode === "research") {
     const L = s.ledger && s.ledger.claims ? s.ledger.claims.length : 0;
-    $("vSub").textContent = [`синтез по ${(s.subq || []).length || "—"} подвопросам`, `общий каркас — вариант ${v.winner}`,
-      L ? `проверено утверждений: ${L}` : "поиск не проводился"].join(" · ");
+    $("vSub").textContent = [`ответ по ${(s.subq || []).length || "—"} подвопросам`, L ? "" : "поиск по источникам не проводился"].filter(Boolean).join(" · ");
+    $("vSub").title = `общий каркас итога — вариант ${v.winner}`;
   } else if (v.acceptable === false) {
     $("vTitle").textContent = "Ни один вариант не подходит";
     $("vSub").textContent = [`лидер сравнения — вариант ${v.winner}${p && p.title ? ` «${p.title}»` : ""}, но он не рекомендован`, firsts].filter(Boolean).join(" · ");
@@ -1729,6 +1743,8 @@ function renderVerdict(s) {
   if (v.acceptable === false) badges.push(`<span class="badge bad" title="${esc((v.decisive_defects || []).join("; "))}">Ни один вариант не подходит</span>`);
   if (deviated) badges.push(`<span class="badge bad">Председатель выбрал не лидера</span>`);
   if (s.facts && Object.values(s.facts).some((r) => (r.claims || []).some((c) => c.status === "refuted"))) badges.push(`<span class="badge bad">Есть опровергнутые факты</span>`);
+  const basis = basisBadge(s);
+  if (basis) badges.unshift(basis);
   if (s.mock) badges.push(`<span class="badge plain">демо-режим</span>`);
   $("vBadges").innerHTML = badges.join("");
 
@@ -1881,10 +1897,10 @@ function renderProposals(s) {
     const p = s.proposals[l];
     const list = (name, xs) => (xs && xs.length ? `<div><b>${name}:</b> ${xs.map(inline).join("; ")}</div>` : "");
     return `<article class="proposal ${l === win ? "win" : ""}">
-      <header><span class="lbl">${esc(l)}</span><div><h3 class="clickable" data-full="${esc(l)}">${esc(p.title)}${s.revised[l] ? '<span class="tag">доработан</span>' : ""}${l === win ? ' <span class="tag dec">решение</span>' : ""}</h3>
+      <header><span class="lbl">${esc(l)}</span><div><h3 class="clickable" data-full="${esc(l)}">${esc(String(p.title || "").replace(/\s*\((доработ\w*|после доработки)\)\s*$/i, ""))}${s.revised[l] ? '<span class="tag">доработан</span>' : ""}${l === win ? ' <span class="tag dec">решение</span>' : ""}</h3>
       <div class="author">${esc(authorOf(s, l))}</div></div></header>
       <div class="body md">${md(p.summary)}</div>
-      <button class="open-full" type="button" data-full="${esc(l)}"><svg class="ic" aria-hidden="true" style="width:16px;height:16px"><use href="#i-expand"/></svg>Читать полностью</button>
+      <button class="open-full" type="button" data-full="${esc(l)}"><svg class="ic" aria-hidden="true" style="width:16px;height:16px"><use href="#i-expand"/></svg>Открыть полный ответ</button>
       <div class="lists">${list("Плюсы", p.pros)}${list("Риски", p.risks)}</div>
       ${p.changes ? `<div class="changes"><b>Что изменено${s.revised[l] && POSITION_NAME[p.position] && p.comparison !== undefined ? ` (${POSITION_NAME[p.position]})` : ""}:</b> ${inline(p.changes)}</div>` : ""}
     </article>`;
@@ -1986,15 +2002,19 @@ function openSession(id) {
   };
 }
 
-$("sQueryToggle").addEventListener("click", () => {
+function queryToggle(finished) {
   const b = $("sQueryBody");
-  const open = b.classList.toggle("open");
-  $("sQueryToggle").textContent = open ? "Свернуть запрос" : "Показать запрос полностью";
+  $("sQueryToggle").hidden = !finished && !b.dataset.clipped;
+  $("sQueryToggle").textContent = b.classList.contains("open") ? "Свернуть вопрос" : finished ? "Исходный вопрос ▾" : "Показать вопрос полностью";
+}
+$("sQueryToggle").addEventListener("click", () => {
+  $("sQueryBody").classList.toggle("open");
+  queryToggle($("sQuery").classList.contains("folded"));
 });
 
 $("cancelBtn").addEventListener("click", async () => {
   if (!current) return;
-  const ok = await ask({ title: "Остановить заседание?", html: "<p>Заседание приостановится. Уже полученные ответы моделей сохранятся — его можно будет продолжить позже, не оплачивая их повторно.</p>", ok: "Остановить", cancel: "Не останавливать", danger: true });
+  const ok = await ask({ title: "Поставить на паузу?", html: "<p>Пауза наступит, как только вернутся уже отправленные запросы. Полученные ответы сохранятся — продолжить можно позже, не оплачивая их повторно.</p><p class=\"muted small\">Если продолжать не нужно — после паузы нажмите «Удалить».</p>", ok: "Пауза", cancel: "Продолжать работу" });
   if (!ok) return;
   try { await api(`/api/sessions/${encodeURIComponent(current.id)}/cancel`, { method: "POST" }); } catch (e) { toast(e.message); }
 });
@@ -2108,7 +2128,8 @@ async function openStats() {
       ${kpi(money(d.month_cost), `в этом месяце (${d.month_sessions})`)}
       ${kpi(money(d.avg_cost), "средняя цена заседания")}
       ${kpi(dur(d.avg_duration), "среднее время")}
-      ${kpi(`${d.with_files} / ${d.followups}`, "с файлами / уточнений")}
+      ${kpi(d.with_files, "с файлами")}
+      ${kpi(d.followups, "уточнений")}
     </div>
     <div class="stats-grid">
       <div>
@@ -2125,17 +2146,18 @@ async function openStats() {
       <div>
         <h2>Модели</h2>
         <div class="table-wrap"><table class="table">
-          <thead><tr><th>Участник</th><th>Заседаний</th><th>Побед</th><th>Доля побед</th><th>Ср. оценка</th><th>Сбоев</th><th>Расходы</th></tr></thead>
+          <thead><tr><th>Участник</th><th>Заседаний</th><th title="Сколько её вариантов совет выбрал решением — из предложенных ею">Выбрано лучшим</th><th>Доля</th><th>Ср. оценка</th><th>Сбоев</th><th>Расходы</th></tr></thead>
           <tbody>${d.models.map((m) => `<tr>
             <td><b>${esc(m.name)}</b><div class="muted small">${esc(m.model)}</div></td>
             <td class="num">${m.sessions}</td>
-            <td class="num">${m.wins} из ${m.proposals}</td>
-            <td><div class="win-cell"><div class="bar"><i style="width:${Math.round((m.win_rate || 0) * 100)}%"></i></div>${pct(m.win_rate)}</div></td>
+            <td class="num">${m.proposals ? `${m.wins} из ${m.proposals}` : '<span class="muted" title="Своих вариантов не писала — например, была председателем">не предлагала</span>'}</td>
+            <td>${m.proposals ? `<div class="win-cell"><div class="bar"><i style="width:${Math.round((m.win_rate || 0) * 100)}%"></i></div>${pct(m.win_rate)}</div>` : '<span class="muted">—</span>'}</td>
             <td class="num">${m.avg_score == null ? "—" : m.avg_score.toFixed(1)}</td>
             <td class="num" style="${m.failures ? "color:var(--bad)" : ""}">${m.failures}</td>
             <td class="num" title="в среднем ${money(m.cost_per_session)} за заседание">${money(m.cost)}</td></tr>`).join("")}</tbody>
         </table></div>
-        <p class="muted small">Доля побед — сколько предложенных моделью вариантов стали решением совета.
+        <p class="muted small">«Выбрано лучшим» — сколько вариантов модели совет выбрал решением в <b>ваших</b> заседаниях; на малом числе заседаний это не рейтинг моделей вообще.
+          «Не предлагала» — своих вариантов не было (обычно председатель). «Ни один не подходит» победой не считается.
           Средняя оценка — как её варианты оценивали другие модели (1–10). Сбои — пустые ответы, ошибки формата и связи.</p>
         ${(d.chairs || []).length ? `<h2 style="margin-top:1.2rem">Председатели</h2>
         <div class="table-wrap"><table class="table">
@@ -2530,7 +2552,7 @@ function route() {
 
 /* ------------------------------------------------------------ «Подобрать состав» */
 
-const BASIS_TEXT = { catalog: "каталог", history: "ваша история", reviews: "обзоры", knowledge: "знания советника" };
+const BASIS_TEXT = { catalog: "каталог", history: "по вашим прошлым заседаниям", reviews: "обзоры", knowledge: "знания советника" };
 const BASIS_HINT = {
   catalog: "факты каталога OpenRouter: контекст, предел ответа, рассуждения, цена",
   history: "ваши заседания: победы вариантов, оценки критиков, сбои",
@@ -2564,7 +2586,8 @@ function renderAdvice(r) {
   const a = r.advice, t = a.task || {}, f = r.facts || {}, ds = r.dossiers || {};
   const k = (n) => (n == null ? "" : n >= 1000 ? `${Math.round(n / 1000)} тыс.` : String(n));
   const basis = (b) => (b || []).map((x) => `<span class="basis b-${esc(x)}" title="${esc(BASIS_HINT[x] || "")}">${esc(BASIS_TEXT[x] || x)}</span>`).join("");
-  const src = r.source === "advisor" ? `советник: ${esc((r.advisor_model || "").split("/").pop())}` : "подбор по правилам";
+  const src = r.source === "advisor" ? `советник: ${esc((r.advisor_model || "").split("/").pop())}`
+    : "подобрано по настройкам и возможностям моделей — без модели-советника";
   const cost = [src, r.cost ? `$${r.cost.toFixed(3)}` : "", r.dossiers_built ? `обзоров собрано ${r.dossiers_built}` : "",
     r.dossiers_cached ? `из памяти ${r.dossiers_cached}` : ""].filter(Boolean).join(" · ");
   const newMode = a.mode && a.mode !== mode;
@@ -2629,7 +2652,25 @@ function renderAdvice(r) {
   $("adviceBox").querySelectorAll("[data-card]").forEach((b) => b.addEventListener("click", () => openModelCard(b.dataset.card)));
 }
 
+// снимок формы до применения рекомендаций — чтобы «Отменить» вернул как было
+function formSnapshot() {
+  return { mode, members: selectedMembers(), chair: $("chair").value, devil: $("devil").value,
+    lineup: { models: { ...lineup.models }, extra: lineup.extra.map((x) => ({ ...x })), web: new Set(lineup.web) },
+    researchTuned: { ...researchTuned }, words: $("researchWords").value, shorten: $("researchShorten").checked };
+}
+function restoreSnapshot(snap) {
+  lineup = { models: { ...snap.lineup.models }, extra: snap.lineup.extra.map((x) => ({ ...x })), web: new Set(snap.lineup.web) };
+  if (snap.mode !== mode) setMode(snap.mode);
+  renderMembers(new Set(snap.members));
+  refreshRoleSelects();
+  $("chair").value = snap.chair; $("devil").value = snap.devil;
+  researchTuned = { ...snap.researchTuned };
+  $("researchWords").value = snap.words; $("researchShorten").checked = snap.shorten;
+  updateShortenHint(); renderResearchTuned(); updateChairHint(); updateResetBtn(); formChanged();
+}
+
 function applyAdvice(r) {
+  const before = formSnapshot();
   const plan = r.plan, a = r.advice, box = $("adviceBox");
   const on = (sel) => { const el = box.querySelector(sel); return !!(el && el.checked); };
   const take = (a.picks || []).map((_, i) => on(`[data-pi="${i}"]`));
@@ -2670,7 +2711,10 @@ function applyAdvice(r) {
   $("params").open = true;
   formChanged();
   box.hidden = true;
-  toast("Выбранное применено — только для этого вопроса");
+  const n = take.filter(Boolean).length + (modeOn ? 1 : 0) + rsOn.length + (on("#advDrop") ? 1 : 0);
+  toastAction(`Применено ${n} ${plural(n, "изменение", "изменения", "изменений")} — только для этого вопроса`, "Отменить", () => {
+    restoreSnapshot(before); box.hidden = false; toast("Вернули как было");
+  });
 }
 
 // на что опирается пункт «известно»: проверенная формулировка реестра или цитата из документа пользователя
@@ -2682,3 +2726,38 @@ function knownBasis(k) {
   if ((k.evidence_ids || []).includes("DOC")) out.push(`<div class="muted small">по вашему документу${k.doc_ref ? ` (${esc(k.doc_ref)})` : ""}${k.doc_quote ? `: «${esc(k.doc_quote)}»` : ""} — не независимая проверка</div>`);
   return out.join("");
 }
+
+// основания вывода — отдельно от согласия моделей: что подтверждено источниками, что нет
+function basisBadge(s) {
+  const led = s.ledger && s.ledger.claims;
+  if (s.mode === "research") {
+    if (!led || !led.length) return '<span class="badge plain" title="Утверждения поиском не проверялись">Основания: источники не проверялись</span>';
+    const own = led.filter((c) => !c.duplicate_of);
+    const ok = own.filter((c) => c.status === "confirmed").length;
+    const kind = ok === 0 ? "bad" : ok * 2 < own.length ? "warn" : "ok";
+    return `<span class="badge ${kind}" title="Сколько проверенных утверждений подтвердили найденные источники; остальное — в «спорно» и «неизвестно»">Основания: подтверждено ${ok} из ${own.length}</span>`;
+  }
+  const facts = s.facts ? Object.values(s.facts).flatMap((r) => r.claims || []) : [];
+  if (!facts.length) return '<span class="badge plain" title="Факты поиском не проверялись — вывод опирается на рассуждения моделей">Факты не проверялись</span>';
+  const ok = facts.filter((c) => c.status === "confirmed").length;
+  return `<span class="badge ${ok * 2 < facts.length ? "warn" : "ok"}">Факты: подтверждено ${ok} из ${facts.length}</span>`;
+}
+
+// уведомление с действием («Отменить»)
+function toastAction(text, label, fn) {
+  const t = document.createElement("div");
+  t.className = "toast toast-act";
+  t.setAttribute("role", "status");
+  t.innerHTML = `<span>${esc(text)}</span> <button type="button" class="link">${esc(label)}</button>`;
+  document.body.appendChild(t);
+  const close = () => t.remove();
+  t.querySelector("button").addEventListener("click", () => { close(); fn(); });
+  setTimeout(close, 9000);
+}
+
+// «Как работает совет» — коротко, по запросу
+$("howBtn").addEventListener("click", () => {
+  const open = $("howBox").hidden;
+  $("howBox").hidden = !open;
+  $("howBtn").setAttribute("aria-expanded", String(open));
+});

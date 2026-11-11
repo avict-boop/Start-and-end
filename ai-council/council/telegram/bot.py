@@ -36,9 +36,9 @@ from .format import esc, md_to_tg, split_message, strip_tags
 log = logging.getLogger("council.telegram")
 from ..diagnostics import bundle, save_events, save_failed, setup_logging, stamp  # noqa: E402
 
-STAGES = [("framing", "Постановка"), ("proposal", "Предложения"), ("critique", "Критика"),
-          ("arbitration", "Арбитраж доказательств"), ("revision", "Доработка"),
-          ("recheck", "Проверка новых утверждений"), ("vote", "Голосование"), ("factcheck", "Факты"), ("verdict", "Вердикт")]
+STAGES = [("framing", "Уточняем задачу"), ("proposal", "Варианты ответа"), ("critique", "Ищем слабые места"),
+          ("arbitration", "Проверка по источникам"), ("revision", "Доработка"),
+          ("recheck", "Проверка новых утверждений"), ("vote", "Голосование"), ("factcheck", "Проверка фактов"), ("verdict", "Готовим вывод")]
 MODE_NAME = {"debate": "Дебаты", "quick": "Быстро", "evaluate": "Оценка вариантов", "research": "Исследование"}
 MODE_FULL = {"debate": "Подробное обсуждение", "quick": "Быстрый ответ", "evaluate": "Выбор из ваших вариантов",
              "research": "Исследование: подвопросы, проверка фактов поиском, «известно / спорно / неизвестно»"}
@@ -54,12 +54,12 @@ STAGE_HINT = {
 # исследование: свои названия и пояснения этапов (работа на них другая, чем в обсуждении)
 RESEARCH_STAGE = {
     "proposal": ("Предложения", "каждый автор со своего угла зрения пишет вариант с проверяемыми утверждениями"),
-    "framing": ("Постановка", "председатель задаёт рамки, подвопросы и углы зрения авторов"),
+    "framing": ("Уточняем задачу", "председатель задаёт рамки, подвопросы и углы зрения авторов"),
     "critique": ("Критика", "модели оценивают чужие варианты, отмечают спорные утверждения и пробелы"),
-    "arbitration": ("Арбитраж доказательств", "поиск проверяет утверждения всех вариантов"),
+    "arbitration": ("Проверка по источникам", "поиск проверяет утверждения всех вариантов"),
     "revision": ("Доработка", "авторы дорабатывают варианты по найденным доказательствам"),
     "vote": ("Голосование", "модели ранжируют варианты и выбирают лучший по каждому подвопросу"),
-    "verdict": ("Синтез", "председатель собирает итог: известно, спорно, неизвестно — с источниками"),
+    "verdict": ("Готовим вывод", "председатель собирает итог: известно, спорно, неизвестно — с источниками"),
 }
 COMMANDS = [
     ("ask", "задать вопрос совету (в группе)"),
@@ -1046,7 +1046,7 @@ class CouncilBot:
         progress = Progress(question=sp["question"], mode=mode, rounds=sp.get("rounds") or 1,
                             members=[m.name for m in cfg.active_members], chair=cfg.chair, demo=bool(sp.get("mock")),
                             fact_check=cfg.fact_check.enabled)
-        stop_kb = {"inline_keyboard": [[self._btn("⏸ Остановить", "stop")]]}
+        stop_kb = {"inline_keyboard": [[self._btn("⏸ Пауза", "stop")]]}
         msg = await self.api.send_message(chat_id, progress.render(), reply_markup=stop_kb)
         client = self.llm_factory(cfg, bool(sp.get("mock")))
         events: list[dict[str, Any]] = []

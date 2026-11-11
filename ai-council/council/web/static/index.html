@@ -22,6 +22,7 @@
   <symbol id="i-clip" viewBox="0 0 24 24"><path d="m21 11-9 9a5.5 5.5 0 0 1-8-8l9-9a3.7 3.7 0 0 1 5 5l-9 9a1.8 1.8 0 0 1-2.6-2.6l8.5-8.5"/></symbol>
   <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5"/></symbol>
   <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+  <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
   <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
   <symbol id="i-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
   <symbol id="i-dl" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></symbol>
@@ -60,8 +61,14 @@
     <!-- ============================================================ новый вопрос -->
     <section id="empty" class="view compose" aria-labelledby="composeTitle">
       <header class="page-head">
-        <h1 id="composeTitle">Новый вопрос совету</h1>
-        <p class="lead">Несколько моделей предложат решения, анонимно покритикуют друг друга и проголосуют. Председатель напишет итог.</p>
+        <h1 id="composeTitle">Задайте вопрос</h1>
+        <p class="lead">Несколько моделей независимо ответят, проверят ответы друг друга и подготовят общий вывод.
+          <button type="button" class="link" id="howBtn" aria-expanded="false" aria-controls="howBox">Как работает совет</button></p>
+        <div id="howBox" class="how-box muted small" hidden>
+          Каждая модель вслепую пишет свой вариант. Потом модели анонимно критикуют чужие варианты, авторы их дорабатывают,
+          и все голосуют — свой вариант оценить нельзя. Председатель (одна из моделей) пишет итог: берёт лучший вариант и
+          ценное из остальных. В «Исследовании» утверждения вариантов ещё и проверяются поиском по источникам.
+        </div>
       </header>
       <div id="pausedBanner" class="alert paused" hidden></div>
       <form id="form" autocomplete="off" novalidate>
@@ -73,7 +80,7 @@
             </div>
 
             <div id="dropzone" class="qbox">
-              <label for="question" class="sr-only">Вопрос для совета</label>
+              <label for="question" class="label q-label">Ваш вопрос</label>
               <textarea id="question" rows="5" required
                 placeholder="Опишите задачу — чем подробнее, тем лучше ответ. Например: какой стек выбрать для MVP интернет-магазина с бюджетом 1 млн ₽?"></textarea>
               <ul id="attList" class="att-list" aria-label="Вложения"></ul>
@@ -87,18 +94,18 @@
             </div>
 
             <fieldset class="modes" id="modeSeg">
-              <legend class="label">Как обсуждать</legend>
+              <legend class="label">Какой ответ нужен?</legend>
               <label class="mode-card"><input type="radio" name="mode" value="debate">
                 <span class="mode-txt"><b>Подробное обсуждение</b><small>Решения, критика, доработка, голосование. Для важных вопросов.</small></span>
                 <span class="mode-meta" data-meta="debate"></span></label>
               <label class="mode-card"><input type="radio" name="mode" value="research">
-                <span class="mode-txt"><b>Исследование</b><small>Подвопросы, проверка фактов поиском, итог «известно / спорно / неизвестно» с источниками.</small></span>
+                <span class="mode-txt"><b>Исследование</b><small>Проверка фактов по источникам. Покажем, что известно, что спорно и что требует уточнения.</small></span>
                 <span class="mode-meta" data-meta="research"></span></label>
               <label class="mode-card"><input type="radio" name="mode" value="quick">
                 <span class="mode-txt"><b>Быстрый ответ</b><small>Решения и голосование, без критики. Быстрее и дешевле.</small></span>
                 <span class="mode-meta" data-meta="quick"></span></label>
               <label class="mode-card"><input type="radio" name="mode" value="evaluate">
-                <span class="mode-txt"><b>Выбрать из моих вариантов</b><small>Вы даёте варианты — совет их обсуждает и выбирает лучший.</small></span>
+                <span class="mode-txt"><b>Сравнить ваши варианты</b><small>Вы даёте варианты — совет их обсуждает и выбирает лучший (или говорит, что ни один не подходит).</small></span>
                 <span class="mode-meta" data-meta="evaluate"></span></label>
             </fieldset>
             <small id="modeHint" class="sr-only" aria-live="polite"></small>
@@ -112,13 +119,14 @@
 
           <div class="compose-side">
             <div class="advise-bar">
-              <button type="button" id="adviseBtn" class="secondary">✨ Подобрать состав под вопрос</button>
-              <small class="hint">Модель-советник разберёт вопрос и предложит режим, модели и роли — по каталогу OpenRouter, обзорам моделей из интернета и вашей истории. Обычно $0,05–0,3; обзоры запоминаются на 3 недели.</small>
+              <button type="button" id="adviseBtn" class="secondary">Предложить состав для этой задачи</button>
+              <small class="hint">Необязательно: советник разберёт вопрос и предложит режим, модели и настройки — вы выберете, что применить. Обычно $0,05–0,3, отдельно от бюджета заседания.</small>
             </div>
             <section id="adviceBox" class="card advice" hidden aria-live="polite"></section>
             <details id="params" class="params card">
               <summary>
-                <span><b>Параметры</b><small id="paramsSummary" class="params-sum"></small></span>
+                <span><b>Состав и параметры</b><small id="paramsSummary" class="params-sum"></small></span>
+                <span class="params-edit" aria-hidden="true">Изменить</span>
                 <svg class="ic chev" aria-hidden="true"><use href="#i-down"/></svg>
               </summary>
               <div class="params-body">
@@ -131,7 +139,7 @@
                   <div class="label-row"><span class="label" id="membersLabel">Участники</span>
                     <button type="button" class="btn small" id="lineupReset" hidden title="Модели, председатель, адвокат дьявола и поиск — как в «Настройки → Модели»">↺ Модели по умолчанию</button></div>
                   <div id="members" class="members" role="group" aria-labelledby="membersLabel"></div>
-                  <small class="hint">Чем модели отличаются и для чего подходят — «Настройки → Модели», ссылка «О модели…» у каждой.</small>
+                  <small class="hint">Галочка — участвует; ▾ рядом — выбрать другую модель того же разработчика, с описанием.</small>
                 </div>
                 <div class="field" id="webField">
                   <span class="label" id="webLabel">Поиск в интернете у участников</span>
@@ -139,8 +147,8 @@
                   <small class="hint" id="webHint">Для свежих цифр, цен и новостей: выбранные участники ищут в интернете, когда пишут и дорабатывают вариант, и ставят ссылки. Около $0,02 за запрос. Обычно хватает одного-двух — остальные остаются независимыми.</small>
                 </div>
                 <div class="row2">
-                  <div class="field"><label for="chair" class="label">Председатель</label><select id="chair"></select></div>
-                  <div class="field"><label for="devil" class="label">Адвокат дьявола</label><select id="devil"></select></div>
+                  <div class="field"><label for="chair" class="label" title="Модель, которая ставит задачу и пишет общий итог">Председатель <span class="muted small">— пишет итог</span></label><select id="chair"></select></div>
+                  <div class="field"><label for="devil" class="label" title="Участник, который нарочно ищет слабые места и возражения">Адвокат дьявола <span class="muted small">— ищет возражения</span></label><select id="devil"></select></div>
                 </div>
                 <p id="chairHint" class="hint chair-hint"></p>
                 <div class="field">
@@ -171,9 +179,9 @@
                     <span><b>Демо-режим</b><small>Без ключа и без затрат — ответы ненастоящие, чтобы посмотреть, как всё работает.</small></span></label>
                 </div>
                 <div class="field budget-field">
-                  <label for="budget" class="label">Лимит стоимости, $</label>
+                  <label for="budget" class="label">Бюджет заседания, $</label>
                   <input id="budget" type="number" min="0.01" max="100" step="any" inputmode="decimal">
-                  <small class="hint">Заседание остановится, если расходы дойдут до лимита.</small>
+                  <small class="hint">Перед каждым запросом программа оценивает его цену: если вместе с уже отправленными бюджет будет превышен — заседание встанет на паузу, полученное сохранится, продолжить можно с бóльшим бюджетом.</small>
                 </div>
               </div>
             </details>
@@ -181,7 +189,7 @@
             <div class="startbar">
               <div id="formError" class="alert bad" role="alert" hidden></div>
               <button id="startBtn" type="submit" class="btn primary big">Начать заседание</button>
-              <button id="estimateBtn" type="button" class="est-line" aria-expanded="false" aria-controls="estimate"><span id="estLine">Напишите вопрос — покажу примерную стоимость</span></button>
+              <button id="estimateBtn" type="button" class="est-line" aria-expanded="false" aria-controls="estimate"><span id="estLine">Напишите вопрос — оценим стоимость</span></button>
               <div id="estimate" class="estimate" hidden></div>
             </div>
           </div>
@@ -215,7 +223,7 @@
       <nav class="tabs set-tabs" id="setTabs" role="tablist" aria-label="Разделы настроек">
         <button type="button" role="tab" data-tab="members" class="active">Модели</button>
         <button type="button" role="tab" data-tab="session">Заседание</button>
-        <button type="button" role="tab" data-tab="facts">Факты и голос</button>
+        <button type="button" role="tab" data-tab="facts">Проверка и голосование</button>
         <button type="button" role="tab" data-tab="brand">Отчёты</button>
         <button type="button" role="tab" data-tab="system">Программа</button>
       </nav>
@@ -241,7 +249,7 @@
         <h1 id="sQuestion"></h1>
         <div id="sQuery" class="query" hidden>
           <div id="sQueryBody" class="query-body md"></div>
-          <button id="sQueryToggle" type="button" class="link" hidden>Показать запрос полностью</button>
+          <button id="sQueryToggle" type="button" class="link" hidden>Показать вопрос полностью</button>
         </div>
         <div id="sAtts" class="s-atts" hidden></div>
         <div class="s-facts">
@@ -283,6 +291,7 @@
         <h2 id="vTitle"></h2>
         <div id="vSub" class="v-sub muted"></div>
         <div id="vAgreeWarn" class="alert warn" hidden></div>
+        <div id="vCard"></div>
         <div id="vAnswer" class="md answer"></div>
         <div id="vResearch" class="research" hidden></div>
         <div class="rate-row" id="rateRow" hidden>
@@ -329,7 +338,7 @@
         <div class="prog-head">
           <h2 id="progTitle" class="sr-only">Ход заседания</h2>
           <div id="stageNow" class="stage-now-text" aria-live="polite"></div>
-          <button id="cancelBtn" type="button" class="btn danger small" hidden><svg class="ic" aria-hidden="true"><use href="#i-stop"/></svg>Остановить</button>
+          <button id="cancelBtn" type="button" class="btn small" hidden title="Поставить на паузу: уже полученные ответы сохранятся"><svg class="ic" aria-hidden="true"><use href="#i-pause"/></svg>Пауза</button>
         </div>
         <div class="progress" aria-hidden="true"><i id="stageBar"></i></div>
         <ol id="timeline" class="steps"></ol>
@@ -344,7 +353,7 @@
         <p id="tallyLead" class="muted"></p>
         <div id="tallyBars" class="tbars"></div>
         <details class="howto">
-          <summary>Как считали — таблица, бюллетени и методика</summary>
+          <summary>Как получен результат голосования — таблица, бюллетени, методика</summary>
           <div class="table-wrap"><table id="tally" class="table"></table></div>
           <p id="tallyNote" class="muted small"></p>
           <div id="ballots" class="ballots"></div>

@@ -881,7 +881,7 @@ def render_decision_html(view: View, *, toolbar: str = "") -> str:
     """Только решение совета: сам ответ, без вопроса, обоснования, вариантов и голосования."""
     v = view
     title = DECISION_TITLE
-    parts = ['<main class="page">', _masthead(v, "decision"), f"<h1>{title}</h1>",
+    parts = ['<main class="page">', _masthead(v, "decision"), f"<h1>{title}</h1>", _card(v),
              f'<section class="decision" id="verdict"><div class="answer md">{md_to_html(v.verdict.get("final_answer", ""))}'
              "</div></section>"]
     n = len(v.members)

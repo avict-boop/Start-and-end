@@ -135,7 +135,7 @@ function renderSettings() {
           <td class="c-name" data-th="Имя"><input type="text" data-mi="${i}" data-f="name" value="${esc(m.name)}" ${m._new ? "" : "readonly"} ${ro} class="w-name" aria-label="Имя участника"></td>
           <td data-th="Модель на OpenRouter"><input type="text" data-mi="${i}" data-f="model" value="${esc(m.model)}" list="modelList" ${ro} class="w-model" aria-label="Модель ${esc(m.name)}">
             <div class="muted small" data-info="${i}">${modelInfo(m.model)}</div>
-            ${SET.writable && m.model.includes("/") ? `<button type="button" class="link small" data-family="${i}">Выбрать другую модель этого разработчика…</button>` : ""}</td>
+            ${SET.writable && m.model.includes("/") ? `<button type="button" class="link small" data-family="${i}" title="Выбрать другую модель этого разработчика — с описанием">Заменить модель</button>` : ""}</td>
           <td data-th="Глубина рассуждений">${sel(`eff${i}`, EFFORTS, m.reasoning_effort || "", `data-mi="${i}" data-f="reasoning_effort" ${ro} aria-label="Глубина рассуждений ${esc(m.name)}"`)}</td>
           <td data-th="Лимит ответа, токенов"><input type="number" min="500" max="128000" step="1000" data-mi="${i}" data-f="max_tokens" value="${m.max_tokens ?? ""}" placeholder="${d.max_tokens}" ${ro} class="w-tok" aria-label="Лимит ответа ${esc(m.name)}"></td>
           <td class="c-del"><button type="button" class="icon-btn" data-del="${i}" ${ro} title="Удалить участника" aria-label="Удалить участника ${esc(m.name)}"><svg class="ic"><use href="#i-trash"/></svg></button></td></tr>`).join("")}</tbody>

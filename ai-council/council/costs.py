@@ -8,9 +8,9 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-STAGE_NAME = {"framing": "Постановка", "describe": "Описание изображений", "proposal": "Предложения",
-              "critique": "Критика", "arbitration": "Арбитраж доказательств", "revision": "Доработка",
-              "vote": "Голосование", "factcheck": "Проверка фактов", "verdict": "Итог", "recheck": "Повторная проверка"}
+STAGE_NAME = {"framing": "Уточнение задачи", "describe": "Описание изображений", "proposal": "Варианты ответа",
+              "critique": "Поиск слабых мест", "arbitration": "Проверка по источникам", "revision": "Доработка",
+              "vote": "Голосование", "factcheck": "Проверка фактов", "verdict": "Вывод", "recheck": "Проверка новых утверждений"}
 ORDER = list(STAGE_NAME)
 
 
