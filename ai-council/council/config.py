@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -157,6 +157,11 @@ def load_dotenv(path: str | Path = ".env") -> None:
         os.environ.setdefault(key, value)
 
 
+# какие настройки исследования можно менять для одного заседания (советник и «Параметры» вопроса)
+RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "max_claims", "revision_digest",
+                    "section_vote", "fresh_scouts", "max_words", "shorten_long", "long_factor", "link_check")
+
+
 class OverrideError(ValueError):
     """Некорректные пользовательские настройки заседания."""
 
@@ -173,6 +178,7 @@ def with_overrides(
     compact: bool | None = None,
     research_words: int | None = None,
     research_shorten: bool | None = None,
+    research: dict[str, Any] | None = None,
     models: dict[str, str] | None = None,
     extra_members: list[dict[str, str]] | None = None,
     web_search: list[str] | None = None,
@@ -233,6 +239,10 @@ def with_overrides(
         data["research"]["max_words"] = research_words
     if research_shorten is not None:
         data["research"]["shorten_long"] = research_shorten
+    for k, val in (research or {}).items():  # другие настройки исследования на это заседание (по рекомендации)
+        if k not in RESEARCH_TUNABLE:
+            raise OverrideError(f"эту настройку исследования нельзя менять для заседания: {k}")
+        data["research"][k] = val
     try:
         return CouncilConfig.model_validate(data)
     except ValidationError as e:

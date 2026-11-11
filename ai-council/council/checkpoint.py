@@ -201,6 +201,7 @@ class Checkpoint:
                              budget=budget, chair_proposes=req.get("chair_proposes"),
                              fact_check=req.get("fact_check"), compact=req.get("compact_proposals"),
                              research_words=req.get("research_words"), research_shorten=req.get("research_shorten"),
+                             research=req.get("research_overrides") or None,
                              extra_members=extra or None,
                              models={k: v for k, v in (req.get("models") or {}).items() if k in known} or None,
                              web_search=[n for n in req.get("web_search") or [] if n in known] or None)

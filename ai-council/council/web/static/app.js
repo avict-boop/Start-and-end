@@ -254,6 +254,26 @@ function updateShortenHint() {
 
 // состав на этот вопрос (по «Подобрать состав» или вручную): другая модель у участника, новые участники, поиск
 let lineup = { models: {}, extra: [], web: new Set() };
+// другие настройки исследования на этот вопрос (из рекомендации советника): {ключ: значение}
+let researchTuned = {};
+const RS_NAME = {
+  arbitration_claims: "Утверждений на проверку поиском", missions: "Поисковых заданий (подтвердить / опровергнуть)",
+  fresh_scouts: "Авторов с поиском уже в предложениях", max_words: "Длина варианта, слов", shorten_long: "Сокращать слишком длинные варианты",
+  max_claims: "Утверждений в варианте", lenses: "Углы зрения авторов", section_vote: "Голосование по подвопросам",
+  revision_digest: "Доработка по выжимкам", long_factor: "«Слишком длинный» — во сколько раз", arbitration: "Арбитраж доказательств",
+  link_check: "Проверка ссылок",
+};
+const rsVal = (v) => (v === true ? "да" : v === false ? "нет" : String(v));
+
+function renderResearchTuned() {
+  const keys = Object.keys(researchTuned).filter((k) => !["max_words", "shorten_long"].includes(k));
+  const box = $("researchTuned");
+  box.hidden = !keys.length;
+  if (!keys.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<b>Для этого вопроса по рекомендации:</b> ${keys.map((k) => `${esc(RS_NAME[k] || k)} — <b>${esc(rsVal(researchTuned[k]))}</b>`).join("; ")}.
+    <button type="button" class="link small" id="researchTunedReset">Вернуть из настроек</button>`;
+  $("researchTunedReset").addEventListener("click", () => { researchTuned = {}; renderResearchTuned(); updateParamsSummary(); formChanged(); });
+}
 
 function memberList() {
   return [...config.members, ...lineup.extra.map((x) => ({ ...x, enabled: true, extra: true }))];
@@ -335,6 +355,7 @@ function updateParamsSummary() {
   bits.push(`лимит $${Number($("budget").value) || config.budget}`);
   if ($("compact").checked && mode !== "research") bits.push("компактно");
   if (mode === "research") bits.push(`вариант до ${Number($("researchWords").value) || "—"} слов${$("researchShorten").checked ? ", длинные — на сокращение" : ""}`);
+  if (mode === "research" && researchTuned.arbitration_claims) bits.push(`проверка ${researchTuned.arbitration_claims} утв.`);
   if ($("factCheck").checked && mode !== "research") bits.push("проверка фактов");
   const web = [...lineup.web].filter((x) => selectedMembers().includes(x));
   if (web.length && mode !== "evaluate") bits.push(`поиск: ${web.join(", ")}`);
@@ -451,6 +472,8 @@ function payload() {
     compact: mode === "research" ? false : $("compact").checked,
     research_words: mode === "research" ? (Number($("researchWords").value) || null) : null,
     research_shorten: mode === "research" ? $("researchShorten").checked : null,
+    research: mode === "research" && Object.keys(researchTuned).length
+      ? Object.fromEntries(Object.entries(researchTuned).filter(([k]) => !["max_words", "shorten_long"].includes(k))) : null,
     budget: Number($("budget").value) || null,
     mock: $("mock").checked,
     attachments: uploads.filter((u) => u.status === "ready").map((u) => u.meta.id),
@@ -479,6 +502,8 @@ function applyLineup(r) {
   if (r.compact_proposals !== undefined) $("compact").checked = !!r.compact_proposals;
   if (r.research_words) { $("researchWords").value = r.research_words; updateShortenHint(); }
   if (r.research_shorten !== undefined) $("researchShorten").checked = !!r.research_shorten;
+  researchTuned = { ...(r.research_overrides || {}) };
+  renderResearchTuned();
   updateChairHint();
 }
 
@@ -492,6 +517,8 @@ function resetLineup() {
   refreshRoleSelects();
   resetToggles();
   $("budget").value = config.budget;
+  researchTuned = {};
+  renderResearchTuned();
   $("adviceBox").hidden = true;
   setMode(config.mode === "evaluate" ? "debate" : config.mode);
 }
@@ -2444,8 +2471,11 @@ function renderAdvice(r) {
         ${t.summary ? `<div class="muted small">${esc(t.summary)}</div>` : ""}</dd>
       <dt>Режим</dt><dd><b>${esc(MODE_NAME[a.mode || mode] || mode)}</b>${newMode ? ` <span class="muted small">(сейчас выбран «${esc(MODE_NAME[mode] || mode)}»)</span>` : ""}
         ${a.mode_why ? `<div class="muted small">${esc(a.mode_why)}</div>` : ""}</dd>
-      ${a.research_words ? `<dt>Длина варианта</dt><dd>${a.research_words} слов</dd>` : ""}
     </dl>
+    ${Object.keys(a.research_settings || {}).length ? `<h4>Настройки исследования для этого вопроса</h4>
+      <ul class="adv-rs">${Object.entries(a.research_settings).map(([k, v]) => `<li><span>${esc(RS_NAME[k] || k)}</span>
+        <b>${esc(rsVal(v))}</b> <span class="muted small">(сейчас ${esc(rsVal((config.research_all || {})[k]))})</span>
+        ${(a.research_why || {})[k] ? `<div class="muted small">${esc(a.research_why[k])}</div>` : ""}</li>`).join("")}</ul>` : ""}
     <h4>Состав</h4><ol class="adv-picks">${picks}</ol>
     ${avoid}
     ${(a.caveats || []).length ? `<ul class="adv-caveats">${a.caveats.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
@@ -2471,7 +2501,11 @@ function applyAdvice(r) {
   refreshRoleSelects();
   if (plan.chair) $("chair").value = plan.chair;
   $("devil").value = plan.devil_advocate || "";
-  if (a.research_words && mode === "research") { $("researchWords").value = a.research_words; updateShortenHint(); }
+  const rs = (mode === "research" && a.research_settings) || {};
+  if (rs.max_words) { $("researchWords").value = rs.max_words; updateShortenHint(); }
+  if (rs.shorten_long !== undefined) $("researchShorten").checked = !!rs.shorten_long;
+  researchTuned = { ...rs };
+  renderResearchTuned();
   updateChairHint();
   $("params").open = true;
   formChanged();

@@ -139,6 +139,7 @@ class RunRequest(BaseModel):
     compact: bool | None = None         # компактные варианты; None — как в config.yaml
     research_words: int | None = Field(default=None, ge=300, le=5000)  # длина варианта исследования
     research_shorten: bool | None = None  # возвращать слишком длинные варианты на сокращение
+    research: dict[str, Any] | None = None  # другие настройки исследования на это заседание (из рекомендации)
     # состав на это заседание («Подобрать состав»): другая модель у участника, новые участники, поиск у участников
     models: dict[str, str] | None = None
     extra_members: list[dict[str, str]] | None = None
@@ -245,6 +246,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                   compact=False if req.mode == "research" else req.compact,
                                   research_words=req.research_words if req.mode == "research" else None,
                                   research_shorten=req.research_shorten if req.mode == "research" else None,
+                                  research=req.research if req.mode == "research" else None,
                                   models=req.models, extra_members=req.extra_members, web_search=req.web_search)
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
@@ -454,6 +456,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             "compact": {"enabled": cfg.compact_proposals, "words": cfg.compact_words},
             "research": {"words": cfg.research.max_words, "shorten": cfg.research.shorten_long,
                          "factor": cfg.research.long_factor},
+            "research_all": cfg.research.model_dump(),
             "mode": cfg.mode,
             "rounds": cfg.debate_rounds,
             "budget": cfg.max_cost_usd,
@@ -562,8 +565,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                    "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
                    "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
                    "compact_proposals": cfg.compact_proposals, "mock": req.mock,
-                   **({"research_words": cfg.research.max_words, "research_shorten": cfg.research.shorten_long}
-                      if mode == "research" else {}),
+                   **({"research_words": cfg.research.max_words, "research_shorten": cfg.research.shorten_long,
+                       "research_overrides": req.research or {}} if mode == "research" else {}),
                    "models": {m.name: m.model for m in cfg.active_members},
                    "extra_members": req.extra_members or [],
                    "web_search": [m.name for m in cfg.active_members if m.web_search]}

@@ -83,6 +83,8 @@ class Advice(BaseModel):
     picks: list[Pick] = Field(default_factory=list)
     avoid: list[Avoid] = Field(default_factory=list)
     research_words: int | None = None
+    research_settings: dict[str, Any] = Field(default_factory=dict)  # настройки исследования под этот вопрос
+    research_why: dict[str, str] = Field(default_factory=dict)       # почему — по каждой настройке
     caveats: list[str] = Field(default_factory=list)
 
 
@@ -219,7 +221,8 @@ def clean_dossiers(ds: DossierSet, ids: list[str], citations: list[str], ts: flo
 
 def advise_prompt(*, question: str, mode: str, attachments: list[dict[str, Any]], followup: bool, budget: float,
                   current: dict[str, Any], cands: list[dict[str, Any]], history: dict[str, dict[str, Any]],
-                  dossiers: dict[str, dict[str, Any]], language: str, research_words: int, search_model: str) -> str:
+                  dossiers: dict[str, dict[str, Any]], language: str, research_words: int, search_model: str,
+                  research_now: dict[str, Any] | None = None) -> str:
     rows = []
     for c in cands:
         r = {k: v for k, v in c.items() if k != "description"}
@@ -250,6 +253,23 @@ Council modes and what each role needs:
 Research mode details: proposal length target {research_words} words; claims are checked by a separate search model
 ({search_model}) in the arbitration step, so web search for authors is optional (useful for fresh numbers).
 
+Research settings you can tune for THIS question (current values: {json.dumps(research_now or {}, ensure_ascii=False)}):
+- arbitration_claims (3-20): how many key claims of all proposals the search model checks. More = more confirmed facts
+  in "known", cost about $0.02-0.05 per 5 claims. Raise for questions with many entities, numbers, dates, regulations.
+- missions (1-2): 2 = one search to confirm and one to refute each batch (stricter), 1 = cheaper.
+- fresh_scouts (0-2): authors who search the web already while writing proposals — for current prices, markets,
+  regulations, recent releases; proposals may become more similar. 0 for timeless or reasoning-only questions.
+- max_words (300-5000): target proposal length. Proposals are material for the chair, who writes the full report;
+  raise to 2000-2500 only for catalogue-like tasks with big tables; lower (700-1000) for narrow questions.
+- shorten_long (true/false): send far-too-long proposals back once to be shortened (some models ignore length).
+- max_claims (3-15): claims per proposal.
+- lenses (true/false): a distinct angle for every author (market, technology, economics, sceptic) — off only when the
+  question has one narrow angle.
+- section_vote (true/false): vote for the best proposal per subquestion — useful for multi-part questions.
+- revision_digest (true/false): authors revise from digests of other proposals (cheaper) instead of full texts.
+Suggest ONLY settings that should differ from the current values for this question, each with a short reason.
+Mind the budget.
+
 Web search for participants: any participant can get web search in the proposal and revision steps (about $0.02 per
 request extra). Recommend it ("web_search": true) only where the question needs CURRENT facts (prices, markets, news,
 recent releases, regulations) — at most two participants, so the others stay independent. Models with built-in search
@@ -271,7 +291,8 @@ Rules:
    "catalog" (facts above), "history" (user's sessions), "reviews" (the reviews field), "knowledge" (your own general
    knowledge — use it only when the data above says nothing, it may be outdated). Do not invent benchmark numbers.
 5. "avoid": models from the current lineup or the candidates that fit this task worse, with the reason.
-6. For research mode you may suggest "research_words" (proposal length) if the default does not fit.
+6. If the mode is research, put tuned settings into "research_settings" and a reason per setting into
+   "research_why" (same keys). Leave both empty for other modes or when the current values fit.
 7. "caveats": what you are unsure about (little data on a model, no history yet, etc.).
 Write all texts in {language}. Reply with ONE JSON object:
 {{"task": {{"kind": "...", "summary": "...", "size": "small|medium|large", "needs": ["..."]}},
@@ -279,7 +300,8 @@ Write all texts in {language}. Reply with ONE JSON object:
  "picks": [{{"model": "provider/model", "role": "chair|member|devil", "web_search": false, "why": "...",
             "basis": ["catalog", "history"]}}],
  "avoid": [{{"model": "provider/model", "why": "...", "basis": ["reviews"]}}],
- "research_words": null, "caveats": ["..."]}}"""
+ "research_settings": {{"arbitration_claims": 20}}, "research_why": {{"arbitration_claims": "..."}},
+ "caveats": ["..."]}}"""
 
 
 def finalize(advice: Advice, cands: list[dict[str, Any]], cfg: CouncilConfig, mode: str) -> Advice:
@@ -318,8 +340,32 @@ def finalize(advice: Advice, cands: list[dict[str, Any]], cfg: CouncilConfig, mo
     avoid = [a.model_copy(update={"basis": [b for b in a.basis if b in BASIS] or ["knowledge"]})
              for a in advice.avoid if a.model not in seen]
     words = advice.research_words if advice.research_words and 300 <= advice.research_words <= 5000 else None
-    return advice.model_copy(update={"picks": picks, "avoid": avoid, "caveats": notes,
-                                     "mode": advice.mode if advice.mode in MODES else mode, "research_words": words})
+    final_mode = advice.mode if advice.mode in MODES else mode
+    rs, why = clean_research(advice.research_settings, advice.research_why, cfg) if final_mode == "research" else ({}, {})
+    if words and "max_words" not in rs and words != cfg.research.max_words:
+        rs["max_words"] = words
+    return advice.model_copy(update={"picks": picks, "avoid": avoid, "caveats": notes, "mode": final_mode,
+                                     "research_words": rs.get("max_words"), "research_settings": rs,
+                                     "research_why": why})
+
+
+def clean_research(settings: dict[str, Any], why: dict[str, str], cfg: CouncilConfig) -> tuple[dict[str, Any], dict[str, str]]:
+    """Только допустимые настройки, в допустимых пределах и отличные от текущих."""
+    from pydantic import ValidationError
+
+    from .config import RESEARCH_TUNABLE, ResearchConfig
+    cur = cfg.research.model_dump()
+    out: dict[str, Any] = {}
+    for k, v in (settings or {}).items():
+        if k not in RESEARCH_TUNABLE or v is None:
+            continue
+        try:
+            val = getattr(ResearchConfig.model_validate({**cur, k: v}), k)
+        except ValidationError:
+            continue
+        if val != cur.get(k):
+            out[k] = val
+    return out, {k: str(why.get(k, "")).strip() for k in out}
 
 
 # ------------------------------------------------------------------ без советника: правила
@@ -420,9 +466,25 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
         caveats.append(f"Моделей этих участников нет в каталоге OpenRouter: {', '.join(missing)} — они не рассматривались.")
     if not history:
         caveats.append("Ваших заседаний ещё мало — история моделей не учитывалась.")
+    rs: dict[str, Any] = {}
+    rwhy: dict[str, str] = {}
+    if rec_mode == "research":
+        if big and cfg.research.arbitration_claims < 20:
+            rs["arbitration_claims"] = 20
+            rwhy["arbitration_claims"] = "большая задача с множеством фактов — проверить вдвое больше утверждений (≈ +$0,2)"
+        if "свежие данные из интернета" in task.needs and cfg.research.fresh_scouts < 1:
+            rs["fresh_scouts"] = 1
+            rwhy["fresh_scouts"] = "нужны актуальные данные — один автор ищет в интернете уже при написании варианта"
+        if big and not cfg.research.shorten_long:
+            rs["shorten_long"] = True
+            rwhy["shorten_long"] = "в больших задачах модели часто сильно превышают длину — длинные варианты на сокращение"
+        if task.size == "small" and cfg.research.max_words > 1000:
+            rs["max_words"] = 900
+            rwhy["max_words"] = "вопрос узкий — короткие варианты дешевле и не теряют сути"
     return Advice(task=task, mode=rec_mode, mode_why=("большая задача на поиск и сравнение — режим «Исследование»"
                                                       if rec_mode == "research" and mode != "research" else "режим оставлен как выбран"),
-                  picks=picks, caveats=caveats)
+                  picks=picks, caveats=caveats, research_settings=rs, research_why=rwhy,
+                  research_words=rs.get("max_words"))
 
 
 # ------------------------------------------------------------------ состав на заседание

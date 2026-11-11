@@ -302,6 +302,7 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         """«Подобрать состав»: какие модели, роли, режим и поиск лучше для этого вопроса (см. council/advisor.py)."""
         from .. import advisor as A
         from ..client import OpenRouterClient, ProviderError
+        from ..config import RESEARCH_TUNABLE
         from ..voting import extract_json
         if len(body.question.strip()) < 3:
             raise HTTPException(400, "сначала напишите вопрос")
@@ -363,7 +364,9 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
             prompt = A.advise_prompt(question=body.question, mode=body.mode, attachments=body.attachments,
                                      followup=body.followup, budget=body.budget or cfg.max_cost_usd, current=current,
                                      cands=cands, history=hist, dossiers=dossiers, language=cfg.language,
-                                     research_words=cfg.research.max_words, search_model=cfg.fact_check.model)
+                                     research_words=cfg.research.max_words, search_model=cfg.fact_check.model,
+                                     research_now={k: v for k, v in cfg.research.model_dump().items()
+                                                   if k in RESEARCH_TUNABLE})
             model = cfg.advisor.model or next((m.model for m in cfg.members if m.name == cfg.chair), cfg.members[0].model)
             messages = [{"role": "user", "content": prompt}]
             adv = None

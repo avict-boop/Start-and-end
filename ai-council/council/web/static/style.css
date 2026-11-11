@@ -848,3 +848,9 @@ a.brand:hover .brand-name { color: var(--accent); }
 .pair-title { font-size: .95rem; margin: 1rem 0 .3rem; }
 .table.pilot .pilot-title { min-width: 15rem; max-width: 24rem; }
 .table.pilot th { white-space: nowrap; }
+
+/* настройки исследования из рекомендации */
+.research-tuned { font-size: .86rem; padding: .5rem .7rem; border-radius: 10px; background: var(--accent-soft); line-height: 1.45; }
+.adv-rs { list-style: none; margin: 0; padding: 0; display: grid; gap: .35rem; }
+.adv-rs li { padding: .45rem .7rem; border-radius: 10px; background: var(--surface-2); }
+.adv-rs li > span:first-child { margin-right: .4rem; }
