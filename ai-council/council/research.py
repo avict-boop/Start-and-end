@@ -651,6 +651,23 @@ JSON format:
 
 # ---------------------------------------------------------------- утверждения и реестр
 
+MEMORY_URL_NOTE = " *(ссылка из памяти модели — не проверена)*"
+_URL_RE = re.compile(r"(?<![(<\[])\bhttps?://[^\s)\]>*]+")
+
+
+def mark_memory_urls(p: ResearchProposal, allowed: set[str]) -> ResearchProposal:
+    """Ссылки в тексте участника без поиска — из памяти: помечаем, что они не проверены (кроме ссылок из реестра)."""
+    keys = {_url_key(u) for u in allowed}
+
+    def mark(m: re.Match) -> str:
+        url = m.group(0).rstrip(".,;:")
+        tail = m.group(0)[len(url):]
+        if _url_key(url) in keys or MEMORY_URL_NOTE.strip() in p.summary[m.end():m.end() + 60]:
+            return m.group(0)
+        return url + MEMORY_URL_NOTE + tail
+    return p.model_copy(update={"summary": _URL_RE.sub(mark, p.summary)})
+
+
 def number_claims(label: str, p: ResearchProposal, start: int = 1) -> ResearchProposal:
     """Сквозные id утверждений присваивает программа после анонимизации: A-C1, A-C2…"""
     claims = [c.model_copy(update={"id": f"{label}-C{i}"}) for i, c in enumerate(p.claims, start)]

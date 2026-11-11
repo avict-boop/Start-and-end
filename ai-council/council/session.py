@@ -917,7 +917,9 @@ class Council:
         if len(got) < self.cfg.min_quorum:
             raise CouncilError(f"нет кворума: ответили {len(got)} из {len(proposers)}, нужно {self.cfg.min_quorum}")
         authors: dict[str, str | None] = dict(self._labels(got))
-        proposals: dict[str, Proposal] = {l: R.number_claims(l, got[n]) for l, n in authors.items() if n}
+        proposals: dict[str, Proposal] = {
+            l: R.number_claims(l, got[n] if n in scouts else R.mark_memory_urls(got[n], set()))
+            for l, n in authors.items() if n}
         initial = dict(proposals)
         label_of = {n: l for l, n in authors.items() if n}
         self._emit("proposals", proposals=proposals, authors=authors)
@@ -966,7 +968,9 @@ class Council:
                 check=lambda r, prev=proposals[own]: check_substance(_normalize_revision(r), previous=prev),
                 meta={"label": own, **rmeta})
         revised = await self._parallel("revision", jobs)
+        known_urls = {e["url"] for e in (ledger or {}).get("evidence", [])}
         for name, rev in revised.items():
+            rev = rev if name in scouts else R.mark_memory_urls(rev, known_urls)
             proposals[label_of[name]] = R.number_claims(label_of[name], rev)
         self._emit("revisions", revised={label_of[n]: proposals[label_of[n]] for n in revised})
 

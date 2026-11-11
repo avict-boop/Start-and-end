@@ -126,3 +126,12 @@ def test_research_reports_in_every_format(tmp_path):
     assert "Что известно, что спорно, чего не знает никто" in heads and "Источники" in heads
     built = Archive(tmp_path).build("r", all_reports(), data=d)
     assert not [k for k, x in built.items() if str(x).startswith("ошибка")]
+
+
+def test_memory_urls_are_marked_unless_found_by_search():
+    p = R.ResearchProposal(title="t", summary="См. https://made.up/report и https://real.example/a, а также [ссылка](https://x.io).")
+    out = R.mark_memory_urls(p, {"https://real.example/a"}).summary
+    assert "https://made.up/report" + R.MEMORY_URL_NOTE in out
+    assert "https://real.example/a" + R.MEMORY_URL_NOTE not in out and "](https://x.io)" in out
+    again = R.mark_memory_urls(R.ResearchProposal(title="t", summary=out), {"https://real.example/a"}).summary
+    assert again == out  # повторная разметка метку не удваивает
