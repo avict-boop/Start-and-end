@@ -68,6 +68,10 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
                                                          for k in ("scope", "as_of", "subquestions", "lenses")
                                                          if (d.get("research") or {}).get(k)}},
     ]
+    lens_of = (d.get("research") or {}).get("lens_of") or {}
+    if lens_of:  # метка варианта -> угол зрения; показываем по авторам
+        authors = d.get("authors") or {}
+        ev.append({"type": "lenses", "by": {authors.get(lab) or lab: t for lab, t in lens_of.items() if t}})
     if d.get("attachments"):
         ev.insert(1, {"type": "attachments", "items": d["attachments"], "blind": []})
         if d.get("image_notes"):
@@ -226,7 +230,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             return with_overrides(base_config(), members=req.members, chair=req.chair,
                                   devil_advocate=req.devil_advocate, budget=req.budget,
                                   chair_proposes=req.chair_proposes, fact_check=req.fact_check,
-                                  compact=req.compact)
+                                  compact=False if req.mode == "research" else req.compact)
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
 

@@ -728,7 +728,10 @@ a.brand:hover .brand-name { color: var(--accent); }
 @media (max-width: 760px) { .kcu { grid-template-columns: 1fr; } }
 .research .rq { font-size: .75rem; font-weight: 800; padding: .1rem .45rem; border-radius: 6px; background: var(--surface-2); border: 1px solid var(--line-strong); }
 .research .lbl { display: inline-grid; width: auto; height: auto; padding: 0 .35rem; font-size: .75rem; border-radius: 6px; }
-.w.note { display: block; padding: .15rem 0; }
+.w-note { display: flex; gap: .55rem; align-items: flex-start; padding: .5rem .7rem; border-radius: 10px;
+  border: 1px dashed var(--line-strong); color: var(--muted); font-size: .87rem; line-height: 1.45; }
+.w-note b { color: var(--text); font-weight: 650; }
+.w-note-ic { flex: none; }
 
 /* выбор модели из линейки разработчика */
 .fam-list { margin-top: .5rem; }
@@ -750,3 +753,11 @@ a.brand:hover .brand-name { color: var(--accent); }
 .card-list { margin: .2rem 0 .4rem; padding-left: 1.1rem; }
 .card-desc summary { cursor: pointer; color: var(--muted); }
 .card-desc p { white-space: pre-wrap; font-size: .9rem; }
+
+/* углы зрения авторов (исследование) */
+.frame-lenses { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap: .5rem; }
+.frame-lenses li { padding: .55rem .75rem; border-radius: 10px; background: var(--surface-2); min-width: 0; }
+.lens-head b { font-weight: 650; }
+.lens-head b::first-letter { text-transform: uppercase; }
+.lens-who { font-size: .78rem; color: var(--accent); font-weight: 700; margin-bottom: .1rem; }
+.lens-text { font-size: .88rem; color: var(--muted); line-height: 1.4; margin-top: .15rem; overflow-wrap: anywhere; }

@@ -293,12 +293,13 @@ class Council:
         n = self._seen.get((stage, member.name), 0)
         self._seen[(stage, member.name)] = n + 1
         cached = self.journal.results.get(key)
-        if cached is None:  # «доделать» из архива: ответ того же участника на том же этапе по порядку
-            cached = self.journal.loose.get((stage, member.name, n))
+        loose = cached is None
+        if loose:  # запрос изменился (обновление программы) или «доделать» из архива: ответ того же участника
+            cached = self.journal.loose.get((stage, member.name, n))  # на том же этапе по порядку обращений
         if cached is not None:  # ответ уже получен и оплачен раньше
             try:
                 obj = schema.model_validate(cached)
-                if check and (stage, member.name, n) in self.journal.loose:
+                if check and loose:
                     obj = check(obj)  # тот же ли набор меток и критериев — иначе спросим заново
             except ValueError:
                 obj = None
@@ -310,7 +311,7 @@ class Council:
         if key in self.journal.failures:  # участник не справился до приостановки — ход заседания тот же
             raise InvalidResponse(self.journal.failures[key])
         try:
-            obj = await self._ask_model(member, stage, schema, base_messages, messages, meta, check, web_search)
+            obj = await self._ask_model(member, stage, schema, base_messages, messages, meta, check, web_search, n)
         except (InvalidResponse, ProviderError) as e:
             if not isinstance(e, OutOfCredits):
                 self.journal.fail(key, str(e), stage)
@@ -319,7 +320,8 @@ class Council:
         return obj
 
     async def _ask_model(self, member: MemberConfig, stage: str, schema: type[T], base_messages: list, messages: list,
-                         meta: dict[str, Any], check: Callable[[T], T] | None, web_search: bool = False) -> T:
+                         meta: dict[str, Any], check: Callable[[T], T] | None, web_search: bool = False,
+                         call_n: int = 0) -> T:
         max_tokens = member.max_tokens or self.cfg.max_tokens
         effort = member.reasoning_effort or self.cfg.reasoning_effort
         error = ""
@@ -372,6 +374,7 @@ class Council:
                 "member": member.name,
                 "model": comp.model or member.model,
                 "attempt": attempt + 1,
+                "call": call_n,  # номер обращения участника на этапе — по нему продолжение находит ответ
                 "raw": comp.text,
                 "cost": comp.cost,
                 "tokens": [comp.prompt_tokens, comp.completion_tokens],
@@ -917,6 +920,8 @@ class Council:
         pool = list(lenses)
         self.rng.shuffle(pool)
         lens_of = {m.name: (pool[i % len(pool)] if pool else "") for i, m in enumerate(proposers)}
+        if pool:
+            self._emit("lenses", by=lens_of)
         scout_pool = [m.name for m in proposers if m.name != self.cfg.devil_advocate]
         self.rng.shuffle(scout_pool)
         scouts = set(scout_pool[:rc.fresh_scouts])

@@ -170,3 +170,29 @@ def test_stale_pause_next_to_newer_archive_record_is_dropped(tmp_path):
     later = time.time() + 5
     os.utime(tmp_path / "s2.json", (later, later))
     assert Checkpoint.load(tmp_path, "s2") is None and Checkpoint.all(tmp_path) == [] and not cp.dir.exists()
+
+
+def test_resume_after_program_update_reuses_paid_answers(tmp_path, monkeypatch):
+    """Программу обновили между паузой и продолжением, тексты запросов изменились — оплаченные ответы
+    всё равно берутся из журнала (по участнику, этапу и номеру обращения), заседание не начинается заново."""
+    from council import prompts
+
+    j = tmp_path / "j.jsonl"
+    first = CountingMock()
+    with pytest.raises(BudgetExceeded):
+        run(Council(make_cfg(max_cost_usd=0.0075), first, seed=7, journal=Journal(j)).run("Вопрос?"))
+    orig = prompts.system
+    monkeypatch.setattr(prompts, "system", lambda *a, **k: orig(*a, **k) + "\n(новая версия программы)")
+    second = CountingMock()
+    c = Council(make_cfg(max_cost_usd=5), second, seed=7, journal=Journal(j))
+    res = run(c.run("Вопрос?"))
+    assert c.replayed == first.n and res.verdict.winner
+
+
+def test_continued_long_answer_is_replayed(tmp_path):
+    """Длинный ответ, собранный из продолжений, тоже берётся из стенограммы."""
+    j = Journal(None)
+    j.load_transcript([{"stage": "proposal", "member": "a", "call": 0, "continuation": 2, "parsed": {"x": 1}},
+                       {"stage": "proposal", "member": "a", "attempt": 1, "error": "обрезан"},
+                       {"stage": "critique", "member": "a", "parsed": {"y": 2}}])
+    assert j.loose[("proposal", "a", 0)] == {"x": 1} and j.loose[("critique", "a", 0)] == {"y": 2}

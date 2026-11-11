@@ -26,6 +26,16 @@ const STAGE_HINT = {
   arbitration: "поиск проверяет утверждения всех вариантов: подтверждения и опровержения",
   verdict: "председатель пишет итоговое решение",
 };
+// исследование: этапы те же по смыслу, но работа на них другая — свои названия и пояснения
+const RESEARCH_STAGE = {
+  framing: ["Постановка", "председатель задаёт рамки, подвопросы и углы зрения авторов"],
+  proposal: ["Предложения", "каждый автор со своего угла зрения пишет вариант с проверяемыми утверждениями"],
+  critique: ["Критика", "модели оценивают чужие варианты, отмечают спорные утверждения и пропущенные подвопросы"],
+  revision: ["Доработка", "авторы дорабатывают варианты по найденным доказательствам и выжимкам чужих вариантов"],
+  vote: ["Голосование", "модели ранжируют варианты и выбирают лучший по каждому подвопросу"],
+  verdict: ["Синтез", "председатель собирает итог: известно, спорно, неизвестно — с источниками"],
+};
+const stageHint = (s, key) => (s.mode === "research" && RESEARCH_STAGE[key] ? RESEARCH_STAGE[key][1] : STAGE_HINT[key]) || "";
 const MODE_HINT = {
   debate: "Подробное обсуждение: решения, критика, доработка, голосование.",
   quick: "Быстрый ответ: решения и голосование, без критики.",
@@ -221,6 +231,8 @@ function setMode(m) {
   for (const r of $("modeSeg").querySelectorAll("input[name=mode]")) r.checked = r.value === m;
   $("roundsField").hidden = m !== "debate";
   $("optionsField").hidden = m !== "evaluate";
+  // у исследования своя длина варианта (Настройки → Исследование) — «компактные варианты» к нему не относятся
+  $("compact").closest("label").hidden = m === "research";
   $("modeHint").textContent = MODE_HINT[m];
   if ($("chairHint")) updateChairHint();
   formChanged();
@@ -238,7 +250,7 @@ function updateParamsSummary() {
   if ($("chair").value) bits.push(`председатель ${$("chair").value}`);
   if (mode === "debate") { const r = Number($("rounds").value) || 1; bits.push(`${r} ${plural(r, "раунд", "раунда", "раундов")}`); }
   bits.push(`лимит $${Number($("budget").value) || config.budget}`);
-  if ($("compact").checked) bits.push("компактно");
+  if ($("compact").checked && mode !== "research") bits.push("компактно");
   if ($("factCheck").checked) bits.push("проверка фактов");
   if ($("mock").checked) bits.push("демо");
   $("paramsSummary").textContent = bits.join(" · ");
@@ -341,7 +353,7 @@ function payload() {
     devil_advocate: $("devil").value,
     chair_proposes: $("chairProposes").checked,
     fact_check: $("factCheck").checked,
-    compact: $("compact").checked,
+    compact: mode === "research" ? false : $("compact").checked,
     budget: Number($("budget").value) || null,
     mock: $("mock").checked,
     attachments: uploads.filter((u) => u.status === "ready").map((u) => u.meta.id),
@@ -1017,10 +1029,15 @@ function apply(s, ev) {
       s.work = Object.fromEntries(who.map((n) => [n, "work"]));
       break;
     }
+    case "lenses":
+      s.lensOf = ev.by || {};
+      if (s.lenses && s.lenses.length) renderFraming(s);
+      break;
     case "framing":
       s.refined = ev.refined_question; s.criteria = ev.criteria; s.requirements = ev.requirements || [];
       s.scope = [ev.scope, ev.as_of ? `актуально на ${ev.as_of}` : ""].filter(Boolean).join(" · ");
       s.subq = ev.subquestions || []; s.lenses = ev.lenses || [];
+      if (ev.lenses) s.lensOf = {};
       logAdd(s, `Критерии: ${(ev.criteria || []).join(", ")}`);
       if (s.stage === "framing") s.work = {};
       s.doneStages.add("framing");
@@ -1107,7 +1124,10 @@ function scoreColor(v) {
 function stagePlan(s) {
   const skip = new Set(s.mode === "quick" ? ["critique", "revision"] : s.mode === "evaluate" ? ["proposal", "revision"] : []);
   const plan = STAGES.filter(([k]) => !skip.has(k));
-  if (s.mode === "research") plan.splice(plan.findIndex(([k]) => k === "revision"), 0, ARB_STAGE);
+  if (s.mode === "research") {  // свой арбитраж доказательств вместо отдельной проверки фактов
+    plan.splice(plan.findIndex(([k]) => k === "revision"), 0, ARB_STAGE);
+    return plan.map(([k, t]) => [k, RESEARCH_STAGE[k] ? RESEARCH_STAGE[k][0] : t]);
+  }
   if (s.stageTitle.factcheck || s.facts || s.factPlanned) plan.splice(plan.length - 1, 0, ["factcheck", STAGE_NAME.factcheck]);
   return plan;
 }
@@ -1280,7 +1300,13 @@ function renderFraming(s) {
   $("fSubq").innerHTML = subq.map((q, i) => `<li><span class="rq">Q${i + 1}</span><span>${esc(q)}</span></li>`).join("");
   const lenses = s.lenses || [];
   $("fLensRow").hidden = !lenses.length;
-  $("fLenses").innerHTML = lenses.map((l) => `<li>${esc(l)}</li>`).join("");
+  const who = (l) => Object.entries(s.lensOf || {}).filter(([, t]) => t === l).map(([m]) => m);
+  $("fLenses").innerHTML = lenses.map((l) => {
+    const m = l.match(/^(.{2,60}?)\s*(?::|—| - )\s*(.+)$/s);  // «рынок и данные: цифры, цены…» → заголовок и пояснение
+    const authors = who(l);
+    return `<li>${authors.length ? `<div class="lens-who">${authors.map(esc).join(", ")}</div>` : ""}<div class="lens-head"><b>${esc(m ? m[1] : l)}</b></div>`
+      + (m ? `<div class="lens-text">${esc(m[2])}</div>` : "") + "</li>";
+  }).join("");
   $("fReqRow").hidden = !reqs.length;
   $("fReqs").innerHTML = reqs.map((r, i) => `<li><span class="rq">R${i + 1}</span><span>${esc(r)}</span></li>`).join("");
   // пока идёт заседание — сразу под вопросом; когда есть решение — ниже решения и обоснования
@@ -1349,6 +1375,11 @@ function readyCount(s) {
 // подписи под пройденными этапами — что получилось
 function stageResult(s, key) {
   const n = Object.keys(s.proposals).length;
+  if (s.mode === "research") {
+    const q = (s.subq || []).length, l = (s.lenses || []).length, v = s.verdict || {};
+    if (key === "framing" && q) return `${q} ${plural(q, "подвопрос", "подвопроса", "подвопросов")}${l ? `, ${l} ${plural(l, "угол", "угла", "углов")} зрения` : ""}`;
+    if (key === "verdict" && s.verdict) return `известно ${(v.known || []).length} · спорно ${(v.contested || []).length} · неизвестно ${(v.unknown || []).length}`;
+  }
   if (key === "framing") return s.criteria.length ? `${s.criteria.length} ${plural(s.criteria.length, "критерий", "критерия", "критериев")}${(s.requirements || []).length ? `, ${s.requirements.length} обязательных ${plural(s.requirements.length, "требование", "требования", "требований")}` : ""}` : "готово";
   if (key === "proposal") return n ? `${n} ${plural(n, "вариант", "варианта", "вариантов")}: ${Object.keys(s.proposals).sort().join(", ")}` : "готово";
   if (key === "critique") { const k = Object.keys(s.critiques).length; return k ? `${k} ${plural(k, "рецензия", "рецензии", "рецензий")}` : "готово"; }
@@ -1374,7 +1405,8 @@ function workerRows(s, now) {
   }
   // председатель без своего варианта: показываем, почему его нет в списке
   if (["proposal", "revision"].includes(s.stage) && s.chairJudge && s.chair)
-    rows.push(`<li class="w note"><span class="muted small"><b>${esc(s.chair)}</b> — председатель: своего варианта не предлагает, чтобы не судить самого себя; оценивает чужие и пишет итог</span></li>`);
+    rows.push(`<li class="w-note"><span class="w-note-ic" aria-hidden="true">⚖️</span><span><b>${esc(s.chair)}</b> — председатель. `
+      + `Своего варианта не предлагает, чтобы не судить самого себя: оценивает варианты остальных и пишет итог.</span></li>`);
   return rows;
 }
 
@@ -1425,7 +1457,7 @@ function renderActivity(s) {
     const cls = done ? "done" : active ? "active" : "";
     const num = done ? '<svg class="ic"><use href="#i-check"/></svg>' : String(i + 1);
     const round = active && (String(s.stageTitle[key] || "").match(/раунд (\d+)\/(\d+)/) || []);
-    const sub = done ? stageResult(s, key) : active ? `${round[2] > 1 ? `раунд ${round[1]} из ${round[2]} — ` : ""}${STAGE_HINT[key] || ""}` : "";
+    const sub = done ? stageResult(s, key) : active ? `${round[2] > 1 ? `раунд ${round[1]} из ${round[2]} — ` : ""}${stageHint(s, key)}` : "";
     return `<li class="${cls}"${active ? ' aria-current="step"' : ""}><span class="num">${num}</span><div><div class="st-name">${esc(name)}</div>`
       + `${sub ? `<div class="st-sub">${esc(sub)}</div>` : ""}${active && rows.length ? `<ul class="workers">${rows.join("")}</ul>` : ""}</div></li>`;
   }).join("");

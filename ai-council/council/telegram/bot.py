@@ -50,6 +50,16 @@ STAGE_HINT = {
     "factcheck": "модель с поиском проверяет факты",
     "verdict": "председатель пишет итоговое решение",
 }
+# исследование: свои названия и пояснения этапов (работа на них другая, чем в обсуждении)
+RESEARCH_STAGE = {
+    "proposal": ("Предложения", "каждый автор со своего угла зрения пишет вариант с проверяемыми утверждениями"),
+    "framing": ("Постановка", "председатель задаёт рамки, подвопросы и углы зрения авторов"),
+    "critique": ("Критика", "модели оценивают чужие варианты, отмечают спорные утверждения и пробелы"),
+    "arbitration": ("Арбитраж доказательств", "поиск проверяет утверждения всех вариантов"),
+    "revision": ("Доработка", "авторы дорабатывают варианты по найденным доказательствам"),
+    "vote": ("Голосование", "модели ранжируют варианты и выбирают лучший по каждому подвопросу"),
+    "verdict": ("Синтез", "председатель собирает итог: известно, спорно, неизвестно — с источниками"),
+}
 COMMANDS = [
     ("ask", "задать вопрос совету (в группе)"),
     ("settings", "режим, модели, проверка фактов, демо"),
@@ -207,7 +217,8 @@ class Progress:
         if self.demo:
             meta += " · демо"
         lines = [head, f"❓ {esc(short_title(self.question))}", f"<i>{esc(meta)}</i>", ""]
-        plan = [(k, n) for k, n in STAGES if k not in self.skipped()]
+        plan = [(k, RESEARCH_STAGE[k][0] if self.mode == "research" and k in RESEARCH_STAGE else n)
+                for k, n in STAGES if k not in self.skipped()]
         done = sum(1 for k, _ in plan if k in self.done_stages)
         idx = next((i for i, (k, _) in enumerate(plan) if k == self.stage), None)
         bar = "▰" * done + "▱" * (len(plan) - done)
@@ -220,7 +231,8 @@ class Progress:
             stage_secs = int(time.monotonic() - self.stage_started)
             lines.append(f"{bar} Этап {idx + 1} из {len(plan)}: <b>{esc(dict(plan)[self.stage])}</b>")
             round_ = re.search(r"раунд (\d+)/(\d+)", self.stage_title or "")
-            hint = STAGE_HINT.get(self.stage, "")
+            hint = (RESEARCH_STAGE[self.stage][1] if self.mode == "research" and self.stage in RESEARCH_STAGE
+                    else STAGE_HINT.get(self.stage, ""))
             if round_ and int(round_.group(2)) > 1:
                 hint = f"раунд {round_.group(1)} из {round_.group(2)} — {hint}"
             lines.append(f"<i>{esc(hint)} · готово {ready} из {len(self.work)} · {_fmt_secs(stage_secs)}</i>")
@@ -336,7 +348,8 @@ class CouncilBot:
         if members is not None:
             known = {m.name for m in base.members}
             members = [m for m in members if m in known]  # участника могли удалить из config.yaml
-        return with_overrides(base, members=members, budget=s.budget, fact_check=s.fact_check, compact=s.compact)
+        return with_overrides(base, members=members, budget=s.budget, fact_check=s.fact_check,
+                              compact=False if s.mode == "research" else s.compact)
 
     async def send(self, chat_id: int, text: str, **kw: Any) -> dict[str, Any] | None:
         """Отправка длинного HTML с разбиением; при ошибке разметки — простым текстом."""

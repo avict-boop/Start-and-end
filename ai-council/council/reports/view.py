@@ -560,7 +560,7 @@ class View:
     @property
     def compact_note(self) -> str:
         """Заседание шло в режиме «Компактные варианты»."""
-        if (self.d.get("request") or {}).get("compact_proposals"):
+        if (self.d.get("request") or {}).get("compact_proposals") and not self.is_research:
             return "компактные — участники писали суть сжато, полный формат — только в итоговом решении"
         return ""
 

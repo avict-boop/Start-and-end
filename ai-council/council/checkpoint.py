@@ -66,16 +66,22 @@ class Journal:
                 self.load_transcript(json.loads(loose.read_text(encoding="utf-8")))
             except ValueError:
                 pass
+        # Ответы из собственной стенограммы журнала — запасной путь, если точный отпечаток запроса не совпал:
+        # после обновления программы тексты запросов меняются, и без этого продолжение начиналось бы заново.
+        if self.transcript:
+            self.load_transcript(self.transcript)
 
     def load_transcript(self, transcript: list[dict[str, Any]]) -> None:
         """Готовые ответы из стенограммы: по каждому участнику и этапу — по порядку обращений."""
         count: dict[tuple[str, str], int] = {}
         for e in transcript:
-            if not isinstance(e, dict) or e.get("parsed") is None or e.get("continuation"):
+            # принятый ответ — запись с «parsed» (в том числе склеенный из продолжений длинного ответа)
+            if not isinstance(e, dict) or e.get("parsed") is None:
                 continue
             k = (e.get("stage", ""), e.get("member", ""))
-            self.loose[(*k, count.get(k, 0))] = e["parsed"]
-            count[k] = count.get(k, 0) + 1
+            n = e["call"] if isinstance(e.get("call"), int) else count.get(k, 0)  # номер обращения, если записан
+            self.loose[(*k, n)] = e["parsed"]
+            count[k] = n + 1
 
     def _load(self) -> None:
         assert self.path is not None

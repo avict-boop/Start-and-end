@@ -191,3 +191,37 @@ def test_chair_failure_is_recorded_and_recovered_for_old_sessions():
     assert fails and "known" in fails[-1][2] and fails[-1][0] == "a"
     ev = [e for e in events_from_result(d, "x") if e["type"] == "member_failed" and e["stage"] == "verdict"]
     assert ev and "не сдал итог" in ev[0]["error"]
+
+
+class Recording(MockClient):
+    def __init__(self) -> None:
+        super().__init__(delay=0)
+        self.seen: list[tuple[str, str]] = []
+
+    async def complete(self, model, messages, **kw):
+        text = "".join(c if isinstance(c, str) else "".join(p.get("text", "") for p in c)
+                       for c in (m["content"] for m in messages))
+        self.seen.append((kw.get("meta", {}).get("stage", ""), text))
+        return await super().complete(model, messages, **kw)
+
+
+def test_research_followup_sees_earlier_decision_at_every_content_stage():
+    """Уточнение к исследованию: прошлый вопрос, решение и подтверждённые факты видны на постановке,
+    предложениях, критике, доработке и синтезе."""
+    client = Recording()
+    history = [{"question": "Стоит ли открывать кофейню?", "answer": "ПРОШЛОЕ_РЕШЕНИЕ: да, у вуза",
+                "evidence": "Confirmed by sources: ПРОШЛЫЙ_ФАКТ"}]
+    events = []
+    run(Council(make_cfg(mode="research"), client, seed=2, on_event=lambda e, **d: events.append(e))
+        .run("А какой бюджет нужен?", history=history, followup_of="x"))
+    stages = {st for st, txt in client.seen if "ПРОШЛОЕ_РЕШЕНИЕ" in txt and "ПРОШЛЫЙ_ФАКТ" in txt}
+    assert {"framing", "proposal", "critique", "revision", "verdict"} <= stages
+    assert "followup" in events and "lenses" in events
+
+
+def test_compact_option_does_not_apply_to_research():
+    from council.reports.view import View
+    res = run(Council(make_cfg(mode="research"), MockClient(delay=0), seed=3).run("Вопрос?"))
+    d = res.to_dict()
+    d["request"] = {"compact_proposals": True}
+    assert View(d, "x").compact_note == ""
