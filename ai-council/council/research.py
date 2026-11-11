@@ -522,7 +522,9 @@ technical facts; check dates, geography, units and definitions. Where estimates 
 restating one underlying report count as ONE source (mark the later one "secondary"). Record only sources your search
 actually returned; never invent a URL, date or quotation. If you saw only a snippet or a search summary, say so in
 "material_seen". A related page is not a confirmation. Absence of a found source is not a refutation.
-Statuses: confirmed (a source directly supports the claim in its stated scope); refuted (a reliable source directly
+Statuses: confirmed (a source directly supports EVERY part of the claim in its stated scope — each number, date,
+age, dose, name and owner; if only some parts are supported, use unclear and list in "notes" which parts are
+confirmed and which are not); refuted (a reliable source directly
 contradicts it); contested_in_sources (reputable sources conflict; report both); unclear (no reliable evidence found);
 user_doc (checkable only from the user's own documents); search_unavailable.
 Return at most {max_evidence} sources in total.
