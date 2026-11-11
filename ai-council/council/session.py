@@ -13,7 +13,8 @@ from typing import Any, Awaitable, Callable, TypeVar
 from pydantic import BaseModel
 
 from . import prompts
-from .client import Completion, LLMClient, ProviderError
+from .checkpoint import Journal, call_key
+from .client import Completion, LLMClient, OutOfCredits, ProviderError
 from .config import CouncilConfig, MemberConfig, Mode
 from .attachments import Attachment, documents_block, image_parts, images_note
 from .filerefs import FIX_MESSAGE, refs_in
@@ -153,17 +154,30 @@ class Council:
         on_event: EventHandler | None = None,
         seed: int | None = None,
         vision: dict[str, bool | None] | None = None,
+        journal: Journal | None = None,
     ) -> None:
         """vision: модель -> умеет ли принимать картинки (из каталога OpenRouter); неизвестно — пробуем."""
         self.cfg = config
         self.client = client
         self.on_event = on_event or (lambda *a, **k: None)
         self.rng = random.Random(seed)
+        # Журнал для приостановки: готовые ответы при продолжении берутся из него, а не у модели (см. checkpoint.py)
+        self.journal = journal or Journal(None)
+        self.budget = config.max_cost_usd  # можно поднять на ходу: set_budget()
+        self._budget_warned = False
+        self.replayed = 0  # сколько ответов взято из журнала
         self._sem = asyncio.Semaphore(config.max_concurrency)
         self.stats: dict[str, MemberStats] = {m.name: MemberStats() for m in config.active_members}
         if config.fact_check.enabled:
             self.stats[FACT_CHECKER] = MemberStats()
-        self.transcript: list[dict[str, Any]] = []
+        self.transcript: list[dict[str, Any]] = list(self.journal.transcript)
+        for c in self.journal.costs:  # деньги, потраченные до приостановки, остаются в счёте заседания
+            st = self.stats.setdefault(c.get("member", "?"), MemberStats())
+            st.calls += int(c.get("calls") or 0)
+            st.prompt_tokens += int(c.get("prompt") or 0)
+            st.completion_tokens += int(c.get("completion") or 0)
+            st.cached_tokens += int(c.get("cached") or 0)
+            st.cost += float(c.get("cost") or 0)
         self._last_call_emit: dict[tuple[str, str], tuple[str, float]] = {}
         self.vision = vision or {}
         self.attachments: list[Attachment] = []
@@ -209,7 +223,24 @@ class Council:
         s.completion_tokens += comp.completion_tokens
         s.cached_tokens += getattr(comp, "cached_tokens", 0) or 0
         s.cost += comp.cost
+        self.journal.cost(member.name, 1, comp.prompt_tokens, comp.completion_tokens,
+                          getattr(comp, "cached_tokens", 0) or 0, comp.cost)
         self._emit("cost", member=member.name, total=self.total_cost)
+        if not self._budget_warned and self.budget and self.total_cost >= self.budget * self.BUDGET_WARN:
+            self._budget_warned = True
+            self._emit("budget_warning", spent=round(self.total_cost, 4), budget=self.budget)
+
+    BUDGET_WARN = 0.8  # при такой доле потраченного бюджета интерфейс предлагает его поднять
+
+    def set_budget(self, budget: float) -> None:
+        """Поднять (или изменить) лимит бюджета прямо во время заседания."""
+        self.budget = float(budget)
+        self._budget_warned = self.total_cost >= self.budget * self.BUDGET_WARN
+        self._emit("budget", budget=self.budget, spent=round(self.total_cost, 4))
+
+    def _log(self, entry: dict[str, Any]) -> None:
+        self.transcript.append(entry)
+        self.journal.entry(entry)
 
     async def _ask(
         self,
@@ -238,6 +269,30 @@ class Council:
                          {"role": "user", "content": content or self._with_attachments(member, stage, user_prompt)}]
         messages = list(base_messages)
         meta = {"stage": stage, "member": member.name, **(meta or {})}
+        key = call_key(member.model, stage, schema.__name__, base_messages)
+        if key in self.journal.results:  # ответ уже получен и оплачен до приостановки
+            try:
+                obj = schema.model_validate(self.journal.results[key])
+            except ValueError:
+                obj = None
+            if obj is not None:
+                self.replayed += 1
+                self._call(member.name, stage, "done", time.monotonic(), detail="из сохранённого",
+                           cost=round(self.stats[member.name].cost, 6))
+                return obj
+        if key in self.journal.failures:  # участник не справился до приостановки — ход заседания тот же
+            raise InvalidResponse(self.journal.failures[key])
+        try:
+            obj = await self._ask_model(member, stage, schema, base_messages, messages, meta, check)
+        except (InvalidResponse, ProviderError) as e:
+            if not isinstance(e, OutOfCredits):
+                self.journal.fail(key, str(e), stage)
+            raise
+        self.journal.ok(key, obj.model_dump(), stage)
+        return obj
+
+    async def _ask_model(self, member: MemberConfig, stage: str, schema: type[T], base_messages: list, messages: list,
+                         meta: dict[str, Any], check: Callable[[T], T] | None) -> T:
         max_tokens = member.max_tokens or self.cfg.max_tokens
         effort = member.reasoning_effort or self.cfg.reasoning_effort
         error = ""
@@ -255,9 +310,9 @@ class Council:
         continuations = 0    # продолжения длинного ответа, упёршегося в лимит (попытками не считаются)
         acc = ""             # уже полученная часть ответа, который продолжается
         while attempt <= self.cfg.json_retries:
-            if self.total_cost >= self.cfg.max_cost_usd:
+            if self.total_cost >= self.budget:
                 raise BudgetExceeded(
-                    f"достигнут лимит бюджета ${self.cfg.max_cost_usd:g} (потрачено ${self.total_cost:.4f})"
+                    f"достигнут лимит бюджета ${self.budget:g} (потрачено ${self.total_cost:.4f})"
                 )
             if self._sem.locked():
                 self._call(name, stage, "queued", started, detail="ждёт свободного слота")
@@ -317,7 +372,7 @@ class Council:
                            detail="ответ ссылается на файл вместо содержимого — прошу вставить всё в ответ")
                 entry["error"] = error
                 entry["finish_reason"] = comp.finish_reason
-                self.transcript.append(entry)
+                self._log(entry)
                 attempt += 1
                 continue
             except ValueError as e:  # pydantic.ValidationError тоже ValueError
@@ -325,7 +380,7 @@ class Council:
                 truncated = comp.finish_reason in ("length", "max_tokens", "MAX_TOKENS")
                 entry["error"] = error
                 entry["finish_reason"] = comp.finish_reason
-                self.transcript.append(entry)
+                self._log(entry)
                 if truncated and continuations < self.MAX_CONTINUATIONS and comp.text.strip():
                     # Длинный ответ упёрся в лимит: просим продолжить с места остановки, а не писать заново —
                     # так работает и у моделей с жёстким потолком длины ответа (например, Perplexity).
@@ -356,7 +411,7 @@ class Council:
                 attempt += 1
                 continue
             entry["parsed"] = obj.model_dump()
-            self.transcript.append(entry)
+            self._log(entry)
             self._call(name, stage, "done", started, cost=round(self.stats[name].cost, 6))
             return obj
         self._call(name, stage, "failed", started, detail=f"некорректный ответ: {error}"[:300])
@@ -445,6 +500,8 @@ class Council:
                                     meta={"images": names}, content=[{"type": "text", "text": prompts.describe_images(question, names)},
                                                                      *image_parts(images)])
         except (ProviderError, InvalidResponse) as e:
+            if isinstance(e, OutOfCredits):
+                raise
             self._emit("member_failed", stage="describe", member=describer.name, error=str(e))
             return
         by_name = {n.name: n.description for n in notes.images}
@@ -459,8 +516,8 @@ class Council:
         results = await asyncio.gather(*jobs.values(), return_exceptions=True)
         ok: dict[str, T] = {}
         for name, res in zip(names, results):
-            if isinstance(res, BudgetExceeded):
-                raise res
+            if isinstance(res, (BudgetExceeded, OutOfCredits)):
+                raise res  # бюджет или деньги кончились — заседание приостанавливается целиком
             if isinstance(res, (ProviderError, InvalidResponse)):
                 self.stats[name].failures.append(f"{stage}: {res}")
                 self._emit("member_failed", stage=stage, member=name, error=str(res))
@@ -522,6 +579,8 @@ class Council:
                 criteria = [c.strip() for c in framing.criteria if c.strip()]
                 self.requirements = [r.strip() for r in framing.requirements if r.strip()]
             except (ProviderError, InvalidResponse) as e:
+                if isinstance(e, OutOfCredits):
+                    raise
                 self._emit("member_failed", stage="framing", member=chair.name, error=str(e))
                 criteria = []
             criteria = criteria or ["Эффективность", "Реалистичность", "Риски"]
@@ -699,6 +758,8 @@ class Council:
                 meta={"labels": valid, "leader": rows[0].label, "ideas": idea_ids},
             )
         except (ProviderError, InvalidResponse) as e:
+            if isinstance(e, OutOfCredits):
+                raise
             # Председатель недоступен — итог по результатам голосования без синтеза.
             self._emit("member_failed", stage="verdict", member=chair.name, error=str(e))
             top = proposals[rows[0].label]
@@ -768,7 +829,7 @@ class Council:
         results = await asyncio.gather(*jobs, return_exceptions=True)
         out: dict[str, dict] = {}
         for label, res in zip(targets, results):
-            if isinstance(res, BudgetExceeded):
+            if isinstance(res, (BudgetExceeded, OutOfCredits)):
                 raise res
             if isinstance(res, BaseException):
                 self.stats[FACT_CHECKER].failures.append(f"factcheck: {label}: {res}")

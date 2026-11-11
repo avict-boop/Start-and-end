@@ -73,7 +73,7 @@ def _credit_error(code: int, body: str, model: str) -> Exception:
             retry_after = None
         return _Retryable("OpenRouter временно зарезервировал баланс под другие идущие запросы — жду их завершения "
                           "(на балансе мало средств для стольких запросов сразу)", retry_after=retry_after, credits=True)
-    return ProviderError(f"{model}: на балансе OpenRouter недостаточно средств для этого запроса (HTTP 402). "
+    return OutOfCredits(f"{model}: на балансе OpenRouter недостаточно средств для этого запроса (HTTP 402). "
                          "Пополните баланс: https://openrouter.ai/settings/credits — или уменьшите число участников "
                          "и лимит длины ответа.")
 
@@ -91,6 +91,10 @@ class ProviderError(RuntimeError):
     def __init__(self, message: str, *, spent: "Completion | None" = None) -> None:
         super().__init__(message)
         self.spent = spent
+
+
+class OutOfCredits(ProviderError):
+    """На балансе OpenRouter кончились деньги (HTTP 402). Заседание приостанавливается, а не теряется."""
 
 
 @dataclass
