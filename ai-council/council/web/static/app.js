@@ -46,8 +46,9 @@ const MODE_HINT = {
   quick: "Быстрый ответ: решения и голосование, без критики.",
   evaluate: "Выбор из ваших вариантов: совет их обсуждает и выбирает лучший.",
   research: "Исследование: подвопросы и углы зрения, проверка утверждений всех вариантов поиском, итог «известно / спорно / неизвестно» с источниками.",
+  creative: "Креатив: у каждой модели своя творческая роль, много смелых идей, критика «да, и…», ремикс и шорт-лист из всех вариантов. Без поиска и проверки фактов.",
 };
-const MODE_NAME = { debate: "Подробное обсуждение", quick: "Быстрый ответ", evaluate: "Выбор из вариантов", research: "Исследование" };
+const MODE_NAME = { debate: "Подробное обсуждение", quick: "Быстрый ответ", evaluate: "Выбор из вариантов", research: "Исследование", creative: "Креатив" };
 
 /* ------------------------------------------------------------ мелкие помощники интерфейса */
 
@@ -236,14 +237,15 @@ function setMode(m) {
   mode = m;
   if (config && !webTouched && was !== m && $("members").children.length) { lineup.web = defaultWeb(); renderWebMembers(); }
   if ($("depthField")) $("depthField").hidden = m !== "research";
-  if ($("freshField")) $("freshField").hidden = m === "evaluate";
+  if ($("freshField")) $("freshField").hidden = m === "evaluate" || m === "creative";
   for (const r of $("modeSeg").querySelectorAll("input[name=mode]")) r.checked = r.value === m;
   $("roundsField").hidden = m !== "debate";
   $("optionsField").hidden = m !== "evaluate";
   // у исследования своя длина варианта (Настройки → Исследование) — «компактные варианты» к нему не относятся
   $("compact").closest("label").hidden = m === "research";
   $("researchLen").hidden = m !== "research";
-  $("factCheckRow").hidden = m === "research";  // в исследовании вместо неё — арбитраж доказательств
+  // в исследовании вместо неё — арбитраж доказательств; в «Креативе» проверять нечего
+  $("factCheckRow").hidden = m === "research" || m === "creative";
   if ($("webField") && config) renderWebMembers();
   $("modeHint").textContent = MODE_HINT[m];
   if ($("chairHint")) updateChairHint();
@@ -370,7 +372,7 @@ function updateParamsSummary() {
   if (mode === "research") bits.push(noLimit() ? "вариант без ограничения длины"
     : `вариант до ${Number($("researchWords").value) || "—"} слов${$("researchShorten").checked ? ", длинные — на сокращение" : ""}`);
   if (mode === "research" && researchTuned.arbitration_claims) bits.push(`проверка ${researchTuned.arbitration_claims} утв.`);
-  if ($("factCheck").checked && mode !== "research") bits.push("проверка фактов");
+  if ($("factCheck").checked && mode !== "research" && mode !== "creative") bits.push("проверка фактов");
   const web = [...lineup.web].filter((x) => selectedMembers().includes(x));
   if (web.length && mode !== "evaluate") bits.push(`поиск: ${web.join(", ")}`);
   if ($("mock").checked) bits.push("демо");
@@ -484,11 +486,11 @@ function payload() {
     members: selectedMembers(),
     models: Object.keys(lineup.models).length ? lineup.models : null,
     extra_members: lineup.extra.length ? lineup.extra : null,
-    web_search: mode === "evaluate" ? [] : [...lineup.web].filter((n) => selectedMembers().includes(n)),
+    web_search: mode === "evaluate" || mode === "creative" ? [] : [...lineup.web].filter((n) => selectedMembers().includes(n)),
     chair: $("chair").value || null,
     devil_advocate: $("devil").value,
     chair_proposes: $("chairProposes").checked,
-    fact_check: $("factCheck").checked,
+    fact_check: mode === "creative" ? false : $("factCheck").checked,
     compact: mode === "research" ? false : $("compact").checked,
     research_words: mode === "research" ? (noLimit() ? 0 : Number($("researchWords").value) || null) : null,
     research_shorten: mode === "research" ? $("researchShorten").checked : null,
@@ -590,7 +592,7 @@ $("repeatBtn").addEventListener("click", async () => {
   catch (e) { toast(e.message); return; }
   const r = data.request || {};
   $("question").value = r.question || "";
-  setMode(["debate", "quick", "evaluate", "research"].includes(r.mode) ? r.mode : "debate");
+  setMode(["debate", "quick", "evaluate", "research", "creative"].includes(r.mode) ? r.mode : "debate");
   if (r.rounds) $("rounds").value = r.rounds;
   $("criteria").value = (r.criteria || []).join(", ");
   $("options").value = (r.options || []).join("\n---\n");
@@ -2814,6 +2816,7 @@ function basisBadge(s) {
     return `<span class="badge ${kind}" title="Сколько проверенных утверждений подтвердили найденные источники; остальное — в «спорно» и «неизвестно»">Основания: подтверждено ${ok} из ${own.length}</span>`;
   }
   const facts = s.facts ? Object.values(s.facts).flatMap((r) => r.claims || []) : [];
+  if (!facts.length && s.mode === "creative") return '<span class="badge plain" title="Креатив: идеи, а не факты — товарные знаки и домены проверьте отдельно">Идеи · знаки не проверялись</span>';
   if (!facts.length) return '<span class="badge plain" title="Факты поиском не проверялись — вывод опирается на рассуждения моделей">Факты не проверялись</span>';
   const ok = facts.filter((c) => c.status === "confirmed").length;
   return `<span class="badge ${ok * 2 < facts.length ? "warn" : "ok"}">Факты: подтверждено ${ok} из ${facts.length}</span>`;

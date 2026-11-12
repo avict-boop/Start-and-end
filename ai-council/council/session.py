@@ -167,6 +167,9 @@ class Council:
         self.client = client
         self.on_event = on_event or (lambda *a, **k: None)
         self.rng = random.Random(seed)
+        self.seed = seed
+        # своя температура для этапов режима (например, «Креатив»: выше на предложениях и доработке)
+        self.stage_temperature: dict[str, float] = {}
         # Журнал для приостановки: готовые ответы при продолжении берутся из него, а не у модели (см. checkpoint.py)
         self.journal = journal or Journal(None)
         self.budget = config.max_cost_usd  # можно поднять на ходу: set_budget()
@@ -399,6 +402,8 @@ class Council:
                          call_n: int = 0, max_tokens_override: int | None = None, web_fetch: int = 0) -> T:
         max_tokens = max_tokens_override or member.max_tokens or self.cfg.max_tokens
         temperature = member.temperature if member.temperature is not None else self.cfg.temperature
+        if stage in self.stage_temperature:
+            temperature = max(temperature, self.stage_temperature[stage])
         if stage in self.JUDGE_STAGES and self.cfg.judge_temperature is not None:
             temperature = self.cfg.judge_temperature  # оценки и итог — с меньшей случайностью
         effort = member.reasoning_effort or self.cfg.reasoning_effort
@@ -842,7 +847,7 @@ class Council:
                 self.chair_judge = True
 
         # Каждый режим — свой файл в council/modes/: debate, quick, evaluate (общие этапы — common), research
-        from .modes import debate, evaluate, quick
+        from .modes import creative, debate, evaluate, quick
         common = {"criteria": criteria, "context": context, "followup_of": followup_of, "started": started, "t0": t0}
         if mode == "research":
             return await self._run_research(question, **common)
@@ -850,6 +855,8 @@ class Council:
             return await evaluate.run(self, question, options=options or [], **common)
         if mode == "quick":
             return await quick.run(self, question, **common)
+        if mode == "creative":
+            return await creative.run(self, question, **common)
         return await debate.run(self, question, rounds=rounds, **common)
 
     # ------------------------------------------------------------------ режим «Исследование» — council/modes/research.py

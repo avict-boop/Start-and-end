@@ -568,7 +568,7 @@ def main(argv: list[str] | None = None) -> int:
 
     a = sub.add_parser("ask", help="провести заседание совета")
     a.add_argument("question", help='вопрос (или "-" чтобы прочитать из stdin)')
-    a.add_argument("--mode", choices=["quick", "debate", "evaluate", "research"], help="режим (по умолчанию из конфига)")
+    a.add_argument("--mode", choices=["quick", "debate", "evaluate", "research", "creative"], help="режим (по умолчанию из конфига)")
     a.add_argument("--rounds", type=int, help="число раундов критики/доработки в режиме debate")
     a.add_argument("--criteria", help='свои критерии через запятую, напр. "цена,скорость,риск"')
     a.add_argument("--option", action="append", help="готовый вариант для оценки (можно несколько раз)")

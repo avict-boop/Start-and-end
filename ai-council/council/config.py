@@ -9,7 +9,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-Mode = Literal["quick", "debate", "evaluate", "research"]
+Mode = Literal["quick", "debate", "evaluate", "research", "creative"]
 Effort = Literal["none", "low", "medium", "high"]
 
 

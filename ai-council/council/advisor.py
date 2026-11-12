@@ -26,7 +26,7 @@ from .config import CouncilConfig
 
 DOSSIER_FILE = "model_dossiers.json"  # в runs/notes/
 DOSSIER_BATCH = 6
-MODES = ("debate", "quick", "evaluate", "research")
+MODES = ("debate", "quick", "evaluate", "research", "creative")
 # известные разработчики: из них берём свежие модели, даже если в совете их нет («какие ещё модели лучше»)
 NOTABLE = ("anthropic", "openai", "google", "deepseek", "moonshotai", "x-ai", "qwen", "mistralai", "z-ai", "meta-llama")
 SHORT_NAME = {"anthropic": "claude", "openai": "chatgpt", "google": "gemini", "moonshotai": "kimi", "deepseek": "deepseek",
@@ -47,6 +47,10 @@ MODE_ROLES = {
                  "нужны длинный контекст, аккуратность с фактами и соблюдение длины; председателю — очень большой "
                  "предел ответа (длинный синтез с таблицами), рассуждения и строгий JSON. Модели, склонные сильно "
                  "превышать длину или обрывать JSON, хуже подходят."),
+    "creative": ("Креатив: названия, концепции, идеи, слоганы. У каждого автора своя творческая роль, много идей по "
+                 "разным направлениям, критика «да, и…», ремикс, голосование по силе лучших идей, итог — шорт-лист из "
+                 "всех вариантов. Без поиска и проверки фактов. Ценнее всего разнообразие моделей разных "
+                 "разработчиков и хорошее чувство языка; председателю — вкус и аккуратная сборка шорт-листа."),
 }
 ROLE_TEXT = {"chair": "председатель", "member": "участник", "devil": "адвокат дьявола"}
 BASIS = ("catalog", "history", "reviews", "knowledge")

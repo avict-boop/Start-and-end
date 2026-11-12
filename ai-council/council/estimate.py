@@ -109,7 +109,7 @@ def plan_calls(
     proposers = [m for m in members if not (judge and m == cfg.chair)]
     n = n_options or len(proposers)
     own = 0 if n_options else 1  # своего варианта участник не оценивает
-    critique_rounds = 0 if mode == "quick" else (1 if mode in ("evaluate", "research") else rounds)
+    critique_rounds = 0 if mode == "quick" else (1 if mode in ("evaluate", "research", "creative") else rounds)
     plan: dict[str, list[tuple[str, int]]] = {name: [] for name in members}
     if not has_criteria:
         plan[cfg.chair].append(("framing", 0))
@@ -119,7 +119,7 @@ def plan_calls(
             plan[name].append(("proposal", 0))
         for _ in range(critique_rounds):
             plan[name].append(("critique", n - mine))
-            if mode in ("debate", "research") and name in proposers:
+            if mode in ("debate", "research", "creative") and name in proposers:
                 plan[name].append(("revision", n - mine))
         plan[name].append(("vote", n - mine))
     plan[cfg.chair].append(("verdict", n))
@@ -129,7 +129,7 @@ def plan_calls(
             rc = cfg.research
             extra = -(-rc.recheck_unclear // 5) + -(-rc.post_revision_claims // 5)  # второй поиск и новые после доработки
             plan[FACT_CHECKER] = [("arbitration", 5)] * (rc.missions * chunks + extra)
-    elif cfg.fact_check.enabled:
+    elif cfg.fact_check.enabled and mode != "creative":  # в «Креативе» проверки фактов нет
         plan[FACT_CHECKER] = [("factcheck", 1)] * min(cfg.fact_check.top, n)
     return plan
 

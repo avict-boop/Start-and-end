@@ -656,3 +656,32 @@ def test_factcheck_sources_reach_the_chair():
     text = factcheck_block({"A": {"summary": "ok", "claims": [
         {"claim": "Цена 10$", "status": "confirmed", "note": "так", "sources": ["https://ex.com/p", "не ссылка"]}]}})
     assert "sources: https://ex.com/p" in text and "не ссылка" not in text
+
+
+def test_creative_mode_roles_remix_shortlist_without_fact_check():
+    # «Креатив»: у авторов разные творческие роли, выше температура, критика «да, и…», ремикс, шорт-лист в итоге,
+    # без поиска и проверки фактов
+    from council.mock import MockClient
+
+    class Spy(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.seen = []
+
+        async def complete(self, model, messages, **kw):
+            st = (kw.get("meta") or {}).get("stage")
+            self.seen.append((st, kw.get("temperature"), bool(kw.get("web_search")), messages[-1]["content"]))
+            return await super().complete(model, messages, **kw)
+
+    cfg = make_cfg(mode="creative", fact_check={"enabled": True},
+                   members=[{"name": n, "model": f"m/{n}", "web_search": True} for n in "abcd"])
+    c = Spy()
+    res = run(Council(cfg, c, seed=1).run("Придумай название кофейни"))
+    stages = [s for s, *_ in c.seen]
+    assert res.mode == "creative" and "factcheck" not in stages and "revision" in stages
+    props = [x for x in c.seen if x[0] == "proposal"]
+    roles = {next(r for r, _ in __import__("council.modes.creative", fromlist=["ROLES"]).ROLES if r in p[3]) for p in props}
+    assert len(roles) == len(props)  # роли разные
+    assert all(t >= 1.0 and not w for _, t, w, _ in props)
+    assert any("yes, and" in x[3] for x in c.seen if x[0] == "critique")
+    assert any("SHORTLIST" in x[3] for x in c.seen if x[0] == "verdict")

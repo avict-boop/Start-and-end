@@ -13,7 +13,7 @@ from typing import Any
 
 import markdown as _markdown
 
-MODE_NAME = {"debate": "Дебаты", "quick": "Быстрый", "evaluate": "Оценка вариантов", "research": "Исследование"}
+MODE_NAME = {"debate": "Дебаты", "quick": "Быстрый", "evaluate": "Оценка вариантов", "research": "Исследование", "creative": "Креатив"}
 STAGE_NAME = {"framing": "Постановка", "proposal": "Предложения", "critique": "Критика",
               "revision": "Доработка", "vote": "Голосование", "verdict": "Вердикт", "arbitration": "Арбитраж доказательств", "recheck": "Проверка новых утверждений"}
 

@@ -68,6 +68,9 @@ class Board:
     req: list[str] | None
     context: str | None
     mode: str
+    web: bool = True                                          # участники с поиском ищут (в «Креативе» — нет)
+    notes: dict[str, str] = field(default_factory=dict)       # добавка режима к заданию этапа
+    persona: dict[str, dict[str, str]] = field(default_factory=dict)  # роль автора (подставляется в задание)
     authors: dict[str, str | None] = field(default_factory=dict)
     proposals: dict[str, Proposal] = field(default_factory=dict)
     initial: dict[str, Proposal] = field(default_factory=dict)
@@ -78,13 +81,17 @@ class Board:
     def label_of(self) -> dict[str, str]:
         return {name: l for l, name in self.authors.items() if name}
 
+    def note(self, stage: str, name: str = "") -> str:
+        text = self.notes.get(stage, "")
+        return text.format(**self.persona[name]) if text and name in self.persona and "{role}" in text else text
+
     def others(self, name: str) -> dict[str, Proposal]:
         """Чужие варианты: свой участник не видит в списке на оценку."""
         return {l: p for l, p in self.proposals.items() if self.authors[l] != name}
 
 
 async def frame(c: Council, question: str, criteria: list[str] | None, context: str | None,
-                mode: str) -> Board:
+                mode: str, *, note: str = "", default_criteria: list[str] | None = None) -> Board:
     """0. Постановка: уточнённый вопрос, критерии, обязательные требования (если критерии не заданы)."""
     chair = c.cfg.member(c.cfg.chair)
     refined = question
@@ -93,7 +100,8 @@ async def frame(c: Council, question: str, criteria: list[str] | None, context: 
     else:
         c._emit("stage", stage="framing", title="Постановка задачи и критерии")
         try:
-            framing = await c._ask(chair, "framing", prompts.framing(question, context, c.cfg.max_requirements), Framing)
+            framing = await c._ask(chair, "framing", prompts.framing(question, context, c.cfg.max_requirements) + note,
+                                   Framing)
             refined = framing.refined_question.strip() or question
             criteria = [x.strip() for x in framing.criteria if x.strip()]
             c.requirements = [r.strip() for r in framing.requirements if r.strip()][:c.cfg.max_requirements]
@@ -104,7 +112,7 @@ async def frame(c: Council, question: str, criteria: list[str] | None, context: 
             c.stats[chair.name].failures.append(f"framing: {e}")
             c._emit("member_failed", stage="framing", member=chair.name, error=str(e))
             criteria = []
-        criteria = criteria or ["Эффективность", "Реалистичность", "Риски"]
+        criteria = criteria or default_criteria or ["Эффективность", "Реалистичность", "Риски"]
     c._emit("framing", refined_question=refined, criteria=criteria, requirements=c.requirements)
     c.head = prompts.head(refined, question, c.requirements)
     return Board(question=question, refined=refined, criteria=criteria, req=c.requirements or None,
@@ -122,9 +130,9 @@ async def propose(c: Council, b: Board) -> None:
     got = await c._parallel(
         "proposal",
         {m.name: c._ask(m, "proposal", prompts.proposal(b.refined, b.criteria, b.context, b.question, c.compact, req=b.req)
-                        + (prompts.WEB_NOTE if m.web_search else ""), Proposal,
+                        + b.note("proposal", m.name) + (prompts.WEB_NOTE if m.web_search and b.web else ""), Proposal,
                         check=lambda p: check_substance(p, compact=bool(c.compact)),
-                        web_search=m.web_search)
+                        web_search=m.web_search and b.web)
          for m in proposers},
     )
     need = c._quorum(len(proposers), b.mode)
@@ -163,7 +171,7 @@ async def critique(c: Council, b: Board, title: str) -> None:
         expected = list(target)
         jobs[m.name] = c._ask(
             m, "critique",
-            prompts.critique(b.refined, b.criteria, target, b.question, bool(c.compact), req=b.req),
+            prompts.critique(b.refined, b.criteria, target, b.question, bool(c.compact), req=b.req) + b.note("critique", m.name),
             CritiqueSet,
             check=lambda cs, e=expected: normalize_critique(cs, e, b.criteria),
             meta={"labels": expected, "criteria": b.criteria},
@@ -187,9 +195,10 @@ async def revise(c: Council, b: Board, title: str) -> None:
         jobs[m.name] = c._ask(
             m, "revision",
             prompts.revision(b.refined, b.criteria, own, b.proposals[own], feedback, b.others(m.name), b.question,
-                             c.compact, req=b.req) + (prompts.WEB_NOTE if m.web_search else ""),
+                             c.compact, req=b.req) + b.note("revision", m.name)
+            + (prompts.WEB_NOTE if m.web_search and b.web else ""),
             Revision,
-            web_search=m.web_search,
+            web_search=m.web_search and b.web,
             check=lambda r, prev=b.proposals[own]: check_substance(_normalize_revision(r), previous=prev,
                                                                    compact=bool(c.compact)),
             meta={"label": own},
@@ -263,7 +272,7 @@ async def vote(c: Council, b: Board, *, keep: bool = False) -> Count:
 
         jobs[m.name] = c._ask(m, "vote",
                               prompts.vote(b.refined, b.criteria, target, b.question, bool(c.compact), req=b.req,
-                                           keep=keep),
+                                           keep=keep) + b.note("vote", m.name),
                               Ballot, check=check_ballot, meta={"labels": expected})
     b.ballots = await c._parallel("vote", jobs)
     return count(c, b, {n: bl.ranking for n, bl in b.ballots.items()})
@@ -339,7 +348,7 @@ async def verdict(c: Council, b: Board, k: Count, facts: dict[str, dict], ideas:
                             prompts.factcheck_block(facts), k.notes, leader=leader, follow_vote=follow,
                             compact=bool(c.compact), req=b.req, co_leaders=k.tied if len(k.tied) > 1 else None,
                             ideas=ideas_text, allow_none=allow_none, from_voters=from_voters,
-                            brief=c.cfg.answer_size == "brief"),
+                            brief=c.cfg.answer_size == "brief") + b.note("verdict"),
             Verdict, check=check_verdict, max_tokens=c.verdict_tokens(chair),
             meta={"labels": valid, "leader": leader, "ideas": idea_ids},
         )

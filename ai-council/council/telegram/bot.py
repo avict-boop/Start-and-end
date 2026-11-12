@@ -39,9 +39,11 @@ from ..diagnostics import bundle, save_events, save_failed, setup_logging, stamp
 STAGES = [("framing", "Уточняем задачу"), ("proposal", "Варианты ответа"), ("critique", "Ищем слабые места"),
           ("arbitration", "Проверка по источникам"), ("revision", "Доработка"),
           ("recheck", "Проверка новых утверждений"), ("vote", "Голосование"), ("factcheck", "Проверка фактов"), ("verdict", "Готовим вывод")]
-MODE_NAME = {"debate": "Дебаты", "quick": "Быстро", "evaluate": "Оценка вариантов", "research": "Исследование"}
+MODE_NAME = {"debate": "Дебаты", "quick": "Быстро", "evaluate": "Оценка вариантов", "research": "Исследование",
+             "creative": "Креатив"}
 MODE_FULL = {"debate": "Подробное обсуждение", "quick": "Быстрый ответ", "evaluate": "Выбор из ваших вариантов",
-             "research": "Исследование: подвопросы, проверка фактов поиском, «известно / спорно / неизвестно»"}
+             "research": "Исследование: подвопросы, проверка фактов поиском, «известно / спорно / неизвестно»",
+             "creative": "Креатив: много смелых идей, ремикс и шорт-лист (названия, концепции, слоганы)"}
 STAGE_HINT = {
     "framing": "председатель уточняет вопрос и критерии",
     "proposal": "каждая модель вслепую предлагает решение",
@@ -798,8 +800,9 @@ class CouncilBot:
         kb: list[list[dict]] = []
         if with_mode:
             kb.append([self._btn(("● " if s.mode == m else "") + {"debate": "Подробно", "research": "Исследование",
-                                                                   "quick": "Быстро"}[m], f"{prefix}mode:{m}")
-                       for m in ("debate", "research", "quick")])
+                                                                   "quick": "Быстро", "creative": "Креатив"}[m],
+                                             f"{prefix}mode:{m}")
+                       for m in ("debate", "research", "quick", "creative")])
             if s.mode == "debate":
                 kb.append([self._btn(("● " if s.rounds == r else "") + f"{r} раунд" + ("а" if r > 1 else ""), f"{prefix}rounds:{r}")
                            for r in (1, 2, 3)])
@@ -907,7 +910,7 @@ class CouncilBot:
 
     def _apply_setting(self, s: ChatSettings, kind: str, value: str) -> None:
         """Общая логика переключателей для карточки вопроса и для /settings."""
-        if kind == "mode" and value in ("debate", "quick", "research"):
+        if kind == "mode" and value in ("debate", "quick", "research", "creative"):
             s.mode = value
         elif kind == "rounds" and value.isdigit():
             s.rounds = max(1, min(5, int(value)))
