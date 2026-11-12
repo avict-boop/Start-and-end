@@ -339,7 +339,7 @@ def with_overrides(
         data["fact_check"]["enabled"] = fact_check
     if compact is not None:
         data["compact_proposals"] = compact
-    if research_words:  # длина варианта исследования для этого заседания
+    if research_words is not None:  # длина варианта исследования для этого заседания; 0 — без ограничения длины
         data["research"]["max_words"] = research_words
     if research_shorten is not None:
         data["research"]["shorten_long"] = research_shorten

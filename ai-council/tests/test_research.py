@@ -318,3 +318,12 @@ def test_blocked_links_keep_confirmation():
            "claims": [{"id": "A-C1", "status": "confirmed", "evidence": ["E1"]}]}
     R.apply_links(led, {"https://gov.example/a": {"status": "blocked", "code": 403}})
     assert led["claims"][0]["status"] == "confirmed" and led["evidence"][0]["link"] == "blocked"
+
+
+def test_no_length_limit_switch_is_not_lost():
+    from council.config import with_overrides
+    # «Без ограничения длины» приходит как 0 — это не «не задано»: настройка по умолчанию (1400) не подставляется
+    cfg = with_overrides(make_cfg(mode="research"), research_words=0)
+    assert cfg.research.max_words == 0
+    long = R.check_length(R.ResearchProposal(title="t", summary="слово " * 5000), 0, 1.5)
+    assert long.summary
