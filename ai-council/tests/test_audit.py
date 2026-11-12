@@ -446,12 +446,18 @@ def test_research_scouts_search_when_revising_too():
             self.web.append((kw.get("meta", {}).get("stage"), kw.get("meta", {}).get("member"), bool(kw.get("web_search"))))
             return await super().complete(model, messages, **kw)
 
+    # по умолчанию на доработке не ищут: у автора уже есть реестр источников, а поиск на большом контексте дорог
     cfg = make_cfg(mode="research", members=[{"name": n, "model": f"m/{n}", "web_search": n == "b"} for n in "abcd"])
     c = Kw()
     run(Council(cfg, c, seed=3).run("Вопрос?"))
     by = {(st, w) for st, _, w in c.web if st in ("proposal", "revision")}
-    assert ("proposal", True) in by and ("revision", True) in by
-    assert sum(1 for st, _, w in c.web if st == "revision" and w) == 1  # ищет только «b»
+    assert ("proposal", True) in by and ("revision", True) not in by
+    # включили «Поиск и на доработке» — ищет только «b»
+    cfg = make_cfg(mode="research", members=[{"name": n, "model": f"m/{n}", "web_search": n == "b"} for n in "abcd"],
+                   research={"revision_search": True})
+    c = Kw()
+    run(Council(cfg, c, seed=3).run("Вопрос?"))
+    assert sum(1 for st, _, w in c.web if st == "revision" and w) == 1
 
 
 def test_snippet_confirmation_counts_when_the_program_finds_the_quote_on_the_page():

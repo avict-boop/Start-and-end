@@ -59,6 +59,10 @@ class ResearchConfig(BaseModel):
     revision_digest: bool = True   # доработка по реестру и выжимкам чужих вариантов, а не по их полным текстам
     section_vote: bool = True      # голосование за лучший вариант по каждому подвопросу
     fresh_scouts: int = Field(default=0, ge=0, le=2)    # авторов с поиском уже на этапе предложений («свежие данные»)
+    # Поиск у авторов и на доработке. Выключено: на доработке у автора уже есть реестр проверенных источников, а
+    # каждый шаг поиска заново отправляет модели весь контекст доработки (чужие варианты, критику, реестр) —
+    # на заседании 12.11 автор с поиском прочитал на доработке ~3 млн токенов
+    revision_search: bool = False
     max_words: int = Field(default=1400, ge=0, le=5000)  # ориентир длины варианта; 0 — без ограничения длины
     link_check: bool = True        # после арбитража открыть каждую ссылку реестра: мёртвые не подтверждают
     # Слишком длинный вариант (длиннее max_words × long_factor) возвращается автору на сокращение: длинные
@@ -251,7 +255,7 @@ def load_dotenv(path: str | Path = ".env") -> None:
 
 # какие настройки исследования можно менять для одного заседания (советник и «Параметры» вопроса)
 RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "max_claims", "revision_digest",
-                    "section_vote", "fresh_scouts", "max_words", "shorten_long", "long_factor", "link_check",
+                    "section_vote", "fresh_scouts", "revision_search", "max_words", "shorten_long", "long_factor", "link_check",
                     "recheck_unclear", "post_revision_claims", "vote_ledger", "snippet_rule", "digest_table_rows")
 
 
