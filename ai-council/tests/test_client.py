@@ -300,3 +300,52 @@ def test_reasoning_tokens_and_reasoning_off_are_reported():
     comp = asyncio.run(make(handler, retries=5).complete("deepseek/r", [], temperature=0, max_tokens=8000,
                                                          reasoning_effort="low"))
     assert comp.reasoning_off and comp.reasoning_tokens == 16000
+
+
+@pytest.fixture
+def _fresh_features():
+    from council import client as cl
+    for v in cl._NO_FEATURE.values():
+        v.clear()
+    yield
+    for v in cl._NO_FEATURE.values():
+        v.clear()
+
+
+def test_web_tools_fetch_and_json_mode_in_request(_fresh_features):
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=ok_body('{"a":1}'))
+
+    c = make(handler)
+    asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100, web_search=True, web_fetch=3, json_mode=True))
+    b = seen[0]
+    assert b["tools"] == [{"type": "openrouter:web_search", "parameters": {"max_results": 5}},
+                          {"type": "openrouter:web_fetch", "parameters": {"max_uses": 3, "max_content_tokens": 8000}}]
+    assert b["response_format"] == {"type": "json_object"} and "plugins" not in b
+    asyncio.run(c.complete("perplexity/sonar-pro", [], temperature=0, max_tokens=100, web_search=True))
+    assert "tools" not in seen[1] and "plugins" not in seen[1]  # у Perplexity поиск встроенный
+    asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100, web_search=True, web_tools=False))
+    assert seen[2]["plugins"] == [{"id": "web"}] and "tools" not in seen[2]
+
+
+def test_unsupported_feature_is_dropped_and_remembered(_fresh_features):
+    seen = []
+
+    def handler(req):
+        b = json.loads(req.content)
+        seen.append(b)
+        if "response_format" in b:
+            return httpx.Response(400, json={"error": {"message": "response_format is not supported by this provider"}})
+        if any(t["type"] == "openrouter:web_fetch" for t in b.get("tools", [])):
+            return httpx.Response(400, json={"error": {"message": "tool openrouter:web_fetch not supported"}})
+        return httpx.Response(200, json=ok_body('{"a":1}'))
+
+    c = make(handler, retries=0)
+    comp = asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100, web_search=True, web_fetch=2, json_mode=True))
+    assert comp.text == '{"a":1}' and len(seen) == 3
+    assert seen[-1]["tools"] == [{"type": "openrouter:web_search", "parameters": {"max_results": 5}}]
+    asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100, web_fetch=2, json_mode=True))
+    assert "response_format" not in seen[-1] and "tools" not in seen[-1] and len(seen) == 4  # запомнено

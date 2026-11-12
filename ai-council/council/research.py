@@ -628,8 +628,13 @@ RECHECK_NOTE = ("SECOND PASS: these claims were \"unclear\" after a first search
                 "and list them in \"queries_used\". ")
 
 
+FETCH_NOTE = ("You can open up to {n} pages in full with the web fetch tool. Open the primary sources for the most "
+              "important claims (marked CRITICAL or DECISIVE) before judging them: then you have read the page "
+              "(material_seen = page) and can quote it verbatim. A snippet is not a reading.\n")
+
+
 def arbitration(question: str, as_of: str, scope: str, mission: str, claims_batch: str, max_evidence: int,
-                snippet: bool = True, recheck: bool = False) -> str:
+                snippet: bool = True, recheck: bool = False, fetch: int = 0) -> str:
     return f"""Question (as of {as_of or 'today'}): {question}
 Required scope: {scope or 'as stated in the question'}
 Assigned mission: {mission}
@@ -638,7 +643,7 @@ Claims selected from anonymous proposals (contradictions, key numbers, fast-chan
 fixed — use them exactly:
 {claims_batch}
 
-{RECHECK_NOTE if recheck else ""}Investigate EVERY claim. Look for evidence both for and against. Prefer primary sources for numbers, dates, laws and
+{RECHECK_NOTE if recheck else ""}{FETCH_NOTE.format(n=fetch) if fetch else ""}Investigate EVERY claim. Look for evidence both for and against. Prefer primary sources for numbers, dates, laws and
 technical facts; check dates, geography, units and definitions. Where estimates differ, find the reason. Two articles
 restating one underlying report count as ONE source (mark the later one "secondary"). Record only sources your search
 actually returned; never invent a URL, date or quotation. If you saw only a snippet or a search summary, say so in

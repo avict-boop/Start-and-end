@@ -295,6 +295,7 @@ class Council:
         content: list[dict[str, Any]] | None = None,
         web_search: bool = False,
         max_tokens: int | None = None,
+        web_fetch: int = 0,
     ) -> T:
         if stage == "factcheck":
             system = prompts.FACTCHECK_SYSTEM.format(language=self.cfg.language)
@@ -349,7 +350,7 @@ class Council:
             self._fresh_stage = stage
         try:
             obj = await self._ask_model(member, stage, schema, base_messages, messages, meta, check, web_search, n,
-                                        max_tokens)
+                                        max_tokens, web_fetch)
         except (InvalidResponse, ProviderError) as e:
             if not isinstance(e, OutOfCredits):
                 self.journal.fail(key, str(e), stage)
@@ -359,12 +360,14 @@ class Council:
 
     async def _ask_model(self, member: MemberConfig, stage: str, schema: type[T], base_messages: list, messages: list,
                          meta: dict[str, Any], check: Callable[[T], T] | None, web_search: bool = False,
-                         call_n: int = 0, max_tokens_override: int | None = None) -> T:
+                         call_n: int = 0, max_tokens_override: int | None = None, web_fetch: int = 0) -> T:
         max_tokens = max_tokens_override or member.max_tokens or self.cfg.max_tokens
         temperature = member.temperature if member.temperature is not None else self.cfg.temperature
         if stage in self.JUDGE_STAGES and self.cfg.judge_temperature is not None:
             temperature = self.cfg.judge_temperature  # оценки и итог — с меньшей случайностью
         effort = member.reasoning_effort or self.cfg.reasoning_effort
+        if stage == "vote" and self.cfg.vote_reasoning:
+            effort = self.cfg.vote_reasoning  # ранжирование готовых вариантов — без глубоких скрытых рассуждений
         error = ""
         started = time.monotonic()
         name = member.name
@@ -398,7 +401,11 @@ class Council:
                 async with self._sem:
                     # у границы бюджета запросы идут по два: меньше запросов «в полёте» — меньше превышение лимита
                     async with (self._narrow if self._budget_warned else contextlib.nullcontext()):
-                        extra = {"web_search": True} if web_search else {}
+                        extra: dict[str, Any] = {"web_search": True, "web_tools": self.cfg.web_tools} if web_search else {}
+                        if web_fetch:
+                            extra["web_fetch"] = web_fetch
+                        if self.cfg.json_mode and not acc:  # продолжение обрывка — не JSON-объект целиком
+                            extra["json_mode"] = True
                         self._in_flight += 1
                         self._reserved += cost_est
                         if self.shared:
@@ -559,6 +566,7 @@ class Council:
         for m in messages:
             c = m.get("content")
             chars += len(c) if isinstance(c, str) else sum(len(p.get("text", "")) for p in c or [] if isinstance(p, dict))
+        fetch = 0.01 * (self.cfg.fact_check.fetch_pages if stage in ("arbitration", "recheck") else 0)
         price = self.pricing.get(member.model)
         if price is None:
             return self.total_cost / self._requests_done if self._requests_done else 0.0
@@ -569,7 +577,7 @@ class Council:
         else:
             out = limit * self.cfg.reserve_output_share
         return (chars / self.CHARS_PER_TOKEN * price.prompt + out * price.completion + price.request
-                + (self.SEARCH_RESERVE_USD if web else 0.0))
+                + (self.SEARCH_RESERVE_USD if web else 0.0) + fetch)
 
     def _docs_text(self) -> dict[str, str]:
         """Текст документов пользователя и описания картинок по файлам — для сверки цитат «из документов»."""
@@ -1409,10 +1417,11 @@ class Council:
         plan = [(i, chunk) for chunk in chunks for i in range(n_missions)]
         snippet = rc.snippet_rule != "off"
         jobs = [self._ask(checker, stage, R.arbitration(question, as_of, scope, R.MISSIONS[i], R.claims_batch(chunk),
-                                                        per_chunk, snippet=snippet, recheck=recheck),
+                                                        per_chunk, snippet=snippet, recheck=recheck,
+                                                        fetch=fc.fetch_pages),
                           R.EvidenceResult, meta={"mission": i + 1, "claims": [c["id"] for c in chunk], "research": True,
                                                   "recheck": recheck},
-                          web_search=True)
+                          web_search=True, web_fetch=fc.fetch_pages)
                 for i, chunk in plan]
         found = await asyncio.gather(*jobs, return_exceptions=True)
         ok = []

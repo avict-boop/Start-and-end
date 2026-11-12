@@ -157,6 +157,41 @@ class KeyLimit(OutOfCredits):
     Это касается всех моделей сразу — заседание приостанавливается, а не теряет участников по одному."""
 
 
+# Что модель не поддерживает (узнаём по ответу HTTP 400 и запоминаем до перезапуска программы)
+_NO_FEATURE: dict[str, set[str]] = {"tools": set(), "fetch": set(), "json": set()}
+FETCH_TOKENS = 8000  # сколько текста страницы (≈ токенов) отдаётся модели при чтении
+
+
+def _drop_unsupported(payload: dict[str, Any], model: str, err: str) -> str:
+    """HTTP 400/404/422 из-за новых возможностей — убрать причину из запроса. Возвращает, что убрано ('' — ничего)."""
+    if not any(f" {c}" in err for c in (400, 404, 422)):
+        return ""
+    low = err.lower()
+    if "response_format" in payload and ("response_format" in low or "json" in low or "structured" in low):
+        payload.pop("response_format")
+        _NO_FEATURE["json"].add(model)
+        return "строгий JSON"
+    tools = payload.get("tools") or []
+    if any(t["type"] == "openrouter:web_fetch" for t in tools) and ("fetch" in low or "tool" in low):
+        payload["tools"] = [t for t in tools if t["type"] != "openrouter:web_fetch"]
+        if not payload["tools"]:
+            payload.pop("tools")
+        _NO_FEATURE["fetch"].add(model)
+        return "чтение страниц (web_fetch)"
+    if any(t["type"] == "openrouter:web_search" for t in tools) and ("tool" in low or "search" in low):
+        payload["tools"] = [t for t in tools if t["type"] != "openrouter:web_search"]
+        if not payload["tools"]:
+            payload.pop("tools")
+        payload["plugins"] = [{"id": "web"}]
+        _NO_FEATURE["tools"].add(model)
+        return "инструмент поиска (возврат к плагину)"
+    if "response_format" in payload:  # причина не названа — сначала снимаем самое вероятное
+        payload.pop("response_format")
+        _NO_FEATURE["json"].add(model)
+        return "строгий JSON"
+    return ""
+
+
 @dataclass
 class Completion:
     text: str
@@ -236,8 +271,17 @@ class OpenRouterClient:
         meta: dict[str, Any] | None = None,
         on_progress: ProgressFn | None = None,
         web_search: bool = False,
+        web_fetch: int = 0,
+        json_mode: bool = False,
+        web_tools: bool = True,
     ) -> Completion:
         """Запрос к модели с потоковой передачей ответа.
+
+        web_tools — поиск через серверный инструмент OpenRouter openrouter:web_search (прежний плагин «web»
+        объявлен устаревшим; False — по-старому). web_fetch — сколько страниц модель может прочитать целиком
+        инструментом openrouter:web_fetch (0 — не может). json_mode — ответ строго JSON-объектом
+        (response_format), чтобы не было повторов из-за сломанного формата. Если модель или провайдер что-то из
+        этого не поддерживает (HTTP 400), запрос сразу повторяется без этого, и для модели это запоминается.
 
         web_search — включить поиск в интернете средствами OpenRouter (у моделей со встроенным поиском,
         например Perplexity, он есть и так). Найденные ссылки возвращаются в Completion.citations.
@@ -261,8 +305,19 @@ class OpenRouterClient:
             payload["reasoning"] = {"effort": reasoning_effort}
         if model in _REASONING_FIX:
             payload["reasoning"] = dict(_REASONING_FIX[model])
-        if web_search and not model.startswith("perplexity/"):
-            payload["plugins"] = [{"id": "web"}]  # поиск OpenRouter: встроенный у провайдера или Exa
+        tools: list[dict[str, Any]] = []
+        if web_search and not model.startswith("perplexity/"):  # у Perplexity поиск встроенный
+            if web_tools and model not in _NO_FEATURE["tools"]:
+                tools.append({"type": "openrouter:web_search", "parameters": {"max_results": 5}})
+            else:
+                payload["plugins"] = [{"id": "web"}]  # прежний способ: встроенный поиск провайдера или Exa
+        if web_fetch and model not in _NO_FEATURE["fetch"]:
+            tools.append({"type": "openrouter:web_fetch",
+                          "parameters": {"max_uses": int(web_fetch), "max_content_tokens": FETCH_TOKENS}})
+        if tools:
+            payload["tools"] = tools
+        if json_mode and model not in _NO_FEATURE["json"]:
+            payload["response_format"] = {"type": "json_object"}
         spent = Completion(text="")  # расходы всех попыток, включая неудачные
         last_error = "неизвестная ошибка"
         wait = 0.0
@@ -298,6 +353,12 @@ class OpenRouterClient:
                 continue
             except ProviderError as e:
                 e.spent = spent
+                dropped = _drop_unsupported(payload, model, str(e))
+                if dropped:  # модель не умеет что-то из новых возможностей — сразу повторяем без этого
+                    attempt -= 1
+                    wait = 0.0
+                    last_error = f"модель не поддерживает {dropped} — повтор без этого"
+                    continue
                 if payload.get("reasoning") == REASONING_OFF and empty_runs and " 400" in str(e):
                     # модель не умеет отвечать без рассуждений — понятная ошибка вместо «HTTP 400»
                     raise ProviderError(self._runaway_text(model), spent=spent) from e

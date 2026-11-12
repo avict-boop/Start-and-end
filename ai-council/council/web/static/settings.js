@@ -177,6 +177,8 @@ function renderSettings() {
          ["evaluate_allow_none", "«Ни один вариант не подходит» в «Выборе из вариантов»", "председатель может честно сказать, что все варианты непригодны, с причиной и цитатой"],
          ["chair_critiques", "Председатель участвует в критике", "эксперимент пилота: выключите — дешевле, но у каждой пары вариантов меньше оценок"],
          ["chair_votes", "Председатель голосует", "эксперимент пилота: выключите — дешевле, но меньше бюллетеней"],
+         ["web_tools", "Поиск через инструмент OpenRouter", "новый способ поиска (web_search); выключите, только если поиск у участников перестал работать — вернётся прежний плагин"],
+         ["json_mode", "Строгий JSON в ответах", "модели, которые умеют, отвечают строго JSON — меньше платных повторов из-за сломанного формата; кто не умеет — без этого"],
          ["key_reserve", "Общий учёт лимита ключа", "сайт и бот вместе следят за остатком лимита OpenRouter: пауза до того, как ключ откажет посреди этапа"],
          ["budget_reserve", "Резерв бюджета на запросы", "новый запрос не уходит, если с ним и уже отправленными бюджет будет превышен — цена каждого запроса оценивается по каталогу; пауза — чуть раньше, но без перерасхода"]].map(([k, t, h]) =>
         `<label class="switch"><input type="checkbox" data-kb="${k}" ${d[k] ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>${t}</b><small>${h}</small></span></label>`).join("")}
@@ -190,6 +192,10 @@ function renderSettings() {
            ["reports_memory_mb", "Память для сборки отчётов, МБ", "0", "16000", "50", "реально занятая память; превысит — сборка остановится с ошибкой, сайт работает; 0 — без предела"]].map(([k, t, mn, mx, st, h]) =>
           `<label class="field"><span>${t}</span><input type="number" data-k="${k}" min="${mn}" max="${mx}" step="${st}" value="${d[k] ?? ""}" ${ro}><small class="hint">${h}</small></label>`).join("")}
       </div>
+      <label class="field" style="max-width:360px"><span>Глубина рассуждений на голосовании</span>
+        <select id="sVoteReason" ${ro}>${[["", "как у участника"], ["none", "без рассуждений"], ["low", "низкая — дешевле (рекомендуем)"], ["medium", "средняя"], ["high", "высокая"]]
+          .map(([v, t]) => `<option value="${v}" ${(d.vote_reasoning ?? "low") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <small class="hint">голосование — ранжирование готовых вариантов; глубокие скрытые рассуждения здесь дороги и почти не нужны</small></label>
       <p class="muted small" id="reportPeaks"></p>`;
     loadReportPeaks();
   } else if (SET.tab === "facts") {
@@ -203,6 +209,7 @@ function renderSettings() {
           <div class="muted small">${modelInfo(fc.model)}</div></label>
         <label class="field"><span>Сколько лидеров проверять</span><input type="number" id="fTop" min="1" max="5" value="${fc.top}" ${ro}></label>
         <label class="field"><span>Утверждений на вариант</span><input type="number" id="fClaims" min="1" max="10" value="${fc.max_claims}" ${ro}></label>
+        <label class="field"><span>Страниц читать целиком</span><input type="number" id="fFetch" min="0" max="10" value="${fc.fetch_pages ?? 3}" ${ro}><small class="hint">модель проверки открывает страницу, а не довольствуется фрагментом выдачи (около $0,01 за страницу); 0 — не читать</small></label>
       </div>
       <div class="row2" style="margin-top:.4rem"><button type="button" class="secondary" id="searchTest">Проверить поиск</button>
         <span class="muted small" id="searchTestOut">Один короткий запрос к модели с поиском (обычно меньше цента): работает ли поиск, сколько стоит и возвращает ли он ссылки.</span></div>
@@ -340,6 +347,8 @@ function bindSettings() {
   bindVal("fModel", (t) => { d.fact_check.model = t.value.trim(); });
   bindVal("fTop", (t) => { d.fact_check.top = num(t.value); });
   bindVal("fClaims", (t) => { d.fact_check.max_claims = num(t.value); });
+  bindVal("fFetch", (t) => { d.fact_check.fetch_pages = num(t.value); });
+  bindVal("sVoteReason", (t) => { d.vote_reasoning = t.value; });
   bindVal("tModel", (t) => { d.transcribe_model = t.value.trim(); });
   bindVal("pSolo", (t) => { d.pilot_solo_model = t.value.trim(); });
   for (const el of $("setBody").querySelectorAll("[data-r]")) el.addEventListener("change", () => { d.research[el.dataset.r] = el.checked; setDirty(); });

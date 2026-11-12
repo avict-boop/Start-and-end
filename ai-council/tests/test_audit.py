@@ -399,3 +399,21 @@ def test_reserve_uses_typical_stage_output_from_history():
     learned = Council(cfg, MockClient(delay=0), pricing={m.model: Price(prompt=0, completion=1e-5)}, stage_out={"vote": 500})
     assert plain._call_estimate(m, msgs, 16000, False, "vote") == pytest.approx(16000 * 0.5 * 1e-5)
     assert learned._call_estimate(m, msgs, 16000, False, "vote") == pytest.approx(750 * 1e-5)
+
+
+def test_vote_reasoning_is_low_and_arbitration_can_read_pages():
+    class Kw(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.kw = []
+
+        async def complete(self, model, messages, **kw):
+            self.kw.append((kw.get("meta", {}).get("stage"), kw.get("reasoning_effort"), kw.get("web_fetch"),
+                            kw.get("json_mode")))
+            return await super().complete(model, messages, **kw)
+
+    c = Kw()
+    run(Council(make_cfg(mode="research"), c, seed=3).run("Вопрос?"))
+    assert all(e == "low" for st, e, _, _ in c.kw if st == "vote")
+    assert all(f == 3 for st, _, f, _ in c.kw if st == "arbitration")
+    assert all(j for st, _, _, j in c.kw if st in ("proposal", "vote"))

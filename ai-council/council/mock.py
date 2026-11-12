@@ -20,7 +20,7 @@ class MockClient:
         self.calls: list[dict[str, Any]] = []
 
     async def complete(self, model, messages, *, temperature, max_tokens, reasoning_effort=None, meta=None,
-                       on_progress=None, web_search=False) -> Completion:
+                       on_progress=None, web_search=False, **kw) -> Completion:
         meta = meta or {}
         self.calls.append({"model": model, "meta": meta})
         report = on_progress or (lambda ev: None)
