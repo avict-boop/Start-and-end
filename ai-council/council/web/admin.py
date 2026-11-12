@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import io
 import json
 import os
@@ -18,6 +19,8 @@ from typing import Any, Callable
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
+
+log = logging.getLogger("council.web.admin")
 
 from ..catalog import created, date, family, is_text_model, modalities, provider, sort_newest, upgrades
 from ..config import CouncilConfig
@@ -114,10 +117,16 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         if not isinstance(data, dict):
             raise HTTPException(400, "ожидался объект с настройками")
         backups = runs_dir(base_config()) / "config-backups"
+        before = editable(base_config())
         try:
             cfg = await asyncio.to_thread(save, config_path, data, backups=backups)
         except SettingsError as e:
+            log.warning("настройки не сохранены: %s", e)
             raise HTTPException(400, str(e)) from e
+        changed = _diff(before, editable(cfg))
+        log.info("настройки сохранены: %s", "; ".join(changed) if changed else "без изменений")
+        from ..diagnostics import setup_logging
+        setup_logging(runs_dir(cfg), "web", level=cfg.log_level, file_mb=cfg.log_file_mb, files=cfg.log_files)
         warnings = []
         models = await catalog.get()
         if models:
@@ -543,8 +552,23 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
 
     @app.post("/api/system/update")
     async def update() -> dict[str, Any]:
+        log.info("запрошено обновление программы с сайта")
         return request_action("update")
 
     @app.post("/api/system/restart")
     async def restart() -> dict[str, Any]:
+        log.info("запрошен перезапуск программы с сайта")
         return request_action("restart")
+
+
+def _diff(a: Any, b: Any, path: str = "") -> list[str]:
+    """Что поменялось в настройках: «ключ: было → стало» (для журнала программы)."""
+    if isinstance(a, dict) and isinstance(b, dict):
+        out: list[str] = []
+        for k in sorted(set(a) | set(b), key=str):
+            out += _diff(a.get(k), b.get(k), f"{path}.{k}" if path else str(k))
+        return out
+    if a != b:
+        sa, sb = str(a), str(b)
+        return [f"{path}: {sa[:80]} → {sb[:80]}"]
+    return []

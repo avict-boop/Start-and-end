@@ -196,6 +196,15 @@ function renderSettings() {
         <select id="sVoteReason" ${ro}>${[["", "как у участника"], ["none", "без рассуждений"], ["low", "низкая — дешевле (рекомендуем)"], ["medium", "средняя"], ["high", "высокая"]]
           .map(([v, t]) => `<option value="${v}" ${(d.vote_reasoning ?? "low") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
         <small class="hint">голосование — ранжирование готовых вариантов; глубокие скрытые рассуждения здесь дороги и почти не нужны</small></label>
+      <h2 style="margin-top:1rem">Журнал программы</h2>
+      <div class="row2">
+        <label class="field"><span>Подробность</span>
+          <select id="sLogLevel" ${ro}>${[["debug", "максимально подробно (каждый запрос к модели и действие)"], ["info", "главное"], ["warning", "только сбои"]]
+            .map(([v, t]) => `<option value="${v}" ${(d.log_level ?? "debug") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+          <small class="hint">runs/logs/web.log и bot.log; скачать — «Программа → Скачать журналы программы». Уровень на сайте меняется сразу, у бота — после перезапуска. Ключи и токены в журнал не попадают</small></label>
+        <label class="field"><span>Размер файла журнала, МБ</span><input type="number" data-k="log_file_mb" min="1" max="200" step="1" value="${d.log_file_mb ?? 10}" ${ro}></label>
+        <label class="field"><span>Сколько файлов хранить</span><input type="number" data-k="log_files" min="2" max="50" step="1" value="${d.log_files ?? 10}" ${ro}><small class="hint">старые удаляются сами; новый размер — после перезапуска</small></label>
+      </div>
       <p class="muted small" id="reportPeaks"></p>`;
     loadReportPeaks();
   } else if (SET.tab === "facts") {
@@ -349,6 +358,7 @@ function bindSettings() {
   bindVal("fClaims", (t) => { d.fact_check.max_claims = num(t.value); });
   bindVal("fFetch", (t) => { d.fact_check.fetch_pages = num(t.value); });
   bindVal("sVoteReason", (t) => { d.vote_reasoning = t.value; });
+  bindVal("sLogLevel", (t) => { d.log_level = t.value; });
   bindVal("tModel", (t) => { d.transcribe_model = t.value.trim(); });
   bindVal("pSolo", (t) => { d.pilot_solo_model = t.value.trim(); });
   for (const el of $("setBody").querySelectorAll("[data-r]")) el.addEventListener("change", () => { d.research[el.dataset.r] = el.checked; setDirty(); });

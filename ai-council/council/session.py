@@ -180,6 +180,7 @@ class Council:
         # общий учёт лимита ключа сайта и бота: остаток лимита и запросы всех идущих заседаний
         self.key_limit = key_limit
         self.shared = InFlight(shared_dir, session_id) if shared_dir and session_id else None
+        self._tag = f"[{session_id[:15]}] " if session_id else ""  # дата и время старта — метка заседания в журнале
         self._key_left: float | None = None
         self._key_at = 0.0
         self._key_spent = 0.0
@@ -220,7 +221,45 @@ class Council:
     def total_cost(self) -> float:
         return sum(s.cost for s in self.stats.values())
 
+    QUIET_EVENTS = {"call", "cost"}  # их пишет _call и учёт расходов — в журнал по-своему
+
+    def _log_event(self, event: str, data: dict[str, Any]) -> None:
+        """Каждое событие заседания — в журнал программы: этапы и предупреждения — главное, остальное — подробно."""
+        if event in self.QUIET_EVENTS:
+            return
+        if event == "stage":
+            log.info("%s▶ этап %s: %s", self._tag, data.get("stage"), data.get("title"))
+        elif event in ("warning", "member_failed"):
+            log.warning("%s⚠ %s %s (%s): %s", self._tag, event, data.get("member", ""), data.get("stage", ""),
+                        data.get("text") or data.get("error"))
+        elif event == "tally":
+            rows = data.get("rows") or []
+            log.info("%sголосование: %s; согласие %s; ничья %s; решающие %s; спорные бюллетени %s", self._tag,
+                     ", ".join(f"{getattr(r, 'label', '?')}={getattr(r, 'borda', 0):.2f}" for r in rows[:8]),
+                     (data.get("agreement") or {}).get("level"), data.get("co_leaders") or "—",
+                     data.get("decisive") or "—", list((data.get("ballot_flags") or {}).keys()) or "—")
+        elif event == "verdict":
+            v = data.get("verdict")
+            log.info("%sитог: победитель %s, отступление «%s», известно %d, неизвестно %d, идей %d", self._tag,
+                     getattr(v, "winner", "?"), getattr(v, "deviation", "")[:120], len(getattr(v, "known", []) or []),
+                     len(getattr(v, "unknown", []) or []), len(data.get("ideas") or []))
+        elif event == "ledger":
+            led = data.get("ledger") or {}
+            st: dict[str, int] = {}
+            for c in led.get("claims") or []:
+                st[c.get("status", "")] = st.get(c.get("status", ""), 0) + 1
+            log.info("%sреестр: утверждений %d %s, источников %d, отложено %d", self._tag, len(led.get("claims") or []),
+                     st, len(led.get("evidence") or []), len(led.get("deferred") or []))
+        elif event in ("budget", "budget_warning", "links", "factcheck", "framing", "lenses", "followup"):
+            log.info("%s%s: %s", self._tag, event, _short(data))
+        else:
+            log.debug("%s%s: %s", self._tag, event, _short(data))
+
     def _emit(self, event: str, **data: Any) -> None:
+        try:
+            self._log_event(event, data)
+        except Exception:  # noqa: BLE001 — журнал не должен мешать заседанию
+            pass
         try:
             self.on_event(event, **data)
         except Exception:  # обработчик интерфейса не должен ронять заседание
@@ -238,6 +277,12 @@ class Council:
         if last and last[0] == phase and phase in ("thinking", "writing") and now - last[1] < 0.8:
             return
         self._last_call_emit[key] = (phase, now)
+        if phase in ("done", "failed", "retry"):
+            (log.warning if phase in ("failed", "retry") else log.info)(
+                "%s%s %s · %s · %.1f с%s", self._tag, {"done": "✓", "failed": "✗", "retry": "↻"}[phase], member, stage,
+                now - started, f" · {data['detail']}" if data.get("detail") else "")
+        elif phase == "queued":
+            log.debug("%s… %s · %s ждёт свободного слота", self._tag, member, stage)
         self._emit("call", member=member, stage=stage, phase=phase, elapsed=round(now - started, 1), **data)
 
     def _account(self, member: MemberConfig, comp: Completion) -> None:
@@ -329,10 +374,13 @@ class Council:
                 obj = None
             if obj is not None:
                 self.replayed += 1
+                log.info("%s⟲ %s · %s#%d — ответ из сохранённого (%s), без оплаты", self._tag, member.name, stage, n,
+                         "по номеру обращения" if loose else "точное совпадение запроса")
                 self._call(member.name, stage, "done", time.monotonic(), detail="из сохранённого",
                            cost=round(self.stats[member.name].cost, 6))
                 return obj
         if key in self.journal.failures:  # участник не справился до приостановки — ход заседания тот же
+            log.info("%s⟲ %s · %s — сбой из сохранённого: %s", self._tag, member.name, stage, self.journal.failures[key][:200])
             raise InvalidResponse(self.journal.failures[key])
         if not self._fresh_stage and stage not in ("describe",):
             self._fresh_stage = stage
@@ -372,12 +420,16 @@ class Council:
         acc = ""             # уже полученная часть ответа, который продолжается
         while attempt <= self.cfg.json_retries:
             if self.total_cost >= self.budget:
+                log.warning("%sбюджет $%g исчерпан (потрачено $%.4f) — пауза", self._tag, self.budget, self.total_cost)
                 raise BudgetExceeded(
                     f"достигнут лимит бюджета ${self.budget:g} (потрачено ${self.total_cost:.4f})"
                 )
             cost_est = self._call_estimate(member, messages, max_tokens, web_search, stage) if self.cfg.budget_reserve else 0.0
             await self._check_key(cost_est)
+            log.debug("%sрезерв: %s · %s — этот запрос ≈$%.4f, в работе ≈$%.4f (%d), потрачено $%.4f из $%g",
+                      self._tag, name, stage, cost_est, self._reserved, self._in_flight, self.total_cost, self.budget)
             if self.cfg.budget_reserve and self.total_cost + self._reserved + cost_est >= self.budget:
+                log.warning("%sрезерв бюджета: %s · %s не помещается (≈$%.4f) — пауза", self._tag, name, stage, cost_est)
                 raise BudgetExceeded(
                     f"бюджет ${self.budget:g} будет превышен: потрачено ${self.total_cost:.4f}, запросы в работе "
                     f"({self._in_flight}) — около ${self._reserved:.2f}, этот запрос — около ${cost_est:.2f}. Пауза, "
@@ -394,6 +446,13 @@ class Council:
                             extra["web_fetch"] = web_fetch
                         if self.cfg.json_mode and not acc:  # продолжение обрывка — не JSON-объект целиком
                             extra["json_mode"] = True
+                        log.info("%s→ %s [%s] · %s#%d · попытка %d%s: вход ≈%d зн., предел %s, t=%s, рассуждения %s%s%s%s",
+                                 self._tag, name, member.model, stage, call_n, attempt + 1,
+                                 f" · продолжение {continuations}" if acc else "",
+                                 sum(len(m["content"]) if isinstance(m["content"], str) else 0 for m in messages),
+                                 max_tokens, temperature, effort or "по умолчанию",
+                                 " · поиск" if web_search else "", f" · страниц {web_fetch}" if web_fetch else "",
+                                 " · JSON" if extra.get("json_mode") else "")
                         self._in_flight += 1
                         self._reserved += cost_est
                         if self.shared:
@@ -413,6 +472,10 @@ class Council:
                 self._call(name, stage, "failed", started, detail=str(e)[:300])
                 raise
             self._account(member, comp)
+            log.info("%s← %s · %s: %s, вход %d (кэш %d), выход %d (рассужд. %d), $%.5f, %.1f с, finish=%s, %d зн., модель %s",
+                     self._tag, name, stage, comp.gen_id or "без номера", comp.prompt_tokens, comp.cached_tokens,
+                     comp.completion_tokens, comp.reasoning_tokens, comp.cost, time.monotonic() - started,
+                     comp.finish_reason, len(comp.text), comp.model or member.model)
             self._call(name, stage, "checking", started, tokens=comp.completion_tokens)
             max_tokens = max(max_tokens, comp.max_tokens or 0)  # клиент мог уже увеличить лимит
             text = acc + comp.text if acc else comp.text
@@ -458,6 +521,8 @@ class Council:
                 continue
             except ValueError as e:  # pydantic.ValidationError тоже ValueError
                 error = readable_error(e)
+                log.warning("%s%s · %s: ответ не принят (%s)", self._tag, name, stage, error[:400])
+                log.debug("%s%s · %s: начало ответа: %r … конец: %r", self._tag, name, stage, text[:600], text[-400:])
                 truncated = comp.finish_reason in ("length", "max_tokens", "MAX_TOKENS")
                 entry["error"] = error
                 entry["finish_reason"] = comp.finish_reason
@@ -495,6 +560,7 @@ class Council:
             if "search_citations" in type(obj).model_fields:  # ссылки, которые реально вернул поиск
                 obj = obj.model_copy(update={"search_citations": list(getattr(comp, "citations", []) or [])})
             entry["parsed"] = obj.model_dump()
+            entry["gen_id"] = comp.gen_id
             self._log(entry)
             self._call(name, stage, "done", started, cost=round(self.stats[name].cost, 6))
             return obj
@@ -828,6 +894,16 @@ MIN_LETTERS = 10           # меньше — это не ответ, а заг�
 MIN_LETTERS_COMPACT = 10
 PLACEHOLDER_RE = re.compile(r"complete markdown answer|the full (revised )?answer|full answer here|your answer here|"
                             r"short descriptive title|^\W*(\.\.\.|…)\W*$", re.I | re.S)
+
+
+def _short(data: dict[str, Any], limit: int = 600) -> str:
+    """Краткий вид события для журнала: без длинных текстов вариантов."""
+    import json as _json
+    try:
+        t = _json.dumps(data, ensure_ascii=False, default=lambda o: getattr(o, "model_dump", lambda: str(o))())
+    except (TypeError, ValueError):
+        t = str(data)
+    return t if len(t) <= limit else t[:limit] + f"… (+{len(t) - limit} зн.)"
 
 
 def _letters(text: str) -> int:

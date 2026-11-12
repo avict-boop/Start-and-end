@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import random
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
 import httpx
+
+log = logging.getLogger("council.client")
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 RETRY_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
@@ -203,6 +206,7 @@ class Completion:
     max_tokens: int = 0  # с каким лимитом получен ответ (после возможных увеличений)
     cached_tokens: int = 0  # сколько входных токенов прочитано из кэша провайдера (дешевле)
     citations: list[str] = field(default_factory=list)  # ссылки, которые реально вернул поиск (не из текста модели)
+    gen_id: str = ""  # номер ответа у OpenRouter (gen-…): по нему запрос находится в журнале OpenRouter
     reasoning_tokens: int = 0     # из выходных токенов — скрытые рассуждения модели (если провайдер сообщает)
     reasoning_off: bool = False   # рассуждения пришлось выключить: модель тратила на них весь лимит
 
@@ -332,6 +336,13 @@ class OpenRouterClient:
                     await asyncio.sleep(wait)
             wait = self.retry_base_delay * (min(2**attempt, 30) + random.random())
             report({"phase": "sent", "attempt": attempt, "max_tokens": payload["max_tokens"]})
+            log.debug("HTTP → %s попытка %d: max_tokens=%s, reasoning=%s, tools=%s, plugins=%s, response_format=%s, "
+                      "сообщений %d, ≈%d зн.", model, attempt, payload["max_tokens"], payload.get("reasoning"),
+                      [t["type"] for t in payload.get("tools") or []], [p["id"] for p in payload.get("plugins") or []],
+                      (payload.get("response_format") or {}).get("type"), len(payload["messages"]),
+                      sum(len(m["content"]) if isinstance(m.get("content"), str) else
+                          sum(len(x.get("text", "")) for x in m.get("content") or [] if isinstance(x, dict))
+                          for m in payload["messages"]))
             try:
                 if self._narrow is not None:
                     async with self._narrow:  # после нехватки резерва — меньше запросов одновременно
@@ -340,6 +351,7 @@ class OpenRouterClient:
                     res = await self._attempt(payload, report)
             except _Retryable as e:
                 last_error = str(e)
+                log.warning("HTTP ✗ %s попытка %d: %s (повтор)", model, attempt, e)
                 if e.credits and credit_waits < CREDIT_RETRIES:
                     # Резерв баланса освободится, когда закончатся идущие запросы: ждём и пробуем снова,
                     # не тратя обычные попытки, и дальше шлём меньше запросов одновременно.
@@ -355,6 +367,7 @@ class OpenRouterClient:
                 e.spent = spent
                 dropped = _drop_unsupported(payload, model, str(e))
                 if dropped:  # модель не умеет что-то из новых возможностей — сразу повторяем без этого
+                    log.warning("%s: не поддерживает %s — повтор без этого (%s)", model, dropped, str(e)[:300])
                     attempt -= 1
                     wait = 0.0
                     last_error = f"модель не поддерживает {dropped} — повтор без этого"
@@ -363,6 +376,10 @@ class OpenRouterClient:
                     # модель не умеет отвечать без рассуждений — понятная ошибка вместо «HTTP 400»
                     raise ProviderError(self._runaway_text(model), spent=spent) from e
                 raise
+            log.debug("HTTP ← %s попытка %d: %s, вход %d (кэш %d), выход %d (рассужд. %d), $%.6f, finish=%s, %d зн.",
+                      model, attempt, res.get("id") or "без номера", res["prompt_tokens"], res.get("cached_tokens", 0),
+                      res["completion_tokens"], res.get("reasoning_tokens", 0), res["cost"], res["finish"],
+                      len(res["text"]))
             spent.prompt_tokens += res["prompt_tokens"]
             spent.cached_tokens += res.get("cached_tokens", 0)
             spent.completion_tokens += res["completion_tokens"]
@@ -395,6 +412,7 @@ class OpenRouterClient:
                     wait = 0.0  # повторяем сразу (причина уйдёт в событие retry)
                 else:
                     last_error = f"пустой ответ модели (finish_reason={finish}, лимит {limit} токенов)"
+                log.warning("%s: %s", model, last_error)
                 continue
             if empty_runs and payload.get("reasoning"):
                 _REASONING_FIX[model] = dict(payload["reasoning"])  # следующие запросы — сразу так
@@ -410,6 +428,7 @@ class OpenRouterClient:
                 citations=spent.citations,
                 reasoning_tokens=spent.reasoning_tokens,
                 reasoning_off=payload.get("reasoning") == REASONING_OFF,
+                gen_id=res.get("id", ""),
             )
         raise ProviderError(
             f"{model}: не удалось получить ответ после {self.max_retries + 1} попыток: {last_error}",
@@ -472,6 +491,7 @@ class OpenRouterClient:
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "cost": float(usage.get("cost") or 0.0),
             "model": data.get("model") or model,
+            "id": str(data.get("id") or ""),
         }
 
     async def _from_stream(self, resp: httpx.Response, model: str, report: ProgressFn,
@@ -481,6 +501,7 @@ class OpenRouterClient:
         finish = None
         usage: dict[str, Any] = {}
         real_model = model
+        gen_id = ""
         cites: list[str] = []
         last_report = 0.0
         phase = "thinking"
@@ -502,6 +523,7 @@ class OpenRouterClient:
             if chunk.get("error"):
                 self._raise_error(chunk["error"], model)
             real_model = chunk.get("model") or real_model
+            gen_id = gen_id or str(chunk.get("id") or "")
             if chunk.get("usage"):
                 usage = chunk["usage"]
             cites += _citations(chunk, {})
@@ -531,6 +553,7 @@ class OpenRouterClient:
             "completion_tokens": int(usage.get("completion_tokens") or 0),
             "cost": float(usage.get("cost") or 0.0),
             "model": real_model,
+            "id": gen_id,
         }
 
     @staticmethod

@@ -165,6 +165,12 @@ class CouncilConfig(BaseModel):
     # Общий учёт лимита ключа OpenRouter для сайта и бота: перед запросом остаток лимита сверяется с запросами
     # всех идущих заседаний (не только этого) — пауза до того, как ключ откажет посреди этапа
     key_reserve: bool = True
+    # Журнал программы (runs/logs/web.log, bot.log): debug — максимально подробно (каждый запрос к модели с
+    # токенами, ценой, временем и номером ответа OpenRouter, каждое событие заседания и действие на сайте и в
+    # боте), info — главное, warning — только сбои. Размер: log_files файлов по log_file_mb МБ
+    log_level: Literal["debug", "info", "warning"] = "debug"
+    log_file_mb: int = Field(default=10, ge=1, le=200)
+    log_files: int = Field(default=10, ge=2, le=50)
     # Поиск в интернете через серверный инструмент OpenRouter (web_search) вместо устаревшего плагина «web»
     web_tools: bool = True
     # Ответ строго JSON-объектом у моделей, которые это поддерживают: меньше платных повторов из-за формата

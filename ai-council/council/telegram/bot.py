@@ -428,6 +428,15 @@ class CouncilBot:
     # ------------------------------------------------------------ входящие
 
     async def handle_update(self, update: dict[str, Any]) -> None:
+        # каждое входящее — в журнал: кто, что (текст — начало), какая кнопка
+        if "callback_query" in update:
+            cq = update["callback_query"]
+            log.info("кнопка от %s: %s", (cq.get("from") or {}).get("id"), (cq.get("data") or "")[:80])
+        elif "message" in update:
+            m = update["message"]
+            kind = next((k for k in ("text", "voice", "audio", "photo", "document", "video_note") if m.get(k)), "другое")
+            log.info("сообщение от %s в чате %s: %s%s", (m.get("from") or {}).get("id"), (m.get("chat") or {}).get("id"),
+                     kind, f" «{(m.get('text') or m.get('caption') or '')[:120]}»" if (m.get("text") or m.get("caption")) else "")
         if "callback_query" in update:
             await self.on_callback(update["callback_query"])
         elif "message" in update:
@@ -1534,7 +1543,11 @@ async def run_bot(config_path: str | Path) -> None:
         log.warning("TELEGRAM_ALLOWED_USERS пуст: бот никого не пустит, но покажет каждому его Telegram ID")
     api = TelegramAPI(token, base_url=os.environ.get("TELEGRAM_API_BASE", "https://api.telegram.org").rstrip("/"))
     bot = CouncilBot(api, config_path, allowed_users=allowed)
-    setup_logging(bot.runs_dir, "bot")
+    try:
+        _c = load_config(config_path)
+        setup_logging(bot.runs_dir, "bot", level=_c.log_level, file_mb=_c.log_file_mb, files=_c.log_files)
+    except Exception:  # noqa: BLE001 — настройки не прочитались: журнал всё равно ведём
+        setup_logging(bot.runs_dir, "bot")
     log.info("бот запущен")
     try:
         await bot.run()

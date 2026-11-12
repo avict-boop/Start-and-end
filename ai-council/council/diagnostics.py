@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import logging.handlers
 import re
 import time
@@ -35,31 +36,45 @@ class _Redacting(logging.Formatter):
         return redact(super().format(record))
 
 
-def setup_logging(runs_dir: str | Path, name: str, *, console: bool = True) -> Path:
-    """Пишет журнал программы в runs/logs/<name>.log (5 файлов по 2 МБ). Возвращает путь к журналу."""
+LEVELS = {"debug": logging.DEBUG, "info": logging.INFO, "warning": logging.WARNING}
+
+
+def setup_logging(runs_dir: str | Path, name: str, *, console: bool = True, level: str = "debug",
+                  file_mb: int = 10, files: int = 10) -> Path:
+    """Пишет журнал программы в runs/logs/<name>.log (files файлов по file_mb МБ — старые удаляются сами).
+    level: debug — максимально подробно (каждый запрос к модели, каждое событие и действие), info — главное,
+    warning — только сбои. COUNCIL_LOG_LEVEL в окружении важнее. Ключи и токены в журнал не попадают (redact)."""
+    lvl = LEVELS.get((os.environ.get("COUNCIL_LOG_LEVEL") or level or "debug").lower(), logging.DEBUG)
     d = Path(runs_dir) / LOG_DIR
     path = d / f"{name}.log"
     root = logging.getLogger()
-    if any(getattr(h, "_council_log", None) == str(path) for h in root.handlers):
-        return path
+    for h in root.handlers:
+        if getattr(h, "_council_log", None) == str(path):
+            h.setLevel(lvl)  # уровень поменяли в настройках — применяем без перезапуска
+            logging.getLogger("council").setLevel(lvl)
+            return path
     try:
         d.mkdir(parents=True, exist_ok=True)
-        h = logging.handlers.RotatingFileHandler(path, maxBytes=2_000_000, backupCount=4, encoding="utf-8")
+        h = logging.handlers.RotatingFileHandler(path, maxBytes=max(1, file_mb) * 1_000_000,
+                                                 backupCount=max(1, files) - 1, encoding="utf-8")
     except OSError:
         return path
     h._council_log = str(path)  # type: ignore[attr-defined]
-    h.setFormatter(_Redacting("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    h.setLevel(logging.INFO)
+    h.setFormatter(_Redacting("%(asctime)s.%(msecs)03d %(levelname)-7s %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S"))
+    h.setLevel(lvl)
     root.addHandler(h)
-    if root.level > logging.INFO or root.level == logging.NOTSET:
-        root.setLevel(logging.INFO)
+    if root.level > lvl or root.level == logging.NOTSET:
+        root.setLevel(lvl)
+    logging.getLogger("council").setLevel(lvl)
     if console and not any(isinstance(x, logging.StreamHandler) and not isinstance(x, logging.FileHandler)
                            for x in root.handlers):
         sh = logging.StreamHandler()
         sh.setFormatter(_Redacting("%(asctime)s %(levelname)s %(name)s: %(message)s"))
         sh.setLevel(logging.WARNING)
         root.addHandler(sh)
-    for noisy in ("httpx", "httpcore", "uvicorn.access"):
+    # httpx: строка на каждый HTTP-запрос — на подробном уровне полезна; httpcore — побайтовый шум
+    logging.getLogger("httpx").setLevel(logging.INFO if lvl <= logging.DEBUG else logging.WARNING)
+    for noisy in ("httpcore", "uvicorn.access", "markdown", "PIL", "asyncio", "multipart", "python_multipart"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     # WeasyPrint предупреждает о CSS для экрана (sticky, @media) и о способе встраивания шрифтов —
     # на PDF это не влияет, а журнал засоряет. Настоящие ошибки сборки PDF остаются.

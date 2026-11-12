@@ -211,6 +211,9 @@ class RunState:
 # ---------------------------------------------------------------- app
 
 
+access = logging.getLogger("council.web.access")
+
+
 async def _limited_body(request: Any, limit: int, too_big: str) -> bytes:
     """Тело запроса не больше limit байт: читается частями и обрывается сразу — огромный файл не займёт память
     сервера целиком до проверки размера."""
@@ -243,7 +246,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         try:
-            setup_logging(runs_dir(base_config()), "web")
+            cfg0 = base_config()
+            setup_logging(runs_dir(cfg0), "web", level=cfg0.log_level, file_mb=cfg0.log_file_mb, files=cfg0.log_files)
         except HTTPException:
             pass
         log.info("веб-интерфейс запущен")
@@ -261,11 +265,26 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         обновить или перезапустить программу. Браузер всегда сообщает, с какой страницы идёт запрос (Origin или
         Referer): действия принимаются только со страниц самого сайта. Запросы не из браузера (curl, бот) — без
         этих заголовков — проходят как раньше."""
+        t = time.monotonic()
+        path = request.url.path
         if request.method in ("POST", "PUT", "PATCH", "DELETE"):
             src = request.headers.get("origin") or request.headers.get("referer") or ""
             if src and not _same_site(src, request):
+                access.warning("%s %s → 403: запрос со стороннего сайта (%s)", request.method, path, src[:120])
                 return JSONResponse({"detail": "запрос со стороннего сайта отклонён"}, status_code=403)
-        return await call_next(request)
+        try:
+            resp = await call_next(request)
+        except Exception:
+            access.exception("%s %s → сбой", request.method, path)
+            raise
+        # опрос хода заседания и статика — каждые секунды: только на самом подробном уровне
+        quiet = path.startswith("/static") or path.endswith("/events") or path in ("/api/balance", "/healthz")
+        (access.debug if quiet else access.info)("%s %s%s → %d, %.0f мс", request.method, path,
+                                                 f"?{request.url.query}" if request.url.query else "",
+                                                 resp.status_code, (time.monotonic() - t) * 1000)
+        if resp.status_code >= 400 and not quiet:
+            access.warning("%s %s → %d", request.method, path, resp.status_code)
+        return resp
 
     runs: dict[str, RunState] = {}
     catalog = ModelCatalog(MODELS_TTL)
