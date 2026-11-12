@@ -417,3 +417,17 @@ def test_vote_reasoning_is_low_and_arbitration_can_read_pages():
     assert all(e == "low" for st, e, _, _ in c.kw if st == "vote")
     assert all(f == 3 for st, _, f, _ in c.kw if st == "arbitration")
     assert all(j for st, _, _, j in c.kw if st in ("proposal", "vote"))
+
+
+def test_research_word_limit_can_be_switched_off():
+    from council.config import ResearchConfig
+    with pytest.raises(Exception):
+        ResearchConfig(max_words=100)
+    long = R.ResearchProposal(title="t", summary="слово " * 9000)
+    assert R.check_length(long, 0, 1.5) is long
+    assert "no word limit" in R.dossier_rule(0) and "Hard budget" not in R.dossier_rule(0)
+    client = Rec()
+    cfg = make_cfg(mode="research", research={"max_words": 0})
+    run(Council(cfg, client, seed=3).run("Вопрос?"))
+    props = [c for c in client.log if c["stage"] == "proposal"]
+    assert props and all("no word limit" in c["text"] for c in props)

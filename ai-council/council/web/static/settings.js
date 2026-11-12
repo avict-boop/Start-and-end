@@ -238,7 +238,7 @@ function renderSettings() {
         <label class="field"><span>Утверждений на проверку</span><input type="number" id="rClaims" data-rn="arbitration_claims" min="3" max="30" value="${d.research.arbitration_claims}" ${ro}></label>
         <label class="field"><span>Авторов с поиском уже в предложениях</span><input type="number" id="rScouts" data-rn="fresh_scouts" min="0" max="2" value="${d.research.fresh_scouts}" ${ro}>
           <div class="muted small">0 — независимо и дешевле; 1–2 — для свежих цифр (цены, рынки), но варианты могут стать похожими</div></label>
-        <label class="field"><span>Длина варианта, слов</span><input type="number" id="rWords" data-rn="max_words" min="300" max="5000" step="100" value="${d.research.max_words}" ${ro}>
+        <label class="field"><span>Длина варианта, слов</span><input type="number" id="rWords" data-rn="max_words" min="0" max="5000" step="100" value="${d.research.max_words}" ${ro}><small class="hint">0 — без ограничения длины (или от 300)</small>
           <div class="muted small">по умолчанию; в «Параметрах» вопроса можно поменять для отдельного исследования</div></label>
         <label class="field"><span>«Слишком длинный» — во сколько раз длиннее</span><input type="number" id="rFactor" data-rn="long_factor" min="1.2" max="5" step="0.1" value="${d.research.long_factor}" ${ro}></label>
         <label class="field"><span>«Не удалось проверить» — второй поиск, до</span><input type="number" data-rn="recheck_unclear" min="0" max="15" value="${d.research.recheck_unclear}" ${ro}>

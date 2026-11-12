@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 Mode = Literal["quick", "debate", "evaluate", "research"]
 Effort = Literal["none", "low", "medium", "high"]
@@ -59,7 +59,7 @@ class ResearchConfig(BaseModel):
     revision_digest: bool = True   # доработка по реестру и выжимкам чужих вариантов, а не по их полным текстам
     section_vote: bool = True      # голосование за лучший вариант по каждому подвопросу
     fresh_scouts: int = Field(default=0, ge=0, le=2)    # авторов с поиском уже на этапе предложений («свежие данные»)
-    max_words: int = Field(default=1400, ge=300, le=5000)  # ориентир длины варианта
+    max_words: int = Field(default=1400, ge=0, le=5000)  # ориентир длины варианта; 0 — без ограничения длины
     link_check: bool = True        # после арбитража открыть каждую ссылку реестра: мёртвые не подтверждают
     # Слишком длинный вариант (длиннее max_words × long_factor) возвращается автору на сокращение: длинные
     # варианты дорого читать председателю и участникам. Последняя попытка принимается как есть.
@@ -98,6 +98,13 @@ class ResearchConfig(BaseModel):
     semantic_audit_model: str = ""
     digest_table_rows: int = Field(default=12, ge=0, le=40)     # строк таблиц чужого варианта в выжимке для доработки
 
+
+    @field_validator("max_words")
+    @classmethod
+    def _words_ok(cls, v: int) -> int:
+        if 0 < v < 300:
+            raise ValueError("длина варианта: 0 (без ограничения) или от 300 слов")
+        return v
 
 class AdvisorConfig(BaseModel):
     """«Подобрать состав»: рекомендация моделей и режима под вопрос."""

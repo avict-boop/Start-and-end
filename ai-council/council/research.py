@@ -520,6 +520,10 @@ DOSSIER_RULE = ("IMPORTANT: your output is working material for the council chai
 
 
 def dossier_rule(max_words: int) -> str:
+    if not max_words:  # длина не ограничена — пишем, сколько нужно задаче, но плотно
+        return (DOSSIER_RULE + "\nThere is no word limit: make the \"summary\" as long as the task needs — complete tables "
+                "and catalogues included — but dense, without padding or repetition. Put the most decision-critical "
+                "claims in \"claims\" first.")
     return (DOSSIER_RULE + f"\nHard budget: the \"summary\" is at most {max_words} words; \"claims\", \"coverage\" and "
             "\"unknowns\" are separate fields and do NOT count toward it. Put the most decision-critical claims in "
             "\"claims\" first and do not repeat their text in the summary beyond the claim. Present catalogues and "
@@ -1263,6 +1267,8 @@ def section_text(subq: list[str], sections: dict[str, dict[str, Any]]) -> str:
 
 def check_length(p: Proposal, max_words: int, factor: float) -> Proposal:
     """Вариант намного длиннее заданного — вернуть автору на сокращение (ошибка уходит модели)."""
+    if not max_words:  # без ограничения длины — сокращать нечего
+        return p
     n = len(str(p.summary or "").split())
     if n > max_words * factor:
         raise ValueError(f'"summary" is {n} words, but the limit is about {max_words} words. Rewrite it to about '

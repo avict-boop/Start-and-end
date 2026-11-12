@@ -251,7 +251,11 @@ function setMode(m) {
 // порог «слишком длинного» варианта — от длины, заданной для этого вопроса
 function updateShortenHint() {
   if (!config || !config.research) return;
-  const w = Number($("researchWords").value) || config.research.words, f = config.research.factor;
+  // без ограничения длины поле длины и «сокращать» не нужны — прячем их
+  $("researchWords").closest("label").hidden = noLimit();
+  $("researchShorten").closest("label").hidden = noLimit();
+  if (noLimit()) return;
+  const w = Number($("researchWords").value) || config.research.words || 1400, f = config.research.factor;
   $("researchShortenHint").textContent = `Вариант длиннее ${Math.round(w * f)} слов (в ${String(f).replace(".", ",")} раза `
     + "больше заданного) вернётся автору на сокращение. Председателю дешевле читать, но иногда это лишний запрос.";
 }
@@ -361,7 +365,8 @@ function updateParamsSummary() {
   if (mode === "debate") { const r = Number($("rounds").value) || 1; bits.push(`${r} ${plural(r, "раунд", "раунда", "раундов")}`); }
   bits.push(`бюджет $${Number($("budget").value) || config.budget}`);
   if ($("compact").checked && mode !== "research") bits.push("компактно");
-  if (mode === "research") bits.push(`вариант до ${Number($("researchWords").value) || "—"} слов${$("researchShorten").checked ? ", длинные — на сокращение" : ""}`);
+  if (mode === "research") bits.push(noLimit() ? "вариант без ограничения длины"
+    : `вариант до ${Number($("researchWords").value) || "—"} слов${$("researchShorten").checked ? ", длинные — на сокращение" : ""}`);
   if (mode === "research" && researchTuned.arbitration_claims) bits.push(`проверка ${researchTuned.arbitration_claims} утв.`);
   if ($("factCheck").checked && mode !== "research") bits.push("проверка фактов");
   const web = [...lineup.web].filter((x) => selectedMembers().includes(x));
@@ -449,8 +454,10 @@ function resetToggles() {
   $("factCheck").checked = !!(config.fact_check && config.fact_check.enabled);
   $("compact").checked = !!(config.compact && config.compact.enabled);
   if (config.research) {
-    $("researchWords").value = config.research.words;
+    $("researchNoLimit").checked = !config.research.words;
+    $("researchWords").value = config.research.words || 1400;
     $("researchShorten").checked = !!config.research.shorten;
+    updateShortenHint();
     updateShortenHint();
   }
   $("compactHint").textContent = config.compact ? `До ${config.compact.words} слов на вариант.` : "";
@@ -481,7 +488,7 @@ function payload() {
     chair_proposes: $("chairProposes").checked,
     fact_check: $("factCheck").checked,
     compact: mode === "research" ? false : $("compact").checked,
-    research_words: mode === "research" ? (Number($("researchWords").value) || null) : null,
+    research_words: mode === "research" ? (noLimit() ? 0 : Number($("researchWords").value) || null) : null,
     research_shorten: mode === "research" ? $("researchShorten").checked : null,
     research: mode === "research" && Object.keys(researchTuned).length
       ? Object.fromEntries(Object.entries(researchTuned).filter(([k]) => !["max_words", "shorten_long"].includes(k))) : null,
@@ -513,7 +520,11 @@ function applyLineup(r) {
   if (r.fact_check !== undefined) $("factCheck").checked = !!r.fact_check;
   if (r.answer_size) $("answerSize").value = r.answer_size;
   if (r.compact_proposals !== undefined) $("compact").checked = !!r.compact_proposals;
-  if (r.research_words) { $("researchWords").value = r.research_words; updateShortenHint(); }
+  if (r.research_words !== undefined && r.research_words !== null) {
+    $("researchNoLimit").checked = r.research_words === 0;
+    if (r.research_words) $("researchWords").value = r.research_words;
+    updateShortenHint();
+  }
   if (r.research_shorten !== undefined) $("researchShorten").checked = !!r.research_shorten;
   researchTuned = { ...(r.research_overrides || {}) };
   renderResearchTuned();
@@ -796,6 +807,7 @@ $("keyStatus").addEventListener("click", () => {
 $("modeSeg").addEventListener("change", (e) => { if (e.target.name === "mode") setMode(e.target.value); });
 for (const id of ["question", "options", "criteria", "rounds", "budget", "context"]) $(id).addEventListener("input", formChanged);
 for (const id of ["mock", "compact", "factCheck", "chairProposes", "chair", "devil", "researchShorten", "researchWords"]) $(id).addEventListener("change", formChanged);
+$("researchNoLimit").addEventListener("change", () => { updateShortenHint(); formChanged(); });
 $("researchWords").addEventListener("input", () => { updateShortenHint(); updateParamsSummary(); });
 for (const id of ["chairProposes", "chair"]) $(id).addEventListener("change", updateChairHint);
 for (const b of document.querySelectorAll("[data-step]")) {
@@ -2668,7 +2680,8 @@ function renderAdvice(r) {
 function formSnapshot() {
   return { mode, members: selectedMembers(), chair: $("chair").value, devil: $("devil").value,
     lineup: { models: { ...lineup.models }, extra: lineup.extra.map((x) => ({ ...x })), web: new Set(lineup.web) },
-    researchTuned: { ...researchTuned }, words: $("researchWords").value, shorten: $("researchShorten").checked };
+    researchTuned: { ...researchTuned }, words: $("researchWords").value, shorten: $("researchShorten").checked,
+    noLimit: $("researchNoLimit").checked };
 }
 function restoreSnapshot(snap) {
   lineup = { models: { ...snap.lineup.models }, extra: snap.lineup.extra.map((x) => ({ ...x })), web: new Set(snap.lineup.web) };
@@ -2677,7 +2690,7 @@ function restoreSnapshot(snap) {
   refreshRoleSelects();
   $("chair").value = snap.chair; $("devil").value = snap.devil;
   researchTuned = { ...snap.researchTuned };
-  $("researchWords").value = snap.words; $("researchShorten").checked = snap.shorten;
+  $("researchWords").value = snap.words; $("researchShorten").checked = snap.shorten; $("researchNoLimit").checked = !!snap.noLimit;
   updateShortenHint(); renderResearchTuned(); updateChairHint(); updateResetBtn(); formChanged();
 }
 
@@ -2713,7 +2726,7 @@ function applyAdvice(r) {
   $("devil").value = di >= 0 && take[di] ? plan.devil_advocate : sel.has(devilBefore) ? devilBefore : "";
   if (mode === "research") {
     const rs = Object.fromEntries(rsOn.map((k) => [k, a.research_settings[k]]));
-    if (rs.max_words) { $("researchWords").value = rs.max_words; updateShortenHint(); }
+    if (rs.max_words) { $("researchWords").value = rs.max_words; $("researchNoLimit").checked = false; updateShortenHint(); }
     if (rs.shorten_long !== undefined) $("researchShorten").checked = !!rs.shorten_long;
     researchTuned = { ...researchTuned, ...rs };
     renderResearchTuned();
@@ -2803,7 +2816,7 @@ $("depth").addEventListener("change", () => {
   const d = DEPTH[$("depth").value];
   if (!d) { researchTuned = {}; $("depthHint").textContent = ""; renderResearchTuned(); formChanged(); return; }
   researchTuned = { ...d.rs };
-  $("researchWords").value = d.words; updateShortenHint();
+  $("researchWords").value = d.words; $("researchNoLimit").checked = false; updateShortenHint();
   $("budget").value = d.budget;
   $("depthHint").textContent = `вариант до ${d.words} слов · утверждений у автора до ${d.rs.max_claims} · проверка ${d.rs.arbitration_claims} утв.`
     + ` · второй поиск ${d.rs.recheck_unclear} · бюджет $${d.budget}. Правила «известно» не ослабляются.`;
@@ -2846,3 +2859,6 @@ function entityCoverage(s) {
     <div class="table-wrap"><table class="table"><thead><tr><th>Объект</th><th class="num">Проверено</th><th class="num">Подтверждено</th></tr></thead><tbody>
     ${rows.map(([k, r]) => `<tr><td>${esc(k)}</td><td class="num">${r.n}</td><td class="num">${r.ok}</td></tr>`).join("")}</tbody></table></div>`;
 }
+
+// длина варианта исследования не ограничена (research_words = 0)
+function noLimit() { return !!($("researchNoLimit") && $("researchNoLimit").checked); }

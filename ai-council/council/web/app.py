@@ -139,7 +139,7 @@ class RunRequest(BaseModel):
     chair_proposes: bool | None = None  # None — как в config.yaml
     fact_check: bool | None = None      # проверка фактов лидеров; None — как в config.yaml
     compact: bool | None = None         # компактные варианты; None — как в config.yaml
-    research_words: int | None = Field(default=None, ge=300, le=5000)  # длина варианта исследования
+    research_words: int | None = Field(default=None, ge=0, le=5000)  # 0 — без ограничения длины  # длина варианта исследования
     research_shorten: bool | None = None  # возвращать слишком длинные варианты на сокращение
     research: dict[str, Any] | None = None  # другие настройки исследования на это заседание (из рекомендации)
     # состав на это заседание («Подобрать состав»): другая модель у участника, новые участники, поиск у участников
