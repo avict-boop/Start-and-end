@@ -337,7 +337,7 @@ async function pickMemberModel(name) {
 
 // сбросить только модели и роли (режим, вопрос и остальные параметры не трогаем)
 function resetModels() {
-  lineup = { models: {}, extra: [], web: defaultWeb() };
+  lineup = { models: {}, extra: [], web: defaultWeb() }; freshCustom = false;
   renderMembers();
   $("chair").value = "";
   $("devil").value = "";
@@ -349,7 +349,16 @@ function renderWebMembers() {
   const names = selectedMembers();
   for (const n of [...lineup.web]) if (!names.includes(n)) lineup.web.delete(n);
   $("webField").hidden = mode === "evaluate" || !names.length;
-  $("webMembers").innerHTML = names.map((n) => `<button type="button" class="chip-tg${lineup.web.has(n) ? " on" : ""}" data-web="${esc(n)}" aria-pressed="${lineup.web.has(n)}">🌐 ${esc(n)}</button>`).join("");
+  // председатель-судья не пишет вариант — поиск ему не нужен (ищут только при написании и доработке вариантов)
+  const authors = freshAuthors();
+  const chips = names.map((n) => {
+    const judge = !authors.includes(n);
+    return `<button type="button" class="chip-tg${lineup.web.has(n) && !judge ? " on" : ""}" data-web="${esc(n)}" aria-pressed="${lineup.web.has(n) && !judge}"`
+      + `${judge ? ' disabled title="Председатель без своего варианта: поиск ему не нужен"' : ""}>🌐 ${esc(n)}</button>`;
+  }).join("");
+  for (const n of [...lineup.web]) if (!authors.includes(n)) lineup.web.delete(n);
+  $("webMembers").innerHTML = chips;
+  if ($("freshPick")) $("freshPick").innerHTML = chips;
   syncFresh();
   updateResetBtn();
 }
@@ -538,7 +547,7 @@ function applyLineup(r) {
 // новая задача (не уточнение и не повтор) — состав из настроек; изменить его можно «Подобрать состав»
 function resetLineup() {
   if (!config) return;
-  lineup = { models: {}, extra: [], web: defaultWeb() };
+  lineup = { models: {}, extra: [], web: defaultWeb() }; freshCustom = false;
   renderMembers();
   $("chair").value = "";
   $("devil").value = "";
@@ -743,19 +752,22 @@ async function initForm() {
     const touch = matchMedia("(pointer: coarse)").matches;  // на телефоне Ctrl+V не подсказываем
     $("uploadHint").textContent = `Картинки, PDF, Word, Excel — до ${uploadCfg.max_files} файлов по ${uploadCfg.max_mb} МБ.${touch ? "" : " Скриншот можно вставить: Ctrl+V"}`;
   }
-  lineup = { models: {}, extra: [], web: defaultWeb() };
+  lineup = { models: {}, extra: [], web: defaultWeb() }; freshCustom = false;
   renderMembers();
   if (!membersBound) {
     membersBound = true;
     $("members").addEventListener("change", () => { refreshRoleSelects(); renderWebMembers(); formChanged(); });
-    $("webMembers").addEventListener("click", (e) => {
+    const toggleWeb = (e) => {
       const b = e.target.closest("[data-web]");
-      if (b) webTouched = true;
-      if (!b) return;
+      if (!b || b.disabled) return;
+      webTouched = true;
+      if (e.currentTarget.id === "freshPick") freshCustom = true;
       const n = b.dataset.web;
       if (lineup.web.has(n)) lineup.web.delete(n); else lineup.web.add(n);
       renderWebMembers(); formChanged();
-    });
+    };
+    $("webMembers").addEventListener("click", toggleWeb);
+    $("freshPick").addEventListener("click", toggleWeb);
     $("lineupReset").addEventListener("click", () => { resetModels(); toast("Модели и роли — как в настройках"); });
     $("members").addEventListener("click", (e) => {
       const b = e.target.closest("[data-pick-model]");
@@ -815,6 +827,8 @@ for (const id of ["mock", "compact", "factCheck", "chairProposes", "chair", "dev
 $("researchNoLimit").addEventListener("change", () => { updateShortenHint(); formChanged(); });
 $("researchWords").addEventListener("input", () => { updateShortenHint(); updateParamsSummary(); });
 for (const id of ["chairProposes", "chair"]) $(id).addEventListener("change", updateChairHint);
+// председатель-судья не ищет: при смене председателя или «председатель пишет свой вариант» — пересчитать, кто ищет
+for (const id of ["chairProposes", "chair"]) $(id).addEventListener("change", () => { if (config) renderWebMembers(); });
 for (const b of document.querySelectorAll("[data-step]")) {
   b.addEventListener("click", () => {
     const r = $("rounds");
@@ -2866,19 +2880,32 @@ function freshAuthors() {
   const chair = $("chair").value;
   return selectedMembers().filter((n) => n !== chair || $("chairProposes").checked);
 }
+var freshCustom = false;  // человек выбрал «свой выбор» — показываем отметки, даже если выбор совпал со стандартным
 function syncFresh() {
   const web = [...lineup.web].filter((n) => selectedMembers().includes(n));
   const authors = freshAuthors();
   const n = web.length;
-  const standard = n <= 2 && web.every((x, i) => x === authors[i]);
-  $("fresh").value = standard ? String(n) : "custom";
-  $("fresh").querySelector('[value="custom"]').hidden = standard;
+  const firstN = web.every((x) => authors.slice(0, n).includes(x));
+  const value = freshCustom ? "custom" : n && n === authors.length ? "all" : n <= 3 && firstN ? String(n) : "custom";
+  $("fresh").value = value;
+  $("fresh").querySelector('[value="3"]').hidden = authors.length < 4;  // «три» — только если авторов больше трёх
+  $("freshPick").hidden = value !== "custom";
+  const hint = $("freshHint");
+  if (hint) hint.textContent = n === 0 ? "Для цен, рынков и новостей; около $0,02 за запрос. Без поиска авторы независимее."
+    : `Ищут: ${web.join(", ")}. ` + (n >= 3 ? "Чем больше авторов ищут, тем больше они опираются на одно и то же найденное и тем дороже заседание. " : "")
+      + (mode === "research" ? "В исследовании ищут при написании варианта; на доработке — если включено «Поиск и на доработке»."
+        : mode === "creative" ? (n === authors.length ? "Ищут все: идеи рискуют стать похожими — обычно хватает одного-двух, остальные придумывают независимо."
+          : "Ищущие изучают конкурентов и существующие решения, остальные придумывают независимо.")
+          : "Ищут при написании и доработке варианта.");
 }
 $("fresh").addEventListener("change", () => {
-  const n = Number($("fresh").value);
-  if (Number.isNaN(n)) return;
+  const v = $("fresh").value;
   webTouched = true;
-  lineup.web = new Set(freshAuthors().slice(0, n));
+  freshCustom = v === "custom";
+  if (!freshCustom) {
+    const authors = freshAuthors();
+    lineup.web = new Set(v === "all" ? authors : authors.slice(0, Number(v) || 0));
+  }
   renderWebMembers(); formChanged();
 });
 $("answerSize").addEventListener("change", formChanged);

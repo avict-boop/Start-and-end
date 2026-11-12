@@ -127,9 +127,12 @@
                   <option value="0">не нужны</option>
                   <option value="1">ищет один автор</option>
                   <option value="2">ищут два автора</option>
-                  <option value="custom" hidden>свой выбор</option>
+                  <option value="3">ищут три автора</option>
+                  <option value="all">ищут все авторы</option>
+                  <option value="custom">свой выбор…</option>
                 </select>
-                <small class="hint">Для цен, рынков и новостей; около $0,02 за запрос. Без поиска авторы независимее.</small></label>
+                <div id="freshPick" class="web-members fresh-pick" role="group" aria-label="Кто ищет в интернете" hidden></div>
+                <small class="hint" id="freshHint">Для цен, рынков и новостей; около $0,02 за запрос. Без поиска авторы независимее.</small></label>
               <label class="field"><span class="label">Объём итога</span>
                 <select id="answerSize">
                   <option value="full">полный</option>

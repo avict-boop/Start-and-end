@@ -918,3 +918,6 @@ details[open] > summary .params-edit { visibility: hidden; }
 .decisions .field { margin: 0; }
 .trust { color: var(--muted); margin-top: .15rem; }
 .ok-text { color: var(--ok); font-weight: 600; }
+
+.fresh-pick { margin-top: .45rem; display: flex; flex-wrap: wrap; gap: .35rem; }
+.chip-tg:disabled { opacity: .45; cursor: not-allowed; }
