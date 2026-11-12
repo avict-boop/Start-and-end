@@ -104,11 +104,12 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
     tries: dict[tuple[str, str], int] = {}
 
     def fit(p: Proposal, stage: str, name: str) -> Proposal:
-        """Слишком длинный вариант — на сокращение (если включено); последняя попытка принимается как есть,
-        а уже оплаченный ответ из журнала не переспрашивается."""
+        """Слишком длинный вариант — на сокращение (если включено), но один раз: второй ответ принимается как
+        есть (12.11 gemini на доработке дважды сокращал 3888 → 2704 слов: +$0,4 и 7 минут ожидания всего совета).
+        Уже оплаченный ответ из журнала не переспрашивается."""
         k = (stage, name)
         tries[k] = tries.get(k, 0) + 1
-        if rc.shorten_long and not sess._replaying and tries[k] <= sess.cfg.json_retries:
+        if rc.shorten_long and not sess._replaying and tries[k] <= min(1, sess.cfg.json_retries):
             return R.check_length(p, rc.max_words, rc.long_factor)
         return p
 

@@ -166,6 +166,10 @@ FETCH_TOKENS = 8000  # сколько текста страницы (≈ ток�
 # Сколько поисков модель может сделать за один запрос: инструмент web_search разрешает искать много раз подряд, и
 # каждый результат добавляется ко входу (на заседании 12.11 автор с поиском прочитал 3,6 млн токенов за 4 запроса)
 SEARCH_USES = 3
+# Поисковик инструмента web_search. «auto» у OpenAI и Google включает встроенный поиск провайдера, а он не знает
+# лимитов max_uses / max_results: на заседании 12.11 автор chatgpt за один запрос предложений прочитал 2 млн токенов
+# ($1,14). «exa» — поиск OpenRouter (Exa), где лимиты соблюдаются: не больше SEARCH_USES поисков по 5 результатов
+SEARCH_ENGINES = ("exa", "auto", "native", "parallel", "perplexity", "firecrawl")
 
 
 def _drop_unsupported(payload: dict[str, Any], model: str, err: str) -> str:
@@ -281,6 +285,7 @@ class OpenRouterClient:
         web_fetch: int = 0,
         json_mode: bool = False,
         web_tools: bool = True,
+        search_engine: str = "exa",
     ) -> Completion:
         """Запрос к модели с потоковой передачей ответа.
 
@@ -315,16 +320,19 @@ class OpenRouterClient:
         tools: list[dict[str, Any]] = []
         if web_search and not model.startswith("perplexity/"):  # у Perplexity поиск встроенный
             if web_tools and model not in _NO_FEATURE["tools"]:
-                tools.append({"type": "openrouter:web_search", "parameters": {
-                    "max_results": 5, "max_uses": SEARCH_USES, "max_total_results": 5 * SEARCH_USES}})
+                params: dict[str, Any] = {"max_results": 5, "max_uses": SEARCH_USES, "max_total_results": 5 * SEARCH_USES}
+                if search_engine and search_engine != "auto":
+                    params["engine"] = search_engine
+                tools.append({"type": "openrouter:web_search", "parameters": params})
             else:
                 payload["plugins"] = [{"id": "web"}]  # прежний способ: встроенный поиск провайдера или Exa
-        if web_fetch and model not in _NO_FEATURE["fetch"]:
+        # Perplexity не принимает инструменты и response_format json_object — не тратим на это запрос с ошибкой
+        if web_fetch and model not in _NO_FEATURE["fetch"] and not model.startswith("perplexity/"):
             tools.append({"type": "openrouter:web_fetch",
                           "parameters": {"max_uses": int(web_fetch), "max_content_tokens": FETCH_TOKENS}})
         if tools:
             payload["tools"] = tools
-        if json_mode and model not in _NO_FEATURE["json"]:
+        if json_mode and model not in _NO_FEATURE["json"] and not model.startswith("perplexity/"):
             payload["response_format"] = {"type": "json_object"}
         spent = Completion(text="")  # расходы всех попыток, включая неудачные
         last_error = "неизвестная ошибка"

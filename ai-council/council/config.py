@@ -177,6 +177,10 @@ class CouncilConfig(BaseModel):
     log_files: int = Field(default=10, ge=2, le=50)
     # Поиск в интернете через серверный инструмент OpenRouter (web_search) вместо устаревшего плагина «web»
     web_tools: bool = True
+    # Чем ищет инструмент web_search: exa — поиск OpenRouter с соблюдением лимитов (не больше 3 поисков по 5
+    # результатов за запрос); auto — встроенный поиск провайдера, где он есть (OpenAI, Google, Anthropic): лимиты
+    # у OpenAI и Google не действуют, вход может вырасти до миллионов токенов
+    search_engine: Literal["exa", "auto", "native", "parallel", "perplexity", "firecrawl"] = "exa"
     # Ответ строго JSON-объектом у моделей, которые это поддерживают: меньше платных повторов из-за формата
     json_mode: bool = True
     # Глубина скрытых рассуждений на голосовании (ранжирование готовых вариантов): low — дешевле; "" — как у участника

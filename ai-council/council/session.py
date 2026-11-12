@@ -441,7 +441,8 @@ class Council:
                 async with self._sem:
                     # у границы бюджета запросы идут по два: меньше запросов «в полёте» — меньше превышение лимита
                     async with (self._narrow if self._budget_warned else contextlib.nullcontext()):
-                        extra: dict[str, Any] = {"web_search": True, "web_tools": self.cfg.web_tools} if web_search else {}
+                        extra: dict[str, Any] = ({"web_search": True, "web_tools": self.cfg.web_tools,
+                                                  "search_engine": self.cfg.search_engine} if web_search else {})
                         if web_fetch:
                             extra["web_fetch"] = web_fetch
                         if self.cfg.json_mode and not acc:  # продолжение обрывка — не JSON-объект целиком

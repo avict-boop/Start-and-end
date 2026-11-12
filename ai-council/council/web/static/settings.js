@@ -192,6 +192,10 @@ function renderSettings() {
            ["reports_memory_mb", "Память для сборки отчётов, МБ", "0", "16000", "50", "реально занятая память; превысит — сборка остановится с ошибкой, сайт работает; 0 — без предела"]].map(([k, t, mn, mx, st, h]) =>
           `<label class="field"><span>${t}</span><input type="number" data-k="${k}" min="${mn}" max="${mx}" step="${st}" value="${d[k] ?? ""}" ${ro}><small class="hint">${h}</small></label>`).join("")}
       </div>
+      <label class="field" style="max-width:360px"><span>Поисковик у авторов</span>
+        <select id="sEngine" ${ro}>${[["exa", "Exa через OpenRouter — с лимитом (рекомендуем)"], ["auto", "встроенный поиск провайдера, где есть"], ["parallel", "Parallel"], ["perplexity", "Perplexity Search"]]
+          .map(([v, t]) => `<option value="${v}" ${(d.search_engine ?? "exa") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <small class="hint">Exa соблюдает лимит: не больше 3 поисков по 5 результатов за запрос. Встроенный поиск OpenAI и Google лимитов не знает — автор может прочитать миллионы токенов (12.11: $1,14 за один запрос)</small></label>
       <label class="field" style="max-width:360px"><span>Глубина рассуждений на голосовании</span>
         <select id="sVoteReason" ${ro}>${[["", "как у участника"], ["none", "без рассуждений"], ["low", "низкая — дешевле (рекомендуем)"], ["medium", "средняя"], ["high", "высокая"]]
           .map(([v, t]) => `<option value="${v}" ${(d.vote_reasoning ?? "low") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
@@ -359,6 +363,7 @@ function bindSettings() {
   bindVal("fClaims", (t) => { d.fact_check.max_claims = num(t.value); });
   bindVal("fFetch", (t) => { d.fact_check.fetch_pages = num(t.value); });
   bindVal("sVoteReason", (t) => { d.vote_reasoning = t.value; });
+  bindVal("sEngine", (t) => { d.search_engine = t.value; });
   bindVal("sLogLevel", (t) => { d.log_level = t.value; });
   bindVal("tModel", (t) => { d.transcribe_model = t.value.trim(); });
   bindVal("pSolo", (t) => { d.pilot_solo_model = t.value.trim(); });
