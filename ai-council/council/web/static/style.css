@@ -310,7 +310,9 @@ details[open] > summary .chev { transform: rotate(180deg); }
 .s-head h1 { font-size: 1.45rem; overflow-wrap: anywhere; margin: .15rem 0 .4rem; }
 .eyebrow { font-size: .85rem; color: var(--muted); font-weight: 600; }
 .s-parent { font-size: .88rem; color: var(--muted); margin-bottom: .2rem; }
-.s-facts { display: flex; gap: 1.2rem; flex-wrap: wrap; font-size: .92rem; margin-top: .3rem; font-variant-numeric: tabular-nums; }
+.s-facts { display: flex; gap: .4rem 1.4rem; flex-wrap: wrap; align-items: baseline; font-size: .92rem; margin-top: .3rem; font-variant-numeric: tabular-nums; }
+.s-facts .fact { white-space: nowrap; }
+.s-facts .link { min-height: 32px; padding: 0; display: inline-flex; align-items: center; }
 .query { margin: .2rem 0 .4rem; border-left: 3px solid var(--line-strong); padding: .1rem 0 .1rem .8rem; }
 .query-body { font-size: .95rem; max-height: 7.5em; overflow: hidden; position: relative; }
 .query-body.open { max-height: none; }

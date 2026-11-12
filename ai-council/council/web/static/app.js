@@ -1103,7 +1103,7 @@ function newState(id) {
     refined: "", criteria: [], stage: null, stageTitle: {}, doneStages: new Set(),
     work: {}, proposals: {}, authors: {}, revised: {}, critiques: {}, ballots: {},
     tally: null, verdict: null, failures: [], cost: 0, done: null, error: null,
-    startedAt: Date.now(), initial: {},
+    startedAt: Date.now(), openedAt: Date.now(), at: Date.now(), initial: {},
     calls: {}, log: [], stageStart: null, lastMsg: Date.now(), wrote: {},
     attachments: [], blind: [], imageNotes: null, imageNotesBy: "",
   };
@@ -1111,7 +1111,7 @@ function newState(id) {
 
 const PHASE_ACTIVE = new Set(["queued", "sent", "thinking", "writing", "checking", "retry"]);
 function logAdd(s, text, kind = "") {
-  s.log.push({ t: new Date(), text, kind });
+  s.log.push({ t: new Date(s.at || Date.now()), text, kind });
   if (s.log.length > 400) s.log.shift();
 }
 // короткий заголовок: первая содержательная строка без разметки, до 110 символов (как в отчётах)
@@ -1134,6 +1134,8 @@ const fmtSec = (sec) => (sec >= 60 ? `${Math.floor(sec / 60)}:${String(Math.floo
 const approxTokens = (chars) => Math.max(1, Math.round(chars / 3.2));
 
 function apply(s, ev) {
+  // когда событие случилось на сервере; часы браузера могут спешить — не позже «сейчас»
+  s.at = ev.ts ? Math.min(ev.ts * 1000, Date.now()) : Date.now();
   switch (ev.type) {
     case "ping":
       break;
@@ -1159,8 +1161,8 @@ function apply(s, ev) {
       const fresh = !prev || prev.stage !== ev.stage;
       const c = fresh ? { stage: ev.stage, chars: 0, rchars: 0 } : prev;
       c.phase = ev.phase;
-      c.since = Date.now() - (ev.elapsed || 0) * 1000;  // начало обращения по часам браузера
-      c.updated = Date.now();
+      c.since = s.at - (ev.elapsed || 0) * 1000;  // начало обращения — по времени сервера
+      c.updated = s.at;
       if (ev.chars != null) c.chars = ev.chars;
       if (ev.reasoning_chars != null) c.rchars = ev.reasoning_chars;
       if (ev.attempt) c.attempt = ev.attempt;
@@ -1180,6 +1182,7 @@ function apply(s, ev) {
       break;
     }
     case "start":
+      if (!s.startSeen) { s.startSeen = true; s.startedAt = s.at; }  // после продолжения — время от первого старта
       Object.assign(s, { question: ev.question, mode: ev.mode, rounds: ev.rounds, members: ev.members || [],
         chair: ev.chair || null, mock: !!ev.mock, parent: ev.parent || null, factPlanned: !!ev.fact_check,
         budget: ev.budget || null });
@@ -1203,7 +1206,7 @@ function apply(s, ev) {
       logAdd(s, `Заседание приостановлено: ${ev.reason_text}${ev.message && ev.reason !== "stopped" ? ` (${ev.message})` : ""}`, "k-warn");
       break;
     case "stage": {
-      s.stageStart = Date.now();
+      s.stageStart = s.at;
       logAdd(s, `▶ ${ev.title}`, "k-stage");
       if (s.stage && s.stage !== ev.stage) s.doneStages.add(s.stage);
       s.stage = ev.stage;
@@ -1360,7 +1363,7 @@ function render(s) {
   $("sCost").title = money(s.cost);
   $("session").classList.toggle("finished", finished);
   const running = !finished;
-  $("sBudget").textContent = s.budget && !s.done ? ` из ${money(s.budget)}` : "";
+  $("sBudget").textContent = s.budget && !s.done ? ` из $${Number(s.budget) % 1 ? Number(s.budget).toFixed(2) : Number(s.budget)}` : "";
   $("budgetBtn").hidden = !running || !s.budget;
   $("sBudgetWarn").hidden = !(running && s.budgetWarn);
   if (running && s.budgetWarn) {
@@ -1987,7 +1990,7 @@ function openSession(id) {
     if (pendingProposal && ev.type === "done") { const l = pendingProposal; pendingProposal = null; setTimeout(() => openProposal(s, l), 50); }
     if (ev.type === "done" || ev.type === "error" || ev.type === "paused") {
       // уведомляем только о заседании, которое шло у нас на глазах (не о повторном открытии из архива)
-      if (Date.now() - s.startedAt > 5000) notifyFinished(s, ev.type === "done");
+      if (s.at >= s.openedAt - 2000 && s.at - s.startedAt > 5000) notifyFinished(s, ev.type === "done");
       closeStream();
       scheduleRender();
       loadHistory();
