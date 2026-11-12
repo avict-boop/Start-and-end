@@ -343,3 +343,15 @@ def test_report_links_cannot_run_code():
     from council.reports.view import md_to_html
     h = md_to_html("[a](javascript:alert(1)) ![b](https://t.example/x.png) [c](https://ok.example)")
     assert "javascript:" not in h and "<img" not in h and 'href="https://ok.example"' in h
+
+
+def test_event_ids_from_previous_run_do_not_stall_the_stream(client):
+    # после паузы и продолжения события нумеруются заново: номер из прошлого запуска не должен «прятать» события
+    r = client.post("/api/sessions", json={"question": "Как назвать кофейню?", "mock": True, "rounds": 1,
+                                           "members": ["a", "b", "c"], "chair": "b", "devil_advocate": ""})
+    sid = r.json()["id"]
+    events = read_events(client, sid)
+    for stale in ("7:5", "0:99999", "99999"):
+        with client.stream("GET", f"/api/sessions/{sid}/events", headers={"Last-Event-ID": stale}) as r2:
+            got = [json.loads(l[6:]) for l in r2.iter_lines() if l.startswith("data: ")]
+        assert [e["type"] for e in got] == [e["type"] for e in events], stale

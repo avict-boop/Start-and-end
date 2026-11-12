@@ -1031,13 +1031,21 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             else:
                 data = json.loads(find_file(sid, "json").read_text(encoding="utf-8"))
                 static_events = events_from_result(data, sid)
+        # Номер события — «запуск:номер». После паузы и продолжения события нумеруются заново, а браузер при
+        # переподключении присылает номер из прошлого запуска: тогда отдаём всё с начала, а не ждём, пока новых
+        # событий наберётся столько же (12.11 страница так висела на «нет связи», хотя заседание шло)
+        epoch = str(int((st.checkpoint.spec.get("resumes") if st and st.checkpoint else 0) or 0))
+        last = request.headers.get("last-event-id", "")
+        run_id, _, num = last.rpartition(":")
         try:
-            start = int(request.headers.get("last-event-id", "-1")) + 1
+            start = int(num) + 1 if last and run_id in (epoch, "") else 0
         except ValueError:
+            start = 0
+        if st is not None and start > len(st.events):
             start = 0
 
         def fmt(i: int, ev: dict[str, Any]) -> str:
-            return f"id: {i}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
+            return f"id: {epoch}:{i}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
 
         async def gen():
             if st is None:
