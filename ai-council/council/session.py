@@ -602,11 +602,13 @@ class Council:
         return max(chair.max_tokens or 0, self.cfg.verdict_max_tokens) or None
 
     def author_tokens(self, member: MemberConfig) -> int | None:
-        """Предел ответа автора исследования — от заданной длины варианта; личный предел участника важнее."""
+        """Предел ответа автора исследования: не меньше общего «Лимита длины ответа» из настроек (думающим моделям
+        нужно место на скрытые рассуждения, а платится только написанное) и не меньше длины варианта × токенов на
+        слово; личный предел участника важнее."""
         rc = self.cfg.research
         if member.max_tokens or not rc.author_tokens_per_word:
             return member.max_tokens or None
-        return max(rc.author_min_tokens, int(rc.max_words * rc.author_tokens_per_word))
+        return max(self.cfg.max_tokens or 0, rc.author_min_tokens, int(rc.max_words * rc.author_tokens_per_word))
 
     @staticmethod
     def _parse(schema: type[T], text: str, last_part: str | None) -> T:
@@ -1347,7 +1349,8 @@ class Council:
         known = [k for k in verdict.known if k.item_id]
         if not (rc.semantic_audit and known):
             return None
-        member = chair.model_copy(update={"model": rc.semantic_audit_model or chair.model, "max_tokens": 4000,
+        member = chair.model_copy(update={"model": rc.semantic_audit_model or chair.model,
+                                          "max_tokens": max(4000, self.cfg.max_tokens or 0),
                                           "reasoning_effort": "none"})
         try:
             got = await self._ask(member, "semantic", R.semantic_audit(R.semantic_items(known, ledger)), R.SemanticAudit,
@@ -1403,7 +1406,7 @@ class Council:
         """Поисковые вызовы по пачкам утверждений: подтвердить и опровергнуть (второй поиск — другими запросами).
         Сбой поиска не прерывает исследование."""
         fc = self.cfg.fact_check
-        checker = MemberConfig(name=FACT_CHECKER, model=fc.model, max_tokens=max(fc.max_tokens, 6000),
+        checker = MemberConfig(name=FACT_CHECKER, model=fc.model, max_tokens=max(fc.max_tokens, self.cfg.max_tokens or 0),
                                temperature=0.1, reasoning_effort="none")
         self.stats.setdefault(FACT_CHECKER, MemberStats())
         if stage == "arbitration" and not recheck:

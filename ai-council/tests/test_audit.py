@@ -88,7 +88,7 @@ def test_research_session_rechecks_shows_ledger_to_voters_and_writes_a_decision_
     votes = [c for c in client.log if c["stage"] == "vote"]
     assert votes and all("Evidence digest" in c["text"] for c in votes)
     proposals = [c for c in client.log if c["stage"] == "proposal"]
-    assert all(c["max_tokens"] == 6000 for c in proposals)  # 1400 слов × 3 = 4200, но не меньше 6000
+    assert all(c["max_tokens"] == 16000 for c in proposals)  # 1400 × 3 = 4200 → не меньше 6000 и общего лимита 16000
     assert all(c["temperature"] == 0.7 for c in proposals) and all(c["temperature"] == 0.3 for c in votes)
     assert [c for c in client.log if c["stage"] == "verdict"][0]["max_tokens"] >= 20000
     assert "DOSSIER" not in proposals[0]["text"] and "working material for the council chair" in proposals[0]["text"]

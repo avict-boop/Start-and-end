@@ -250,7 +250,7 @@ function renderSettings() {
         <label class="field"><span>Строк таблиц в выжимке для доработки</span><input type="number" data-rn="digest_table_rows" min="0" max="40" value="${d.research.digest_table_rows}" ${ro}></label>
         <label class="field"><span>Предел ответа автора: токенов на слово</span><input type="number" data-rn="author_tokens_per_word" min="0" max="20" step="0.5" value="${d.research.author_tokens_per_word}" ${ro}>
           <div class="muted small">× длина варианта; 0 — общий предел</div></label>
-        <label class="field"><span>…но не меньше, токенов</span><input type="number" data-rn="author_min_tokens" min="1000" max="64000" step="500" value="${d.research.author_min_tokens}" ${ro}>
+        <label class="field"><span>…и не меньше, токенов (и не меньше общего лимита ответа)</span><input type="number" data-rn="author_min_tokens" min="1000" max="64000" step="500" value="${d.research.author_min_tokens}" ${ro}>
           <div class="muted small">думающим моделям нужно место на скрытые рассуждения</div></label>
       </div>
       <h2 style="margin-top:1.2rem">Пилот</h2>
