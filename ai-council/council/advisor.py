@@ -33,6 +33,29 @@ SHORT_NAME = {"anthropic": "claude", "openai": "chatgpt", "google": "gemini", "m
               "x-ai": "grok", "qwen": "qwen", "mistralai": "mistral", "meta-llama": "llama", "perplexity": "perplexity",
               "z-ai": "glm", "minimax": "minimax"}
 
+# Как подбирать модели под режим — советник получает правило для режима, который рекомендует или выбрал человек
+MODE_PICK_RULES = {
+    "debate": ("strong reasoning and long, well-structured answers for every author; the chair needs a large max_out "
+               "and strict format following."),
+    "quick": ("fast, inexpensive models are fine (light versions welcome for authors); the chair is a reliable "
+              "instruction-follower; deep reasoning is rarely worth its cost here."),
+    "evaluate": ("careful judges with calibrated scores and reasoning; long answers are not needed except for the chair."),
+    "research": ("long context, factual care, length compliance and strict JSON matter most; the chair needs a very "
+                 "large max_out and strong reasoning; avoid models known to ignore length limits or break JSON."),
+    "creative": ("CREATIVE mode (names, concepts, ideas, slogans). Optimise for DIVERSITY OF IMAGINATION, not depth of "
+                 "reasoning: (a) one model per developer — different labs think differently, this matters more than "
+                 "in any other mode; (b) prefer models whose reviews mention creative writing, wordplay, style, "
+                 "humour and strong Russian / multilingual quality; (c) heavy hidden-reasoning models are slower, "
+                 "pricier and tend to converge on safe, logical ideas — use at most one or two of them, a fast "
+                 "flagship or a non-reasoning model is often more inventive; a light model is acceptable as one author; "
+                 "(d) the mode raises temperature, but some reasoning models (e.g. OpenAI o-series / GPT reasoning) "
+                 "ignore it — mention that in the reason if you pick one; (e) the chair needs taste and reliable JSON to "
+                 "assemble a shortlist from all proposals; a huge max_out is NOT needed (the answer is a shortlist); "
+                 "(f) a devil's advocate is useful as a provocateur; (g) no web search for anyone — set "
+                 "\"web_search\": false for all picks; (h) a cheaper lineup is usually fine: creativity does not scale "
+                 "with price."),
+}
+
 # Что нужно ролям в каждом режиме — это видит советник (и правила ниже)
 MODE_ROLES = {
     "debate": ("Подробное обсуждение: каждый пишет полный вариант, критикует чужие, дорабатывает свой, голосует; "
@@ -202,13 +225,14 @@ def dossier_prompt(ids: list[str], today: str) -> str:
 
 Use official model cards and release notes, independent benchmark leaderboards and evaluations, and credible reviews.
 For each model report, briefly and concretely:
-- strengths: what it is notably good at (deep reasoning, long-form analysis and research, writing, coding, math,
+- strengths: what it is notably good at (deep reasoning, long-form analysis and research, writing, creative writing
+  and wordplay, humour and style, coding, math,
   following complex instructions and strict JSON, long context use, multilingual / Russian quality, speed, price);
 - weaknesses and known_issues: e.g. truncated or overlong answers, ignoring length limits, broken JSON, hallucinated
   sources, refusals, slow or unstable providers;
 - best_for: which roles in a multi-model "AI council" it suits (chair who writes a long final synthesis, participant
   writing a full proposal, devil's advocate, fast cheap participant, critic/judge) and for which modes (debate,
-  quick answer, research with evidence, judging user options);
+  quick answer, research with evidence, judging user options, creative ideation: names, concepts, slogans);
 - benchmarks: only figures you found in a source, with the benchmark name.
 If you found little about a model, say so in weaknesses ("little independent information") — do not guess.
 Put the URLs you actually used into "sources".
@@ -254,6 +278,7 @@ def advise_prompt(*, question: str, mode: str, attachments: list[dict[str, Any]]
                             if d.get(k)}
         rows.append(r)
     modes = "\n".join(f"- {k}: {v}" for k, v in MODE_ROLES.items())
+    pick_rules = "\n".join(f"- {k}: {v}" for k, v in MODE_PICK_RULES.items())
     atts = "; ".join(f"{a.get('name', '')} ({a.get('kind', '')}, ~{a.get('chars', 0)} chars)" for a in attachments) or "none"
     q = question if len(question) <= question_chars else question[:question_chars] + " …[truncated]"
     return f"""You advise a user of an "AI council" app: several AI models answer one question, critique each other and vote;
@@ -268,6 +293,10 @@ Mode chosen by the user now: {mode}. Current lineup: {json.dumps(current, ensure
 
 Council modes and what each role needs:
 {modes}
+How to pick models for each mode (apply the rule of the mode you recommend):
+{pick_rules}
+When the question asks to invent names, brands, slogans, concepts, campaign or product ideas, recommend "creative".
+
 Research mode details: proposal length target {research_words} words; claims are checked by a separate search model
 ({search_model}) in the arbitration step, so web search for authors is optional (useful for fresh numbers).
 
@@ -320,7 +349,7 @@ Rules:
    because it comes from your own developer. If the question text was truncated, say so in caveats.
 Write all texts in {language}. Reply with ONE JSON object:
 {{"task": {{"kind": "...", "summary": "...", "size": "small|medium|large", "needs": ["..."]}},
- "mode": "debate|quick|evaluate|research", "mode_why": "...",
+ "mode": "debate|quick|evaluate|research|creative", "mode_why": "...",
  "baseline": "...",
  "picks": [{{"model": "provider/model", "role": "chair|member|devil", "web_search": false, "why": "...",
             "basis": ["catalog", "history"], "confidence": "low|medium|high"}}],
@@ -367,6 +396,8 @@ def finalize(advice: Advice, cands: list[dict[str, Any]], cfg: CouncilConfig, mo
              for a in advice.avoid if a.model not in seen]
     words = advice.research_words if advice.research_words and 300 <= advice.research_words <= 5000 else None
     final_mode = advice.mode if advice.mode in MODES else mode
+    if final_mode == "creative":  # в «Креативе» поиска нет — не обещаем его в составе
+        picks = [p.model_copy(update={"web_search": False}) if p.web_search else p for p in picks]
     rs, why = clean_research(advice.research_settings, advice.research_why, cfg) if final_mode == "research" else ({}, {})
     if words and "max_words" not in rs and words != cfg.research.max_words:
         rs["max_words"] = words
@@ -403,12 +434,15 @@ def clean_research(settings: dict[str, Any], why: dict[str, str], cfg: CouncilCo
 
 _RESEARCH_RE = re.compile(r"исследу|исследован|рынок|рынк|найди|найти|поиск|сравни|конкурент|производител|"
                           r"обзор|research|market|compare|find", re.I)
+_CREATIVE_RE = re.compile(r"придума|назван|нейминг|наименован|слоган|концепц|креатив|идеи для|идею для|"
+                          r"brand name|naming|slogan|tagline|brainstorm|мозгов[а-я]* штурм", re.I)
 _FRESH_RE = re.compile(r"актуальн|текущ|сейчас|сегодня|202\d|последн|новост|цен[аыу]|курс|price|latest|current", re.I)
 
 
 def analyse(question: str, attachments: list[dict[str, Any]]) -> TaskAnalysis:
     n = len(question)
-    research = bool(_RESEARCH_RE.search(question))
+    creative = bool(_CREATIVE_RE.search(question))
+    research = bool(_RESEARCH_RE.search(question)) and not creative
     size = "large" if n > 2500 or (research and n > 800) else "medium" if n > 400 or research else "small"
     needs = []
     if _FRESH_RE.search(question):
@@ -417,10 +451,11 @@ def analyse(question: str, attachments: list[dict[str, Any]]) -> TaskAnalysis:
         needs.append("длинные документы")
     if any(a.get("kind") == "image" for a in attachments):
         needs.append("картинки")
-    kind = "исследование" if research else "решение или совет"
+    kind = "творческая задача" if creative else "исследование" if research else "решение или совет"
     return TaskAnalysis(kind=kind, size=size, needs=needs,
-                        summary=f"Объём вопроса — {n} знаков; " + ("нужен широкий поиск и проверка фактов." if research
-                                                                   else "нужен обоснованный ответ."))
+                        summary=f"Объём вопроса — {n} знаков; " + (
+                            "нужны разнообразные смелые идеи, а не проверка фактов." if creative
+                            else "нужен широкий поиск и проверка фактов." if research else "нужен обоснованный ответ."))
 
 
 def _sentence(t: str) -> str:
@@ -432,14 +467,19 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
     """Подбор по правилам — только факты каталога и ваша история (без ключа, в демо, при сбое советника)."""
     task = analyse(question, attachments)
     big = task.size == "large"
-    rec_mode = "research" if task.kind == "исследование" and big and mode != "evaluate" else mode
+    rec_mode = ("research" if task.kind == "исследование" and big and mode != "evaluate"
+                else "creative" if task.kind == "творческая задача" and mode in ("debate", "quick") else mode)
+    creative = rec_mode == "creative"
     by_id = {c["id"]: c for c in cands}
     need_ctx = sum(int(a.get("chars") or 0) for a in attachments) // 3 + 20_000
 
     def score(c: dict[str, Any]) -> float:
         h = history.get(c["id"]) or {}
-        s = 2.0 * c["reasoning"] + (0 if c["light"] else 1.5 if big or rec_mode == "research" else 0.3)
-        s += min((c["max_out"] or 8000) / 32000, 2) * (1 if rec_mode in ("research", "debate") else 0.3)
+        if creative:  # воображение, а не глубина рассуждений: старшая модель лучше, но рассуждения и длина не главное
+            s = 0.5 * c["reasoning"] + (0 if c["light"] else 1.0) + min((c["max_out"] or 8000) / 32000, 1) * 0.2
+        else:
+            s = 2.0 * c["reasoning"] + (0 if c["light"] else 1.5 if big or rec_mode == "research" else 0.3)
+            s += min((c["max_out"] or 8000) / 32000, 2) * (1 if rec_mode in ("research", "debate") else 0.3)
         s += (h.get("win_rate") or 0) * 2 - min(h.get("failures") or 0, 5) * 0.4
         if c["context"] and c["context"] < need_ctx:
             s -= 5
@@ -478,13 +518,15 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
         mine = next((p for p in picks if provider(p.model) == provider(cur)), None)
         ok = mine and by_id[mine.model]["reasoning"] and not by_id[mine.model]["light"] and \
             (by_id[mine.model]["max_out"] or 32000) >= 32000
+        if creative:  # шорт-лист не длинный: председателю не нужен огромный предел ответа
+            ok = bool(mine) and not by_id[mine.model]["light"]
         chair = mine if ok else max(picks, key=lambda p: (by_id[p.model]["reasoning"], by_id[p.model]["max_out"] or 0,
                                                           -by_id[p.model]["light"]))
         lead = ("Председатель, как в настройках: рассуждает, хватает предела ответа для итога. " if chair is mine
                 else "Председатель: самый большой предел ответа и рассуждает — нужно для длинного итога. ")
         picks = [p.model_copy(update={"role": "chair", "why": (lead + p.why).strip()})
                  if p is chair else p for p in picks]
-    if "свежие данные из интернета" in task.needs and rec_mode != "research":
+    if "свежие данные из интернета" in task.needs and rec_mode not in ("research", "creative"):
         for p in picks:
             if p.role == "member":
                 picks = [x.model_copy(update={"web_search": True}) if x is p else x for x in picks]
@@ -492,6 +534,10 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
     picks = [p if p.why or p.role == "chair" else p.model_copy(update={"why": "Лучшая по каталогу у этого разработчика."})
              for p in picks]
     caveats = ["Подбор по правилам: только каталог OpenRouter и ваша история, без анализа вопроса моделью и без обзоров."]
+    if creative:
+        caveats.append("Креатив: по одной модели от каждого разработчика ради разнообразия идей; глубина рассуждений "
+                       "не главное, поиск ни у кого не включён. Насколько модель изобретательна, каталог не говорит — "
+                       "смотрите на свои заседания в этом режиме.")
     missing = [m.name for m in cfg.members if m.enabled and not any(provider(c["id"]) == provider(m.model) for c in cands)]
     if missing:
         caveats.append(f"Моделей этих участников нет в каталоге OpenRouter: {', '.join(missing)} — они не рассматривались.")
@@ -516,7 +562,10 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
             rs["max_words"] = 900
             rwhy["max_words"] = "вопрос узкий — короткие варианты дешевле и не теряют сути"
     return Advice(task=task, mode=rec_mode, mode_why=("большая задача на поиск и сравнение — режим «Исследование»"
-                                                      if rec_mode == "research" and mode != "research" else "режим оставлен как выбран"),
+                                                      if rec_mode == "research" and mode != "research"
+                                                      else "нужно придумать названия или идеи — режим «Креатив»: много "
+                                                           "смелых вариантов, ремикс и шорт-лист"
+                                                      if creative and mode != "creative" else "режим оставлен как выбран"),
                   picks=picks, caveats=caveats, research_settings=rs, research_why=rwhy, research_cost=rcost,
                   research_words=rs.get("max_words"))
 

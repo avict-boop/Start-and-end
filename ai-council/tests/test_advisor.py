@@ -261,3 +261,19 @@ def test_light_models_are_detected_by_whole_words():
     assert not is_light("google/gemini-4-pro") and not is_light("google/gemini-2.5-pro")
     assert is_light("google/gemini-4-flash") and is_light("openai/gpt-6.1-mini") and is_light("anthropic/claude-haiku-5")
     assert is_light("google/gemini-2.0-flash-lite") and not is_light("x-ai/grok-4.7")
+
+
+def test_rules_recommend_creative_mode_for_naming_without_search():
+    c = cfg()
+    q = "Придумай название и слоган для новой линейки средств от потливости — актуальные тренды 2026"
+    cands = A.candidates(c, CATALOG)
+    adv = A.finalize(A.rule_advice(q, "debate", c, cands, {}, []), cands, c, "debate")
+    assert adv.mode == "creative" and adv.task.kind == "творческая задача"
+    assert not any(p.web_search for p in adv.picks)  # в «Креативе» поиска нет, даже если в вопросе «актуальные»
+    assert len({A.provider(p.model) for p in adv.picks}) == len(adv.picks)  # по одной модели от разработчика
+    assert any("Креатив" in x for x in adv.caveats) and "Креатив" in adv.mode_why
+    # советнику-модели передаётся правило подбора для «Креатива»
+    p = A.advise_prompt(question=q, mode="creative", attachments=[], followup=False, budget=3, current={},
+                        cands=cands, history={}, dossiers={}, language="Russian", research_words=1400,
+                        search_model="x/y")
+    assert "DIVERSITY OF IMAGINATION" in p and "debate|quick|evaluate|research|creative" in p
