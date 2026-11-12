@@ -356,3 +356,28 @@ def test_unsupported_feature_is_dropped_and_remembered(_fresh_features):
     assert seen[-1]["tools"] == [{"type": "openrouter:web_search", "parameters": {"max_results": 5, "max_uses": 3, "max_total_results": 15, "engine": "exa"}}]
     asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100, web_fetch=2, json_mode=True))
     assert "response_format" not in seen[-1] and "tools" not in seen[-1] and len(seen) == 4  # запомнено
+
+
+def test_stalled_stream_is_retried(monkeypatch):
+    # сервер шлёт только «я жив», а модель ничего не пишет — запрос повторяется, а не ждёт бесконечно
+    import council.client as cl
+    monkeypatch.setattr(cl, "STALL_S", 0.05)
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+        if len(calls) == 1:
+            class Slow(httpx.AsyncByteStream):
+                async def __aiter__(self):
+                    for _ in range(20):
+                        await asyncio.sleep(0.01)
+                        yield b": OPENROUTER PROCESSING\n\n"
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Slow())
+        body = ('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'
+                'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"cost":0}}\n\ndata: [DONE]\n\n')
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
+
+    c = make(handler, retries=1)
+    c.stream = True
+    comp = asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=10))
+    assert comp.text == "ok" and len(calls) == 2

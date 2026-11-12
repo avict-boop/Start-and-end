@@ -166,6 +166,9 @@ FETCH_TOKENS = 8000  # сколько текста страницы (≈ ток�
 # Сколько поисков модель может сделать за один запрос: инструмент web_search разрешает искать много раз подряд, и
 # каждый результат добавляется ко входу (на заседании 12.11 автор с поиском прочитал 3,6 млн токенов за 4 запроса)
 SEARCH_USES = 3
+# Модель ничего не пишет (ни текста, ни рассуждений) столько секунд подряд — запрос повторяется. Поиск и чтение
+# страниц на сервере OpenRouter идут молча, поэтому запас большой
+STALL_S = 150
 # Поисковик инструмента web_search. «auto» у OpenAI и Google включает встроенный поиск провайдера, а он не знает
 # лимитов max_uses / max_results: на заседании 12.11 автор chatgpt за один запрос предложений прочитал 2 млн токенов
 # ($1,14). «exa» — поиск OpenRouter (Exa), где лимиты соблюдаются: не больше SEARCH_USES поисков по 5 результатов
@@ -340,8 +343,13 @@ class OpenRouterClient:
         attempt = 0
         credit_waits = 0
         empty_runs = 0  # ответы, целиком ушедшие в скрытые рассуждения
+        call_start = time.monotonic()
         while attempt < self.max_retries + 1:
             attempt += 1
+            if attempt > 1 and time.monotonic() - call_start > self.timeout * 5:
+                # все попытки вместе — не дольше ~15 минут: медленный провайдер не держит весь совет
+                last_error = f"{last_error}; на все попытки ушло больше {int(self.timeout * 5 / 60)} мин"
+                break
             if attempt > 1 or credit_waits:  # о каждом повторе сообщаем, даже если ждать не нужно
                 report({"phase": "retry", "attempt": attempt, "wait": round(wait, 1), "detail": last_error})
                 if wait:
@@ -518,9 +526,17 @@ class OpenRouterClient:
         last_report = 0.0
         phase = "thinking"
         report({"phase": "thinking", "chars": 0})
+        moved = time.monotonic()  # когда в последний раз пришёл новый текст или рассуждения
+        seen = 0
         async for line in resp.aiter_lines():
-            if time.monotonic() - started > self.timeout * 3:
+            now = time.monotonic()
+            if now - started > self.timeout * 3:
                 raise _Retryable(f"ответ идёт слишком долго (более {int(self.timeout * 3)} с)")
+            if chars + reasoning_chars > seen:
+                seen, moved = chars + reasoning_chars, now
+            elif now - moved > STALL_S:
+                # сервер шлёт только «я жив», а модель ничего не пишет — провайдер завис: повтор, а не ожидание
+                raise _Retryable(f"модель ничего не присылает {int(now - moved)} с — повтор запроса")
             if not line or line.startswith(":"):  # «: OPENROUTER PROCESSING» — сервер жив, ответа ещё нет
                 continue
             if not line.startswith("data:"):
