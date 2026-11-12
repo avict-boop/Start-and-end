@@ -322,7 +322,7 @@ def test_web_tools_fetch_and_json_mode_in_request(_fresh_features):
     c = make(handler)
     asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100, web_search=True, web_fetch=3, json_mode=True))
     b = seen[0]
-    assert b["tools"] == [{"type": "openrouter:web_search", "parameters": {"max_results": 5}},
+    assert b["tools"] == [{"type": "openrouter:web_search", "parameters": {"max_results": 5, "max_uses": 3, "max_total_results": 15}},
                           {"type": "openrouter:web_fetch", "parameters": {"max_uses": 3, "max_content_tokens": 8000}}]
     assert b["response_format"] == {"type": "json_object"} and "plugins" not in b
     asyncio.run(c.complete("perplexity/sonar-pro", [], temperature=0, max_tokens=100, web_search=True))
@@ -346,6 +346,6 @@ def test_unsupported_feature_is_dropped_and_remembered(_fresh_features):
     c = make(handler, retries=0)
     comp = asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100, web_search=True, web_fetch=2, json_mode=True))
     assert comp.text == '{"a":1}' and len(seen) == 3
-    assert seen[-1]["tools"] == [{"type": "openrouter:web_search", "parameters": {"max_results": 5}}]
+    assert seen[-1]["tools"] == [{"type": "openrouter:web_search", "parameters": {"max_results": 5, "max_uses": 3, "max_total_results": 15}}]
     asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100, web_fetch=2, json_mode=True))
     assert "response_format" not in seen[-1] and "tools" not in seen[-1] and len(seen) == 4  # запомнено

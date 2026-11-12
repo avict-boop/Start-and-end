@@ -1160,6 +1160,9 @@ function apply(s, ev) {
   switch (ev.type) {
     case "ping":
       break;
+    case "links_check":
+      logAdd(s, `Проверяю ${ev.count} ${plural(ev.count, "ссылку", "ссылки", "ссылок")} и цитаты на страницах — до пары минут, без моделей`);
+      break;
     case "followup":
       logAdd(s, `Уточнение: совет видит ${ev.thread.length} предыдущ${ev.thread.length > 1 ? "их решения" : "ее решение"}`);
       break;

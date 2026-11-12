@@ -10,7 +10,8 @@ from typing import Any
 
 STAGE_NAME = {"framing": "Уточнение задачи", "describe": "Описание изображений", "proposal": "Варианты ответа",
               "critique": "Поиск слабых мест", "arbitration": "Проверка по источникам", "revision": "Доработка",
-              "vote": "Голосование", "factcheck": "Проверка фактов", "verdict": "Вывод", "recheck": "Проверка новых утверждений"}
+              "vote": "Голосование", "factcheck": "Проверка фактов", "verdict": "Вывод", "recheck": "Проверка новых утверждений",
+              "semantic": "Сверка смысла «известно»"}
 ORDER = list(STAGE_NAME)
 
 

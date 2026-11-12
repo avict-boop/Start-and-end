@@ -387,6 +387,8 @@ async def check_links(sess: Council, R: Any, ledger: dict[str, Any], rc: Any) ->
     if not (ledger and ledger.get("evidence") and rc.link_check and sess.link_checker):
         return
     todo = [e["url"] for e in ledger["evidence"] if e.get("url") and not e.get("link")]
+    if todo:  # без моделей, но может занять до пары минут — видно на сайте и в журнале
+        sess._emit("links_check", count=len(todo))
     quotes = {e["url"]: list(e["quotes"].values()) for e in ledger["evidence"]
               if e.get("url") in todo and e.get("quotes")} if rc.quote_check else {}
     try:

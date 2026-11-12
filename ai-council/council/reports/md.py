@@ -199,8 +199,10 @@ def _sources(v: View, full: bool) -> list[str]:
         out += ["## Проверка утверждений", "", "| № | Утверждение | Статус | Источники |", "|---|---|---|---|"]
         for c in v.checked_claims:
             st = c.get("status", "not_checked")
+            why = "; ".join(str(x) for x in (c.get("notes") or [])[:3] if x)  # почему такой статус
             out.append(f"| {c.get('id', '')} | {_cell(c.get('text', ''))} | {v.CLAIM_SIGN.get(st, '')} "
-                       f"{v.CLAIM_WORD.get(st, st)} | {_erefs(v, c.get('evidence') or [])} |")
+                       f"{v.CLAIM_WORD.get(st, st)}{(' <br>*' + _cell(why) + '*') if why else ''} | "
+                       f"{_erefs(v, c.get('evidence') or [])} |")
         out.append("")
     return out
 

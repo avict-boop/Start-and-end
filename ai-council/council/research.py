@@ -655,9 +655,9 @@ actually returned; never invent a URL, date or quotation. If you saw only a snip
 availability. A related page is not a confirmation. Absence of a found source is not a refutation.
 {SNIPPET_RULE if snippet else ""}Test subject, value, date, geography, units and every qualifier separately; list
 them in "verified_parts" and "unverified_parts".
-For every source give "quote": ONE verbatim phrase (at most 25 words) copied from the page text you actually read
-that bears on the claim; leave it empty if you saw only a snippet or a search summary; never paraphrase. The
-application looks for this phrase on the page itself.
+For every source give "quote": ONE verbatim phrase (at most 25 words) copied exactly from the page text or the
+search snippet that bears on the claim — never paraphrase, never translate. The application downloads the page
+(HTML or PDF) and looks for this exact phrase: if it is there, the source counts as read.
 Statuses: confirmed (a source directly supports EVERY part of the claim in its stated scope — each number, date,
 age, dose, name and owner); partially_confirmed (sources directly support only a separable part: do not confirm the
 original claim — write a standalone "verified_claim_text" with ONLY the directly supported subject, value, units,
@@ -894,10 +894,11 @@ def select_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, A
     утверждению от каждого автора, затем самые важные."""
     disputed: dict[str, int] = {}
     reasons: dict[str, list[str]] = {}
-    decisive_by: set[str] = set()   # критики назвали посылкой вывода
+    decisive_by: dict[str, int] = {}   # сколько критиков назвали утверждение посылкой вывода
     for cs in critiques.values():
         for r in cs.reviews:
-            decisive_by |= {str(x).strip().upper() for x in getattr(r, "decisive_claims", None) or []}
+            for x in {str(x).strip().upper() for x in getattr(r, "decisive_claims", None) or []}:
+                decisive_by[x] = decisive_by.get(x, 0) + 1
             for d in r.disputed_claims or []:
                 cid = (d.get("claim_id") or "").strip().upper()
                 if cid:
@@ -912,14 +913,14 @@ def select_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, A
             s = 3.0 * disputed.get(c.id.upper(), 0) + (2.0 if c.volatility == "changes_fast" else 0.0)
             s += 2.0 if c.basis == "memory" and re.search(r"\d", c.text) else 0.0
             s += 1.0 if c.basis == "search_reported" else 0.0
-            s += 3.0 if (c.decisive or c.id.upper() in decisive_by) else 0.0  # от него зависит вывод
+            s += 3.0 if (c.decisive or c.id.upper() in decisive_by) else 0.0  # от него зависит вывод (выше в очереди)
             s += 0.5 / (i + 1)  # автор ставит важное выше
             if NEGATIVE_RE.search(c.text):
                 s -= 4.0  # «нет / не зарегистрирован / ни один» поиском не доказать: проверяем, только если места хватит
             scored.append((s, label, {"id": c.id, "label": label, "text": c.text, "scope": c.scope,
                                       "basis": c.basis, "volatility": c.volatility,
                                       "disputed": disputed.get(c.id.upper(), 0),
-                                      "decisive_by_critics": c.id.upper() in decisive_by, "entity": c.entity,
+                                      "decisive_by_critics": decisive_by.get(c.id.upper(), 0), "entity": c.entity,
                                       "reasons": reasons.get(c.id.upper(), [])[:2]}))
     scored.sort(key=lambda x: -x[0])
     out, seen = [], set()
@@ -975,8 +976,11 @@ def prepare_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, 
         c = {**c, "subquestions": list(rc.subquestions) if rc else [], "checkability": rc.checkability if rc else "public",
              "check_path": rc.check_path if rc else "", "dup_ids": [],
              "decisive": bool(rc and rc.decisive) or bool(c.get("decisive_by_critics")),
-             "critical": bool(c.get("disputed")) or c.get("volatility") == "changes_fast" or bool(rc and rc.decisive)
-             or bool(c.get("decisive_by_critics"))}
+             # «важное» (фрагмент выдачи не подтверждает, нужна страница): спорное, быстро меняющееся или решающее по
+             # мнению двух и больше критиков. Одна метка автора — только выше в очереди: иначе важным становилось почти
+             # всё (12.11: подтверждено 4 из 35), а программа и так проверит цитату на странице
+             "critical": bool(c.get("disputed")) or c.get("volatility") == "changes_fast"
+             or (c.get("decisive_by_critics") or 0) >= 2}
         if c["checkability"] == "private" and PUBLIC_REGISTRY_RE.search(c["text"]):
             c["checkability"] = "registry"  # регистрация, патент, правообладатель в реестре — проверяется публично
         private = c["checkability"] == "private" and not (check_decisive_private and c["decisive"])
@@ -1059,6 +1063,7 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
     evid: dict[str, dict[str, Any]] = {}
     claim_ev: dict[str, list[str]] = {k: [] for k in by_id}
     derived: dict[str, dict[str, Any]] = {}   # частичное подтверждение: доказанная часть — отдельным утверждением
+    snippet_only: set[str] = set()            # подтверждено только фрагментом — ждёт проверки цитаты на странице
     gaps: list[dict[str, Any]] = []
     for mi, res in enumerate(results):
         cites = {_url_key(u) for u in res.search_citations}
@@ -1085,7 +1090,7 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
                 if cid not in e["claims"]:
                     e["claims"].append(cid)
                 e["relations"][cid] = src.relation
-                if src.quote and src.material_seen == "page":
+                if src.quote:  # и из фрагмента выдачи: программа сама найдёт эту фразу на странице или в PDF
                     e.setdefault("quotes", {})[cid] = src.quote[:400]
                 if k not in claim_ev[cid]:
                     claim_ev[cid].append(k)
@@ -1106,7 +1111,8 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
                 notes[cid].append("подтверждение без ссылки из результатов поиска — не засчитано")
             elif status == "confirmed" and not read_page and (
                     snippet_rule == "all" or (snippet_rule == "critical" and by_id[cid].get("critical"))):
-                status = "unclear"  # для важного утверждения фрагмент страницы — не подтверждение
+                status = "unclear"  # для важного утверждения фрагмент страницы — не подтверждение…
+                snippet_only.add(cid)  # …пока программа не найдёт цитату на самой странице (apply_links)
                 notes[cid].append("видели только фрагмент или ответ поиска, а не саму страницу — не засчитано")
             if cc.unverified_parts:
                 notes[cid].append("не подтверждено: " + "; ".join(cc.unverified_parts[:3]))
@@ -1120,6 +1126,8 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
     for cid, c in by_id.items():
         row = {**c, "status": merge_status(statuses[cid]), "notes": list(dict.fromkeys(notes[cid]))[:4],
                "evidence": [key_to_id[k] for k in claim_ev[cid]]}
+        if cid in snippet_only and row["status"] == "unclear":
+            row["snippet_only"] = True
         claims.append(row)
         for dup in c.get("dup_ids") or []:  # копии того же утверждения у других авторов — тот же статус
             claims.append({**row, "id": dup, "duplicate_of": c["id"], "dup_ids": []})
@@ -1157,6 +1165,18 @@ def apply_links(ledger: dict[str, Any], results: dict[str, dict[str, Any]], quot
             e["page_text"] = r.get("text_len", 0)
     if quote_check:
         ev_by = {e["id"]: e for e in ledger.get("evidence", [])}
+        for c in ledger.get("claims", []):
+            # поиск видел только фрагмент, но программа нашла его дословную фразу на самой странице (или в PDF):
+            # страница прочитана — подтверждение засчитывается
+            if c.get("snippet_only") and c.get("status") == "unclear" and not c.get("duplicate_of"):
+                cid = c["id"]
+                if any((ev_by.get(i) or {}).get("quote_hits", {}).get(cid) for i in c.get("evidence") or []):
+                    c["status"], c["quote_found"], c["snippet_only"] = "confirmed", True, False
+                    c["notes"] = [n for n in c.get("notes") or [] if "фрагмент" not in n] + [
+                        "цитату источника программа нашла на самой странице — засчитано"]
+                    for d in ledger.get("claims", []):  # копии у других авторов — тот же статус
+                        if d.get("duplicate_of") == cid:
+                            d["status"], d["quote_found"] = "confirmed", True
         for c in ledger.get("claims", []):
             if c.get("status") != "confirmed" or not (c.get("critical") or c.get("decisive")) or c.get("duplicate_of"):
                 continue

@@ -254,7 +254,7 @@ def test_decisive_private_claim_gets_one_public_check():
     props = props_with({"A": [{"text": "Права на препарат X принадлежат компании Y", "checkability": "private", "decisive": True},
                               {"text": "Условия эксклюзива для нас", "checkability": "private"}]})
     sel, deferred = R.prepare_claims(props, {}, 10)
-    assert [c["id"] for c in sel] == ["A-C1"] and sel[0]["private_checked"] and sel[0]["critical"]
+    assert [c["id"] for c in sel] == ["A-C1"] and sel[0]["private_checked"] and sel[0]["decisive"]
     assert [d["ids"] for d in deferred] == [["A-C2"]]
     sel2, _ = R.prepare_claims(props, {}, 10, check_decisive_private=False)
     assert sel2 == []
@@ -320,7 +320,10 @@ def test_registry_claims_are_not_private_and_critics_mark_decisive_claims():
     sel, deferred = R.prepare_claims(props, crit, 10)
     by = {c["id"]: c for c in sel}
     assert "A-C1" in by and [d["ids"] for d in deferred] == [["A-C2"]]
-    assert by["A-C3"]["decisive"] and by["A-C3"]["critical"]
+    assert by["A-C3"]["decisive"] and not by["A-C3"]["critical"]  # один критик — выше в очереди, но не «важное»
+    crit2 = {k: CritiqueSet(reviews=[{"label": "A", "scores": {"k": 5}, "decisive_claims": ["A-C3"]}]) for k in "xy"}
+    sel2, _ = R.prepare_claims(props, crit2, 10)
+    assert next(c for c in sel2 if c["id"] == "A-C3")["critical"]  # двое критиков — «важное»
 
 
 def test_partial_confirmation_becomes_a_separate_verified_claim():
@@ -449,3 +452,36 @@ def test_research_scouts_search_when_revising_too():
     by = {(st, w) for st, _, w in c.web if st in ("proposal", "revision")}
     assert ("proposal", True) in by and ("revision", True) in by
     assert sum(1 for st, _, w in c.web if st == "revision" and w) == 1  # ищет только «b»
+
+
+def test_snippet_confirmation_counts_when_the_program_finds_the_quote_on_the_page():
+    sel = [{"id": "A-C1", "label": "A", "text": "Qbrexza одобрен FDA в 2018", "basis": "memory", "volatility": "stable",
+            "critical": True, "dup_ids": ["B-C1"]}]
+    res = R.EvidenceResult(search_citations=["https://fda.example/label.pdf"], checked_claims=[R.CheckedClaim(
+        claim_id="A-C1", status="confirmed",
+        sources=[R.ESource(url="https://fda.example/label.pdf", material_seen="snippet", quote="Initial U.S. Approval: 2018")])])
+    led = R.build_ledger(sel, [res], "m", snippet_rule="critical")
+    c = led["claims"][0]
+    assert c["status"] == "unclear" and c["snippet_only"]
+    R.apply_links(led, {"https://fda.example/label.pdf": {"status": "ok", "code": 200, "pdf": True, "text_len": 9000,
+                                                          "quotes": {"Initial U.S. Approval: 2018": True}}})
+    st = {x["id"]: x for x in led["claims"]}
+    assert st["A-C1"]["status"] == "confirmed" and st["A-C1"]["quote_found"] and st["B-C1"]["status"] == "confirmed"
+    assert any("нашла на самой странице" in n for n in st["A-C1"]["notes"])
+
+
+def test_pdf_text_and_link_deadline(monkeypatch):
+    import io
+    from pypdf import PdfWriter
+    from council import links
+    w = PdfWriter(); w.add_blank_page(width=200, height=200)
+    buf = io.BytesIO(); w.write(buf)
+    assert links.pdf_text(buf.getvalue()) == "" and links.pdf_text(b"not a pdf") == ""
+
+    async def slow(client, url, sem, quotes=None):
+        await asyncio.sleep(5)
+        return {"status": "ok", "code": 200}
+    monkeypatch.setattr(links, "_one", slow)
+    monkeypatch.setattr(links, "LINK_DEADLINE", 0.2)
+    got = run(links.check_links(["https://a.example/x"]))
+    assert got["https://a.example/x"]["status"] == "error" and got["https://a.example/x"]["error"] == "слишком долго"

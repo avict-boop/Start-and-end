@@ -163,6 +163,9 @@ class KeyLimit(OutOfCredits):
 # Что модель не поддерживает (узнаём по ответу HTTP 400 и запоминаем до перезапуска программы)
 _NO_FEATURE: dict[str, set[str]] = {"tools": set(), "fetch": set(), "json": set()}
 FETCH_TOKENS = 8000  # сколько текста страницы (≈ токенов) отдаётся модели при чтении
+# Сколько поисков модель может сделать за один запрос: инструмент web_search разрешает искать много раз подряд, и
+# каждый результат добавляется ко входу (на заседании 12.11 автор с поиском прочитал 3,6 млн токенов за 4 запроса)
+SEARCH_USES = 3
 
 
 def _drop_unsupported(payload: dict[str, Any], model: str, err: str) -> str:
@@ -312,7 +315,8 @@ class OpenRouterClient:
         tools: list[dict[str, Any]] = []
         if web_search and not model.startswith("perplexity/"):  # у Perplexity поиск встроенный
             if web_tools and model not in _NO_FEATURE["tools"]:
-                tools.append({"type": "openrouter:web_search", "parameters": {"max_results": 5}})
+                tools.append({"type": "openrouter:web_search", "parameters": {
+                    "max_results": 5, "max_uses": SEARCH_USES, "max_total_results": 5 * SEARCH_USES}})
             else:
                 payload["plugins"] = [{"id": "web"}]  # прежний способ: встроенный поиск провайдера или Exa
         if web_fetch and model not in _NO_FEATURE["fetch"]:

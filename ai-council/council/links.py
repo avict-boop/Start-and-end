@@ -28,6 +28,10 @@ DEAD = {404, 410}
 BLOCKED = {401, 403, 405, 406, 429, 451, 503}
 MAX_REDIRECTS = 5
 MAX_BODY = 1_500_000
+MAX_PDF = 8_000_000      # PDF (инструкции FDA, EMA, PMDA) — до 8 МБ и первых PDF_PAGES страниц
+PDF_PAGES = 40
+LINK_DEADLINE = 30.0     # одна ссылка вместе с чтением страницы — не дольше (медленный сайт не держит заседание)
+TOTAL_DEADLINE = 150.0   # вся проверка ссылок этапа — не дольше; не успевшие — «не открылась»
 
 
 def plain(text: str) -> str:
@@ -36,6 +40,20 @@ def plain(text: str) -> str:
     t = re.sub(r"[‐‑‒–—―]", "-", t)
     t = re.sub(r"[«»\"“”„'’`*_|]", " ", t)
     return re.sub(r"\s+", " ", t).strip()
+
+
+def pdf_text(data: bytes) -> str:
+    """Текст PDF (первые PDF_PAGES страниц) — для поиска цитаты; не PDF или без текстового слоя — пусто."""
+    import io
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        parts = []
+        for page in reader.pages[:PDF_PAGES]:
+            parts.append(page.extract_text() or "")
+        return plain(re.sub(r"(\w)-\s*\n\s*(\w)", r"\1\2", "\n".join(parts)))
+    except Exception:  # noqa: BLE001 — повреждённый или зашифрованный PDF
+        return ""
 
 
 def page_text(raw: str) -> str:
@@ -91,14 +109,20 @@ async def _one(client: httpx.AsyncClient, url: str, sem: asyncio.Semaphore, quot
                         continue
                     out: dict[str, Any] = {"status": classify_code(r.status_code), "code": r.status_code}
                     ctype = r.headers.get("content-type", "").lower()
-                    if quotes and out["status"] == "ok" and ("html" in ctype or "text/plain" in ctype):
+                    is_pdf = "pdf" in ctype or url.lower().split("?")[0].endswith(".pdf")
+                    if quotes and out["status"] == "ok" and (is_pdf or "html" in ctype or "text/plain" in ctype):
+                        limit = MAX_PDF if is_pdf else MAX_BODY
                         body = b""
                         async for chunk in r.aiter_bytes():
                             body += chunk
-                            if len(body) >= MAX_BODY:
+                            if len(body) >= limit:
                                 break
-                        text = page_text(body.decode(r.encoding or "utf-8", errors="ignore"))
+                        if is_pdf:
+                            text = await asyncio.to_thread(pdf_text, body)
+                        else:
+                            text = page_text(body.decode(r.encoding or "utf-8", errors="ignore"))
                         out["text_len"] = len(text)
+                        out["pdf"] = is_pdf
                         out["quotes"] = {q: plain(q) in text for q in quotes if plain(q)}
                     return out
             return {"status": "error", "code": None, "error": "слишком много перенаправлений"}
@@ -116,6 +140,20 @@ async def check_links(urls: list[str], *, timeout: float = 10, concurrency: int 
     if not todo:
         return {}
     sem = asyncio.Semaphore(concurrency)
+
+    async def one(client: httpx.AsyncClient, u: str) -> dict[str, Any]:
+        try:  # медленный сайт, отдающий страницу по байту, не задержит проверку дольше LINK_DEADLINE
+            return await asyncio.wait_for(_one(client, u, sem, (quotes or {}).get(u)), LINK_DEADLINE)
+        except asyncio.TimeoutError:
+            return {"status": "error", "code": None, "error": "слишком долго"}
+
     async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, headers=HEADERS) as client:
-        res = await asyncio.gather(*(_one(client, u, sem, (quotes or {}).get(u)) for u in todo))
-    return dict(zip(todo, res))
+        tasks = {u: asyncio.create_task(one(client, u)) for u in todo}
+        done, pending = await asyncio.wait(tasks.values(), timeout=TOTAL_DEADLINE)
+        for t in pending:
+            t.cancel()
+    out = {}
+    for u, t in tasks.items():
+        out[u] = t.result() if t in done and not t.cancelled() else {"status": "error", "code": None,
+                                                                      "error": "проверка ссылок заняла слишком долго"}
+    return out
