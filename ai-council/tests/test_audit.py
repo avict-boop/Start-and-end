@@ -431,3 +431,21 @@ def test_research_word_limit_can_be_switched_off():
     run(Council(cfg, client, seed=3).run("Вопрос?"))
     props = [c for c in client.log if c["stage"] == "proposal"]
     assert props and all("no word limit" in c["text"] for c in props)
+
+
+def test_research_scouts_search_when_revising_too():
+    class Kw(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.web = []
+
+        async def complete(self, model, messages, **kw):
+            self.web.append((kw.get("meta", {}).get("stage"), kw.get("meta", {}).get("member"), bool(kw.get("web_search"))))
+            return await super().complete(model, messages, **kw)
+
+    cfg = make_cfg(mode="research", members=[{"name": n, "model": f"m/{n}", "web_search": n == "b"} for n in "abcd"])
+    c = Kw()
+    run(Council(cfg, c, seed=3).run("Вопрос?"))
+    by = {(st, w) for st, _, w in c.web if st in ("proposal", "revision")}
+    assert ("proposal", True) in by and ("revision", True) in by
+    assert sum(1 for st, _, w in c.web if st == "revision" and w) == 1  # ищет только «b»

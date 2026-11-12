@@ -1186,13 +1186,13 @@ class Council:
                 m, "revision",
                 R.revision(rhead, criteria, own, proposals[own], feedback, others(m.name), ledger_txt,
                            lens_of.get(m.name, ""), rc.max_words, rc.max_claims, full_others=not rc.revision_digest,
-                           table_rows=rc.digest_table_rows),
+                           table_rows=rc.digest_table_rows) + (prompts.WEB_NOTE if m.name in scouts else ""),
                 R.ResearchRevision,
                 # сокращение слишком длинного варианта до заданной длины — не «потеря содержания»
                 check=lambda r, prev=(None if rc.shorten_long and len(proposals[own].summary.split())
                                       > rc.max_words * rc.long_factor and rc.max_words else proposals[own]), n=m.name: fit(
                     check_substance(_normalize_revision(r), previous=prev), "revision", n),
-                meta={"label": own, **rmeta}, max_tokens=self.author_tokens(m))
+                meta={"label": own, **rmeta}, max_tokens=self.author_tokens(m), web_search=m.name in scouts)
         revised = await self._parallel("revision", jobs)
         known_urls = {e["url"] for e in (ledger or {}).get("evidence", [])}
         for name, rev in revised.items():

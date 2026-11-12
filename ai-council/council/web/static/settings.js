@@ -236,8 +236,8 @@ function renderSettings() {
       <div class="row2" style="margin-top:.6rem">
         <label class="field"><span>Поисковых заданий (подтвердить / опровергнуть)</span><input type="number" id="rMissions" data-rn="missions" min="1" max="2" value="${d.research.missions}" ${ro}></label>
         <label class="field"><span>Утверждений на проверку</span><input type="number" id="rClaims" data-rn="arbitration_claims" min="3" max="30" value="${d.research.arbitration_claims}" ${ro}></label>
-        <label class="field"><span>Авторов с поиском уже в предложениях</span><input type="number" id="rScouts" data-rn="fresh_scouts" min="0" max="2" value="${d.research.fresh_scouts}" ${ro}>
-          <div class="muted small">0 — независимо и дешевле; 1–2 — для свежих цифр (цены, рынки), но варианты могут стать похожими</div></label>
+        <label class="field"><span>Авторов с поиском по умолчанию (исследование)</span><input type="number" id="rScouts" data-rn="fresh_scouts" min="0" max="2" value="${d.research.fresh_scouts}" ${ro}>
+          <div class="muted small">начальное значение «Свежих данных» на экране вопроса в исследовании — вместе с участниками, у которых поиск включён в «Моделях»; для вопроса меняется там. 0 — независимо и дешевле</div></label>
         <label class="field"><span>Длина варианта, слов</span><input type="number" id="rWords" data-rn="max_words" min="0" max="5000" step="100" value="${d.research.max_words}" ${ro}><small class="hint">0 — без ограничения длины (или от 300)</small>
           <div class="muted small">по умолчанию; в «Параметрах» вопроса можно поменять для отдельного исследования</div></label>
         <label class="field"><span>«Слишком длинный» — во сколько раз длиннее</span><input type="number" id="rFactor" data-rn="long_factor" min="1.2" max="5" step="0.1" value="${d.research.long_factor}" ${ro}></label>

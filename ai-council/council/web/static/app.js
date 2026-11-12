@@ -232,7 +232,9 @@ let config = null;
 let mode = "debate";
 
 function setMode(m) {
+  const was = mode;
   mode = m;
+  if (config && !webTouched && was !== m && $("members").children.length) { lineup.web = defaultWeb(); renderWebMembers(); }
   if ($("depthField")) $("depthField").hidden = m !== "research";
   if ($("freshField")) $("freshField").hidden = m === "evaluate";
   for (const r of $("modeSeg").querySelectorAll("input[name=mode]")) r.checked = r.value === m;
@@ -333,7 +335,7 @@ async function pickMemberModel(name) {
 
 // сбросить только модели и роли (режим, вопрос и остальные параметры не трогаем)
 function resetModels() {
-  lineup = { models: {}, extra: [], web: new Set(config.members.filter((m) => m.enabled && m.web_search).map((m) => m.name)) };
+  lineup = { models: {}, extra: [], web: defaultWeb() };
   renderMembers();
   $("chair").value = "";
   $("devil").value = "";
@@ -534,7 +536,7 @@ function applyLineup(r) {
 // новая задача (не уточнение и не повтор) — состав из настроек; изменить его можно «Подобрать состав»
 function resetLineup() {
   if (!config) return;
-  lineup = { models: {}, extra: [], web: new Set(config.members.filter((m) => m.enabled && m.web_search).map((m) => m.name)) };
+  lineup = { models: {}, extra: [], web: defaultWeb() };
   renderMembers();
   $("chair").value = "";
   $("devil").value = "";
@@ -739,13 +741,14 @@ async function initForm() {
     const touch = matchMedia("(pointer: coarse)").matches;  // на телефоне Ctrl+V не подсказываем
     $("uploadHint").textContent = `Картинки, PDF, Word, Excel — до ${uploadCfg.max_files} файлов по ${uploadCfg.max_mb} МБ.${touch ? "" : " Скриншот можно вставить: Ctrl+V"}`;
   }
-  lineup = { models: {}, extra: [], web: new Set(config.members.filter((m) => m.enabled && m.web_search).map((m) => m.name)) };
+  lineup = { models: {}, extra: [], web: defaultWeb() };
   renderMembers();
   if (!membersBound) {
     membersBound = true;
     $("members").addEventListener("change", () => { refreshRoleSelects(); renderWebMembers(); formChanged(); });
     $("webMembers").addEventListener("click", (e) => {
       const b = e.target.closest("[data-web]");
+      if (b) webTouched = true;
       if (!b) return;
       const n = b.dataset.web;
       if (lineup.web.has(n)) lineup.web.delete(n); else lineup.web.add(n);
@@ -2727,6 +2730,15 @@ function applyAdvice(r) {
   if (mode === "research") {
     const rs = Object.fromEntries(rsOn.map((k) => [k, a.research_settings[k]]));
     if (rs.max_words) { $("researchWords").value = rs.max_words; $("researchNoLimit").checked = false; updateShortenHint(); }
+    if (rs.fresh_scouts !== undefined) {  // «авторов с поиском» → те же «Свежие данные»: первые N авторов ищут
+      const authors = freshAuthors();
+      const keep = [...lineup.web].filter((x) => authors.includes(x));
+      lineup.web = new Set([...lineup.web].filter((x) => !authors.includes(x)));
+      for (const a of [...keep, ...authors.filter((x) => !keep.includes(x))].slice(0, Number(rs.fresh_scouts) || 0)) lineup.web.add(a);
+      delete rs.fresh_scouts;
+      webTouched = true;
+      renderWebMembers();
+    }
     if (rs.shorten_long !== undefined) $("researchShorten").checked = !!rs.shorten_long;
     researchTuned = { ...researchTuned, ...rs };
     renderResearchTuned();
@@ -2838,6 +2850,7 @@ function syncFresh() {
 $("fresh").addEventListener("change", () => {
   const n = Number($("fresh").value);
   if (Number.isNaN(n)) return;
+  webTouched = true;
   lineup.web = new Set(freshAuthors().slice(0, n));
   renderWebMembers(); formChanged();
 });
@@ -2862,3 +2875,19 @@ function entityCoverage(s) {
 
 // длина варианта исследования не ограничена (research_words = 0)
 function noLimit() { return !!($("researchNoLimit") && $("researchNoLimit").checked); }
+
+// «Свежие данные» по умолчанию: участники с включённым поиском («Настройки → Модели», все режимы) и, в исследовании,
+// ещё «Авторов с поиском уже в предложениях» (первые авторы, не председатель-судья). На экране вопроса это одна
+// настройка: что выбрано там — то и ищет, других путей включить поиск у авторов нет.
+let webTouched = false;
+function defaultWeb() {
+  const web = new Set(config.members.filter((m) => m.enabled && m.web_search).map((m) => m.name));
+  const n = mode === "research" ? Number((config.research_all || {}).fresh_scouts || 0) : 0;
+  if (n > 0 && $("members")) {
+    const chair = $("chair") ? $("chair").value : config.chair;
+    const authors = config.members.filter((m) => m.enabled && (m.name !== chair || $("chairProposes").checked)
+      && m.name !== config.devil_advocate).map((m) => m.name);
+    for (const a of authors) { if ([...web].filter((x) => authors.includes(x)).length >= n) break; web.add(a); }
+  }
+  return web;
+}

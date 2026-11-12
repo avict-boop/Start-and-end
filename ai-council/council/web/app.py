@@ -249,7 +249,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                   compact=False if req.mode == "research" else req.compact,
                                   research_words=req.research_words if req.mode == "research" else None,
                                   research_shorten=req.research_shorten if req.mode == "research" else None,
-                                  research=req.research if req.mode == "research" else None,
+                                  # «Свежие данные» на экране вопроса — явный список; «разведчики» по умолчанию
+                                  # (fresh_scouts) сверх него не добавляются, иначе ищут те, кого человек не выбрал
+                                  research=({**(req.research or {}), "fresh_scouts": 0} if req.web_search is not None
+                                            else req.research) if req.mode == "research" else None,
                                   models=req.models, extra_members=req.extra_members, web_search=req.web_search,
                                   answer_size=req.answer_size)
         except OverrideError as e:
