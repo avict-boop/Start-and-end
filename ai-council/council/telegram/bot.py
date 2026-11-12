@@ -63,6 +63,15 @@ RESEARCH_STAGE = {
     "vote": ("Голосование", "модели ранжируют варианты и выбирают лучший по каждому подвопросу"),
     "verdict": ("Готовим вывод", "председатель собирает итог: известно, спорно, неизвестно — с источниками"),
 }
+CREATIVE_STAGE = {
+    "framing": ("Уточняем задачу", "председатель уточняет задачу, ограничения и критерии оригинальности"),
+    "proposal": ("Идеи", "у каждой модели своя творческая роль: много идей по разным направлениям"),
+    "critique": ("Сильные идеи и риски", "модели называют лучшие идеи у других, риски и как усилить"),
+    "revision": ("Ремикс", "авторы берут лучшее своё и чужое и добавляют новые идеи"),
+    "vote": ("Голосование", "по силе лучших идей, а не по «безопасности»"),
+    "verdict": ("Шорт-лист", "председатель собирает лучшие, смелые и гибридные идеи из всех вариантов"),
+}
+MODE_STAGE = {"research": RESEARCH_STAGE, "creative": CREATIVE_STAGE}
 COMMANDS = [
     ("ask", "задать вопрос совету (в группе)"),
     ("settings", "режим, модели, проверка фактов, демо"),
@@ -220,8 +229,8 @@ class Progress:
         if self.demo:
             meta += " · демо"
         lines = [head, f"❓ {esc(short_title(self.question))}", f"<i>{esc(meta)}</i>", ""]
-        plan = [(k, RESEARCH_STAGE[k][0] if self.mode == "research" and k in RESEARCH_STAGE else n)
-                for k, n in STAGES if k not in self.skipped()]
+        names = MODE_STAGE.get(self.mode, {})
+        plan = [(k, names[k][0] if k in names else n) for k, n in STAGES if k not in self.skipped()]
         done = sum(1 for k, _ in plan if k in self.done_stages)
         idx = next((i for i, (k, _) in enumerate(plan) if k == self.stage), None)
         bar = "▰" * done + "▱" * (len(plan) - done)
@@ -234,8 +243,7 @@ class Progress:
             stage_secs = int(time.monotonic() - self.stage_started)
             lines.append(f"{bar} Этап {idx + 1} из {len(plan)}: <b>{esc(dict(plan)[self.stage])}</b>")
             round_ = re.search(r"раунд (\d+)/(\d+)", self.stage_title or "")
-            hint = (RESEARCH_STAGE[self.stage][1] if self.mode == "research" and self.stage in RESEARCH_STAGE
-                    else STAGE_HINT.get(self.stage, ""))
+            hint = names[self.stage][1] if self.stage in names else STAGE_HINT.get(self.stage, "")
             if round_ and int(round_.group(2)) > 1:
                 hint = f"раунд {round_.group(1)} из {round_.group(2)} — {hint}"
             lines.append(f"<i>{esc(hint)} · готово {ready} из {len(self.work)} · {_fmt_secs(stage_secs)}</i>")

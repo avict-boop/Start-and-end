@@ -40,7 +40,17 @@ const RESEARCH_STAGE = {
   vote: ["Голосование", "модели ранжируют варианты и выбирают лучший по каждому подвопросу"],
   verdict: ["Готовим вывод", "председатель собирает итог: известно, спорно, неизвестно — с источниками"],
 };
-const stageHint = (s, key) => (s.mode === "research" && RESEARCH_STAGE[key] ? RESEARCH_STAGE[key][1] : STAGE_HINT[key]) || "";
+// «Креатив»: идеи, критика «да, и…», ремикс, шорт-лист
+const CREATIVE_STAGE = {
+  framing: ["Уточняем задачу", "председатель уточняет задачу, ограничения и критерии оригинальности"],
+  proposal: ["Идеи", "у каждой модели своя творческая роль: 12–20 идей по разным направлениям, три смелые"],
+  critique: ["Сильные идеи и риски", "модели называют лучшие идеи у других, риски (созвучия, похожие бренды) и как усилить"],
+  revision: ["Ремикс", "авторы берут лучшее своё и чужое и добавляют новые идеи"],
+  vote: ["Голосование", "модели ранжируют варианты по силе лучших идей, а не по «безопасности»"],
+  verdict: ["Шорт-лист", "председатель собирает лучшие, смелые и гибридные идеи из всех вариантов"],
+};
+const MODE_STAGE = { research: RESEARCH_STAGE, creative: CREATIVE_STAGE };
+const stageHint = (s, key) => ((MODE_STAGE[s.mode] || {})[key] ? MODE_STAGE[s.mode][key][1] : STAGE_HINT[key]) || "";
 const MODE_HINT = {
   debate: "Подробное обсуждение: решения, критика, доработка, голосование.",
   quick: "Быстрый ответ: решения и голосование, без критики.",
@@ -1359,6 +1369,7 @@ function stagePlan(s) {
       plan.splice(plan.findIndex(([k]) => k === "revision") + 1, 0, ["recheck", "Проверка новых утверждений"]);
     return plan.map(([k, t]) => [k, RESEARCH_STAGE[k] ? RESEARCH_STAGE[k][0] : t]);
   }
+  if (s.mode === "creative") return plan.map(([k, t]) => [k, CREATIVE_STAGE[k] ? CREATIVE_STAGE[k][0] : t]);
   if (s.stageTitle.factcheck || s.facts || s.factPlanned) plan.splice(plan.length - 1, 0, ["factcheck", STAGE_NAME.factcheck]);
   return plan;
 }
@@ -1701,7 +1712,7 @@ function renderActivity(s) {
     const [ready, total] = readyCount(s);
     const stageSec = s.stageStart ? (now - s.stageStart) / 1000 : 0;
     const who = ["framing", "verdict"].includes(s.stage) ? `председатель ${esc(s.chair || "")}` : total ? `готово ${ready} из ${total}` : "";
-    $("stageNow").innerHTML = `<b>Этап ${idx + 1} из ${plan.length}: ${esc(STAGE_NAME[s.stage] || s.stage)}</b> <span class="muted">· ${who ? `${who} · ` : ""}${fmtSec(stageSec)}</span>`;
+    $("stageNow").innerHTML = `<b>Этап ${idx + 1} из ${plan.length}: ${esc((plan[idx] || [])[1] || STAGE_NAME[s.stage] || s.stage)}</b> <span class="muted">· ${who ? `${who} · ` : ""}${fmtSec(stageSec)}</span>`;
     bar.classList.toggle("indeterminate", false);
     const part = total ? ready / total : 0;
     $("stageBar").style.width = `${Math.max(4, Math.round(((doneN + part) / plan.length) * 100))}%`;
@@ -1770,13 +1781,16 @@ function renderVerdict(s) {
   $("whySec").hidden = !v;
   if (!v) return;
   const p = s.proposals[v.winner];
-  $("vTitle").textContent = s.mode === "research" ? "Итог исследования" : (p && p.title ? p.title : `Вариант ${v.winner}`);
+  $("vTitle").textContent = s.mode === "research" ? "Итог исследования" : s.mode === "creative" ? "Шорт-лист идей"
+    : (p && p.title ? p.title : `Вариант ${v.winner}`);
   const row = s.tally && s.tally.find((r) => r.label === v.winner);
   const firsts = row && row.ballots ? `${row.first_places} из ${row.ballots} ${plural(row.ballots, "голоса", "голосов", "голосов")} за первое место` : "";
   if (s.mode === "research") {
     const L = s.ledger && s.ledger.claims ? s.ledger.claims.length : 0;
     $("vSub").textContent = [`ответ по ${(s.subq || []).length || "—"} подвопросам`, L ? "" : "поиск по источникам не проводился"].filter(Boolean).join(" · ");
     $("vSub").title = `общий каркас итога — вариант ${v.winner}`;
+  } else if (s.mode === "creative") {
+    $("vSub").textContent = [`из идей всех ${Object.keys(s.proposals || {}).length} вариантов`, `лучший набор — вариант ${v.winner}`, firsts].filter(Boolean).join(" · ");
   } else if (v.acceptable === false) {
     $("vTitle").textContent = "Ни один вариант не подходит";
     $("vSub").textContent = [`лидер сравнения — вариант ${v.winner}${p && p.title ? ` «${p.title}»` : ""}, но он не рекомендован`, firsts].filter(Boolean).join(" · ");

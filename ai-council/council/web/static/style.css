@@ -262,7 +262,15 @@ main { min-width: 0; padding: 2rem clamp(1rem, 3vw, 2.5rem) 3rem; max-width: 118
 .mode-txt b { display: block; font-size: 1rem; }
 .mode-txt small { display: block; color: var(--muted); font-size: .87rem; line-height: 1.4; }
 .mode-meta { font-size: .8rem; color: var(--muted); text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; line-height: 1.4; }
-@media (min-width: 1400px) { .modes { grid-template-columns: repeat(2, 1fr); } .mode-card { grid-template-columns: auto minmax(0, 1fr); align-items: start; } .mode-meta { grid-column: 2; text-align: left; } }
+/* режимы — в две колонки, как только колонке вопроса хватает ширины (по ширине колонки, а не экрана: справа может
+   стоять панель «Состав и параметры»); нечётная последняя карточка — во всю ширину */
+.compose-main { container-type: inline-size; }
+@container (min-width: 600px) {
+  .modes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .mode-card { grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+  .mode-meta { grid-column: 2; text-align: left; }
+  .mode-card:last-of-type:nth-of-type(odd) { grid-column: 1 / -1; }
+}
 #optionsField { margin-top: 1rem; }
 
 .params { padding: 0; }
