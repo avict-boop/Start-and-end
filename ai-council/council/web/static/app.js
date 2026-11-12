@@ -1984,6 +1984,13 @@ function tick() {
     : Math.round((Date.now() - current.startedAt) / 1000);
   $("sTime").textContent = secs >= 60 ? `${Math.floor(secs / 60)} мин ${Math.round(secs % 60)} с` : `${Math.round(secs)} с`;
   if (view === "session") renderActivity(current);
+  const s = current;
+  // сервер шлёт событие или «связь есть» каждые 10 с; 30 с тишины — соединение зависло: открываем заново
+  if (stream && !s.done && !s.error && !s.paused && Date.now() - (s.lastMsg || 0) > 30000
+      && Date.now() - (s.reconnectAt || 0) > 30000) {
+    s.reconnectAt = Date.now();
+    connect(s, s.id, s.lastId || "");
+  }
 }
 
 /* ------------------------------------------------------------ поток событий */
@@ -2011,11 +2018,20 @@ function openSession(id) {
   render(s);
   window.scrollTo({ top: 0 });
   timer = setInterval(tick, 1000);
-  stream = new EventSource(`/api/sessions/${encodeURIComponent(id)}/events`);
+  connect(s, id, "");
+}
+
+// Поток событий заседания. Браузер сам переподключается, только если соединение закрылось; если оно «висит»
+// открытым и ничего не передаёт (прокси, VPN, мобильная сеть), — переоткрываем сами с последнего события (tick)
+function connect(s, id, after) {
+  if (stream) { stream.close(); stream = null; }
+  stream = new EventSource(`/api/sessions/${encodeURIComponent(id)}/events` + (after ? `?after=${encodeURIComponent(after)}` : ""));
+  s.lastMsg = Date.now();
   stream.onmessage = (msg) => {
     if (current !== s) return;
     const ev = JSON.parse(msg.data);
     s.lastMsg = Date.now();
+    if (msg.lastEventId) s.lastId = msg.lastEventId;
     apply(s, ev);
     if (ev.type === "ping") return;
     scheduleRender();

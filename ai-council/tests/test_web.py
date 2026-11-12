@@ -355,3 +355,14 @@ def test_event_ids_from_previous_run_do_not_stall_the_stream(client):
         with client.stream("GET", f"/api/sessions/{sid}/events", headers={"Last-Event-ID": stale}) as r2:
             got = [json.loads(l[6:]) for l in r2.iter_lines() if l.startswith("data: ")]
         assert [e["type"] for e in got] == [e["type"] for e in events], stale
+
+
+def test_page_can_reopen_stream_after_last_event(client):
+    # страница сама переоткрывает зависший поток: ?after=<номер> — только продолжение, без повторов
+    r = client.post("/api/sessions", json={"question": "Как назвать кофейню?", "mock": True, "rounds": 1,
+                                           "members": ["a", "b", "c"], "chair": "b", "devil_advocate": ""})
+    sid = r.json()["id"]
+    events = read_events(client, sid)
+    with client.stream("GET", f"/api/sessions/{sid}/events?after=0:{len(events) - 2}") as r2:
+        tail = [json.loads(l[6:]) for l in r2.iter_lines() if l.startswith("data: ")]
+    assert [e["type"] for e in tail] == ["done"]

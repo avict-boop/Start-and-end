@@ -1035,7 +1035,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         # переподключении присылает номер из прошлого запуска: тогда отдаём всё с начала, а не ждём, пока новых
         # событий наберётся столько же (12.11 страница так висела на «нет связи», хотя заседание шло)
         epoch = str(int((st.checkpoint.spec.get("resumes") if st and st.checkpoint else 0) or 0))
-        last = request.headers.get("last-event-id", "")
+        # браузер при переподключении шлёт Last-Event-ID; страница, переоткрывающая зависший поток сама, — ?after=
+        last = request.headers.get("last-event-id", "") or request.query_params.get("after", "")
         run_id, _, num = last.rpartition(":")
         try:
             start = int(num) + 1 if last and run_id in (epoch, "") else 0
@@ -1048,6 +1049,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             return f"id: {epoch}:{i}\ndata: {json.dumps(ev, ensure_ascii=False)}\n\n"
 
         async def gen():
+            # первая строка — комментарий ~2 КБ: промежуточные буферы (прокси, сжатие) сразу пропускают поток дальше
+            yield ":" + " " * 2048 + "\n\n"
             if st is None:
                 for i, ev in enumerate(static_events):
                     if i >= start:
@@ -1067,7 +1070,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     yield f"data: {json.dumps({'type': 'ping', 'server_time': time.time()})}\n\n"
 
         return StreamingResponse(gen(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+                                 headers={"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"})
 
     @app.post("/api/sessions/{sid}/cancel")
     async def cancel(sid: str) -> dict[str, Any]:
