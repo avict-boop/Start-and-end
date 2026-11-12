@@ -309,7 +309,8 @@ def test_dead_links_do_not_confirm_and_are_reported():
     assert not any(c["status"] == "confirmed" for c in led["claims"])  # мёртвые ссылки ничего не подтверждают
     assert any("не открываются" in " ".join(c.get("notes") or []) for c in led["claims"])
     assert not res.verdict.known  # в «известно» опереться не на что
-    assert ("links", {"ok": 0, "dead": len(led["evidence"]), "blocked": 0, "error": 0}) in events
+    lk = next(d for e, d in events if e == "links")
+    assert {k: lk[k] for k in ("ok", "dead", "blocked", "error")} == {"ok": 0, "dead": len(led["evidence"]), "blocked": 0, "error": 0}
 
 
 def test_blocked_links_keep_confirmation():

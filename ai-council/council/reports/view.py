@@ -400,8 +400,15 @@ class View:
             return ""
         c = self.claim_counts
         parts = [f"{self.CLAIM_SIGN[k]} {c[k]}" for k in self.CLAIM_WORD if c.get(k)]
-        return (f"проверено {len(claims)} {_plural(len(claims), 'утверждение', 'утверждения', 'утверждений')}: "
+        line = (f"проверено {len(claims)} {_plural(len(claims), 'утверждение', 'утверждения', 'утверждений')}: "
                 + " · ".join(parts) + f"; источников {len(self.evidence)}")
+        lk = self.ledger.get("links") or {}
+        if lk:  # проверка по источникам: ссылки и цитаты на самих страницах
+            line += (f"; ссылок открылось {lk.get('ok', 0)} из {sum(lk.get(k, 0) for k in ('ok', 'dead', 'blocked', 'error'))}"
+                     f"; цитат найдено на страницах {lk.get('quotes_found', 0)} из {lk.get('quotes_checked', 0)}"
+                     + (f" (засчитано по цитате {lk['rescued']})" if lk.get("rescued") else "")
+                     + (f" (снято — цитаты на странице нет: {lk['dropped']})" if lk.get("dropped") else ""))
+        return line
 
     def research_list(self, key: str) -> list[dict[str, Any]]:
         return [x for x in (self.verdict.get(key) or []) if isinstance(x, dict)]

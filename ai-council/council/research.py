@@ -1204,6 +1204,17 @@ def apply_links(ledger: dict[str, Any], results: dict[str, dict[str, Any]], quot
         if c.get("status") == "confirmed" and ev and all(by_id[i] == "dead" for i in ev):
             c["status"] = "unclear"
             c.setdefault("notes", []).append("ссылки на источники не открываются (страница не найдена)")
+    # сводка проверки по источникам — видно, работает ли она: сколько цитат искали на страницах и сколько нашли,
+    # сколько утверждений засчитано по найденной цитате и сколько снято, потому что цитаты на странице нет
+    hits = [h for e in ledger.get("evidence", []) for h in (e.get("quote_hits") or {}).values() if h is not None]
+    claims = ledger.get("claims", [])
+    counts["quotes_checked"] = len(hits)
+    counts["quotes_found"] = sum(1 for h in hits if h)
+    counts["pdf"] = sum(1 for e in ledger.get("evidence", []) if (results.get(e.get("url", "")) or {}).get("pdf"))
+    counts["rescued"] = sum(1 for c in claims if not c.get("duplicate_of")
+                            and any("нашла на самой странице" in n for n in c.get("notes") or []))
+    counts["dropped"] = sum(1 for c in claims if not c.get("duplicate_of")
+                            and any("на странице источника не найдена" in n for n in c.get("notes") or []))
     ledger["links"] = counts
     return ledger
 

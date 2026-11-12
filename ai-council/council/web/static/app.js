@@ -1515,7 +1515,12 @@ function renderResearch(s) {
     ? { ...c, notes: [`то же утверждение, что ${c.duplicate_of} — проверено вместе`, ...(c.notes || [])] } : c)),
     ...((s.ledger && s.ledger.deferred) || []).map((d) => ({ id: (d.ids || []).join(", "), text: d.text, status: "not_public", notes: [d.how_to_check], evidence: [] }))];
   if (claims.length) {
-    h += `<details class="sources"><summary>Проверка утверждений и источники (${claims.length} утв., ${Object.keys(ev).length} источн.)</summary><ul class="claims">${claims.map((c) => {
+    const lk = (s.ledger && s.ledger.links) || null;
+    const all = lk ? ["ok", "dead", "blocked", "error"].reduce((a, k) => a + (lk[k] || 0), 0) : 0;
+    h += `<details class="sources"><summary>Проверка утверждений и источники (${claims.length} утв., ${Object.keys(ev).length} источн.)</summary>`
+      + (lk ? `<p class="small muted check-sum">Ссылок открылось <b>${lk.ok || 0}</b> из ${all} · цитат найдено на самих страницах <b>${lk.quotes_found || 0}</b> из ${lk.quotes_checked || 0}`
+        + `${lk.rescued ? ` · засчитано по найденной цитате: ${lk.rescued}` : ""}${lk.dropped ? ` · снято — цитаты на странице нет: ${lk.dropped}` : ""}${lk.pdf ? ` · PDF прочитано: ${lk.pdf}` : ""}</p>` : "")
+      + `<ul class="claims">${claims.map((c) => {
       const [k, t] = CLAIM_BADGE[c.status] || CLAIM_BADGE.not_checked;
       return `<li><span class="badge ${k}">${t}</span> <span class="lbl">${esc(c.id)}</span> ${inline(c.text)} ${refs(c.evidence)}${c.quote_found ? ' <span class="badge ok" title="Дословная фраза, которую привёл поиск, найдена на странице источника">цитата найдена на странице</span>' : ""}${(c.notes || []).length ? `<div class="muted small">${c.notes.map(inline).join(" · ")}</div>` : ""}</li>`;
     }).join("")}</ul><ol class="srcs">${Object.values(ev).map((e) => `<li><b>${esc(e.id)}</b> <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title || e.url)}</a> <span class="muted small">${esc([e.publisher, e.date].filter(Boolean).join(", "))}${e.search_returned === false ? " · нет в результатах поиска" : ""}</span>${LINK_BADGE[e.link] || ""}</li>`).join("")}</ol></details>`;
