@@ -68,7 +68,8 @@ class Board:
     req: list[str] | None
     context: str | None
     mode: str
-    web: bool = True                                          # участники с поиском ищут (в «Креативе» — нет)
+    web: bool = True                                          # участники с поиском ищут
+    web_note: str = ""                                        # своё задание для поиска в режиме (иначе общее)
     notes: dict[str, str] = field(default_factory=dict)       # добавка режима к заданию этапа
     persona: dict[str, dict[str, str]] = field(default_factory=dict)  # роль автора (подставляется в задание)
     authors: dict[str, str | None] = field(default_factory=dict)
@@ -130,7 +131,8 @@ async def propose(c: Council, b: Board) -> None:
     got = await c._parallel(
         "proposal",
         {m.name: c._ask(m, "proposal", prompts.proposal(b.refined, b.criteria, b.context, b.question, c.compact, req=b.req)
-                        + b.note("proposal", m.name) + (prompts.WEB_NOTE if m.web_search and b.web else ""), Proposal,
+                        + b.note("proposal", m.name) + ((b.web_note or prompts.WEB_NOTE) if m.web_search and b.web else ""),
+                        Proposal,
                         check=lambda p: check_substance(p, compact=bool(c.compact)),
                         web_search=m.web_search and b.web)
          for m in proposers},
@@ -196,7 +198,7 @@ async def revise(c: Council, b: Board, title: str) -> None:
             m, "revision",
             prompts.revision(b.refined, b.criteria, own, b.proposals[own], feedback, b.others(m.name), b.question,
                              c.compact, req=b.req) + b.note("revision", m.name)
-            + (prompts.WEB_NOTE if m.web_search and b.web else ""),
+            + ((b.web_note or prompts.WEB_NOTE) if m.web_search and b.web else ""),
             Revision,
             web_search=m.web_search and b.web,
             check=lambda r, prev=b.proposals[own]: check_substance(_normalize_revision(r), previous=prev,

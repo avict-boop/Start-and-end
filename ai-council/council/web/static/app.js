@@ -46,7 +46,7 @@ const MODE_HINT = {
   quick: "Быстрый ответ: решения и голосование, без критики.",
   evaluate: "Выбор из ваших вариантов: совет их обсуждает и выбирает лучший.",
   research: "Исследование: подвопросы и углы зрения, проверка утверждений всех вариантов поиском, итог «известно / спорно / неизвестно» с источниками.",
-  creative: "Креатив: у каждой модели своя творческая роль, много смелых идей, критика «да, и…», ремикс и шорт-лист из всех вариантов. Без поиска и проверки фактов.",
+  creative: "Креатив: у каждой модели своя творческая роль, много смелых идей, критика «да, и…», ремикс и шорт-лист из всех вариантов. Поиск по желанию — изучить конкурентов и существующие решения; проверки фактов нет.",
 };
 const MODE_NAME = { debate: "Подробное обсуждение", quick: "Быстрый ответ", evaluate: "Выбор из вариантов", research: "Исследование", creative: "Креатив" };
 
@@ -237,7 +237,7 @@ function setMode(m) {
   mode = m;
   if (config && !webTouched && was !== m && $("members").children.length) { lineup.web = defaultWeb(); renderWebMembers(); }
   if ($("depthField")) $("depthField").hidden = m !== "research";
-  if ($("freshField")) $("freshField").hidden = m === "evaluate" || m === "creative";
+  if ($("freshField")) $("freshField").hidden = m === "evaluate";
   for (const r of $("modeSeg").querySelectorAll("input[name=mode]")) r.checked = r.value === m;
   $("roundsField").hidden = m !== "debate";
   $("optionsField").hidden = m !== "evaluate";
@@ -486,7 +486,7 @@ function payload() {
     members: selectedMembers(),
     models: Object.keys(lineup.models).length ? lineup.models : null,
     extra_members: lineup.extra.length ? lineup.extra : null,
-    web_search: mode === "evaluate" || mode === "creative" ? [] : [...lineup.web].filter((n) => selectedMembers().includes(n)),
+    web_search: mode === "evaluate" ? [] : [...lineup.web].filter((n) => selectedMembers().includes(n)),
     chair: $("chair").value || null,
     devil_advocate: $("devil").value,
     chair_proposes: $("chairProposes").checked,

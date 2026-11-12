@@ -51,8 +51,10 @@ MODE_PICK_RULES = {
                  "(d) the mode raises temperature, but some reasoning models (e.g. OpenAI o-series / GPT reasoning) "
                  "ignore it — mention that in the reason if you pick one; (e) the chair needs taste and reliable JSON to "
                  "assemble a shortlist from all proposals; a huge max_out is NOT needed (the answer is a shortlist); "
-                 "(f) a devil's advocate is useful as a provocateur; (g) no web search for anyone — set "
-                 "\"web_search\": false for all picks; (h) a cheaper lineup is usually fine: creativity does not scale "
+                 "(f) a devil's advocate is useful as a provocateur; (g) web search: only when the task asks to compare "
+                 "with existing names, brands or competitors, study current approaches or trends — then give it to "
+                 "one or two authors (they study the landscape), the rest stay independent so ideas do not anchor on "
+                 "what search found; otherwise no search; (h) a cheaper lineup is usually fine: creativity does not scale "
                  "with price."),
 }
 
@@ -400,8 +402,6 @@ def finalize(advice: Advice, cands: list[dict[str, Any]], cfg: CouncilConfig, mo
              for a in advice.avoid if a.model not in seen]
     words = advice.research_words if advice.research_words and 300 <= advice.research_words <= 5000 else None
     final_mode = advice.mode if advice.mode in MODES else mode
-    if final_mode == "creative":  # в «Креативе» поиска нет — не обещаем его в составе
-        picks = [p.model_copy(update={"web_search": False}) if p.web_search else p for p in picks]
     rs, why = clean_research(advice.research_settings, advice.research_why, cfg) if final_mode == "research" else ({}, {})
     if words and "max_words" not in rs and words != cfg.research.max_words:
         rs["max_words"] = words
@@ -440,6 +440,8 @@ _RESEARCH_RE = re.compile(r"исследу|исследован|рынок|ры�
                           r"обзор|research|market|compare|find", re.I)
 _CREATIVE_RE = re.compile(r"придума|назван|нейминг|наименован|слоган|концепц|креатив|идеи для|идею для|"
                           r"brand name|naming|slogan|tagline|brainstorm|мозгов[а-я]* штурм", re.I)
+_LANDSCAPE_RE = re.compile(r"сравни|конкурент|существующ|аналог|рынк|рынок|тренд|подход|как у других|изучи|"
+                           r"competitor|existing|trend|benchmark", re.I)
 _FRESH_RE = re.compile(r"актуальн|текущ|сейчас|сегодня|202\d|последн|новост|цен[аыу]|курс|price|latest|current", re.I)
 
 
@@ -451,6 +453,8 @@ def analyse(question: str, attachments: list[dict[str, Any]]) -> TaskAnalysis:
     needs = []
     if _FRESH_RE.search(question):
         needs.append("свежие данные из интернета")
+    if creative and _LANDSCAPE_RE.search(question):
+        needs.append("сравнить с существующим")
     if sum(int(a.get("chars") or 0) for a in attachments) > 60_000:
         needs.append("длинные документы")
     if any(a.get("kind") == "image" for a in attachments):
@@ -533,7 +537,8 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
                 else "Председатель: самый большой предел ответа и рассуждает — нужно для длинного итога. ")
         picks = [p.model_copy(update={"role": "chair", "why": (lead + p.why).strip()})
                  if p is chair else p for p in picks]
-    if "свежие данные из интернета" in task.needs and rec_mode not in ("research", "creative"):
+    if ("свежие данные из интернета" in task.needs or (creative and "сравнить с существующим" in task.needs)) \
+            and rec_mode != "research":
         for p in picks:
             if p.role == "member":
                 picks = [x.model_copy(update={"web_search": True}) if x is p else x for x in picks]
@@ -543,7 +548,8 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
     caveats = ["Подбор по правилам: только каталог OpenRouter и ваша история, без анализа вопроса моделью и без обзоров."]
     if creative:
         caveats.append("Креатив: по одной модели от каждого разработчика ради разнообразия идей; глубина рассуждений "
-                       "не главное, поиск ни у кого не включён. Насколько модель изобретательна, каталог не говорит — "
+                       "не главное. Поиск — одному автору, если нужно сравнить с существующим или изучить подходы; "
+                       "остальные придумывают независимо. Насколько модель изобретательна, каталог не говорит — "
                        "смотрите на свои заседания в этом режиме.")
     missing = [m.name for m in cfg.members if m.enabled and not any(provider(c["id"]) == provider(m.model) for c in cands)]
     if missing:

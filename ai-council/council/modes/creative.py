@@ -8,7 +8,9 @@
 - доработка — ремикс: своё лучшее + сильное у других + новые идеи из критики;
 - голосование — по силе лучших идей, а не по «безопасности» среднего;
 - итог — шорт-лист из ВСЕХ вариантов (а не только победителя): лучшие, смелые, гибриды и что проверить;
-- без проверки фактов и поиска: проверять здесь нечего, а платить пришлось бы.
+- без проверки фактов; поиск — по выбору («Свежие данные»): изучить конкурентов, существующие названия и подходы,
+  чтобы не повторить чужое и найти свободное место. Ищут один-два автора, остальные придумывают независимо —
+  иначе все отталкиваются от одного и того же найденного.
 """
 from __future__ import annotations
 
@@ -85,6 +87,14 @@ idea with its proposal label). "final_answer" structure:
 6. «Следующий шаг» — e.g. test 3-5 favourites with the audience, or run «Сравнить ваши варианты» on the shortlist.
 Keep the user's constraints and requirements."""
 
+WEB_NOTE = """
+
+You have web search in this step. Use it to study the landscape, not to copy it: look up competitors, existing names,
+slogans and concepts in this category and market, and approaches others have taken. Then
+- avoid ideas that already exist or sound too close to existing brands (name them as a risk if you keep a close one);
+- name 2-4 patterns or clichés you found in the market and the white space your ideas use instead;
+- cite the URLs of what you looked at in "sources". Your ideas must still be original."""
+
 # температура «творческих» этапов (если у участника своя температура не задана выше)
 PROPOSAL_TEMPERATURE = 1.0
 REVISION_TEMPERATURE = 0.9
@@ -104,7 +114,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     b = await common.frame(c, question, criteria, context, "creative", note=FRAMING_NOTE,
                            default_criteria=["Оригинальность", "Запоминаемость", "Соответствие задаче",
                                              "Потенциал развития"])
-    b.web = False  # поиск в «Креативе» не нужен
+    b.web_note = WEB_NOTE  # поиск у тех, кому его включили: изучить существующее и найти свободное место
     import zlib
     roles = roles_for([m.name for m in c.cfg.active_members],
                       c.seed if c.seed is not None else zlib.crc32(question.encode("utf-8")))

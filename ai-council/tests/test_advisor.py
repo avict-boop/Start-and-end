@@ -269,9 +269,13 @@ def test_rules_recommend_creative_mode_for_naming_without_search():
     cands = A.candidates(c, CATALOG)
     adv = A.finalize(A.rule_advice(q, "debate", c, cands, {}, []), cands, c, "debate")
     assert adv.mode == "creative" and adv.task.kind == "творческая задача"
-    assert not any(p.web_search for p in adv.picks)  # в «Креативе» поиска нет, даже если в вопросе «актуальные»
+    assert sum(p.web_search for p in adv.picks) == 1  # «актуальные тренды» — ищет один автор, остальные независимо
     assert len({A.provider(p.model) for p in adv.picks}) == len(adv.picks)  # по одной модели от разработчика
     assert any("Креатив" in x for x in adv.caveats) and "Креатив" in adv.mode_why
+    plain = A.finalize(A.rule_advice("Придумай название для кофейни у моря", "debate", c, cands, {}, []), cands, c, "debate")
+    assert plain.mode == "creative" and not any(p.web_search for p in plain.picks)
+    comp = A.finalize(A.rule_advice("Придумай название, сравни с конкурентами", "debate", c, cands, {}, []), cands, c, "debate")
+    assert sum(p.web_search for p in comp.picks) == 1
     # советнику-модели передаётся правило подбора для «Креатива»
     p = A.advise_prompt(question=q, mode="creative", attachments=[], followup=False, budget=3, current={},
                         cands=cands, history={}, dossiers={}, language="Russian", research_words=1400,

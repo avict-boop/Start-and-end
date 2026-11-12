@@ -682,6 +682,8 @@ def test_creative_mode_roles_remix_shortlist_without_fact_check():
     props = [x for x in c.seen if x[0] == "proposal"]
     roles = {next(r for r, _ in __import__("council.modes.creative", fromlist=["ROLES"]).ROLES if r in p[3]) for p in props}
     assert len(roles) == len(props)  # роли разные
-    assert all(t >= 1.0 and not w for _, t, w, _ in props)
+    assert all(t >= 1.0 for _, t, _, _ in props)
+    # поиск — у тех, кому включён: изучить существующее, а не копировать
+    assert all(w and "study the landscape" in p for _, _, w, p in props)
     assert any("yes, and" in x[3] for x in c.seen if x[0] == "critique")
     assert any("SHORTLIST" in x[3] for x in c.seen if x[0] == "verdict")
