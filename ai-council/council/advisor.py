@@ -282,24 +282,24 @@ def advise_prompt(*, question: str, mode: str, attachments: list[dict[str, Any]]
                             if d.get(k)}
         rows.append(r)
     modes = "\n".join(f"- {k}: {v}" for k, v in MODE_ROLES.items())
-    pick_rules = "\n".join(f"- {k}: {v}" for k, v in MODE_PICK_RULES.items())
+    pick_rules = f"- {mode}: {MODE_PICK_RULES.get(mode, MODE_PICK_RULES['debate'])}"
     atts = "; ".join(f"{a.get('name', '')} ({a.get('kind', '')}, ~{a.get('chars', 0)} chars)" for a in attachments) or "none"
     q = question if len(question) <= question_chars else question[:question_chars] + " …[truncated]"
     return f"""You advise a user of an "AI council" app: several AI models answer one question, critique each other and vote;
-a chair frames the task and writes the final answer. Recommend the best lineup and mode for THIS question.
+a chair frames the task and writes the final answer. The user has already chosen the mode; do NOT suggest another
+mode. Recommend the best lineup (models, roles, web search) for THIS question in THE CHOSEN mode.
 
 User's question:
 <<<
 {q}
 >>>
 Attachments: {atts}. Follow-up to an earlier session: {"yes" if followup else "no"}. Budget limit: ${budget:g}.
-Mode chosen by the user now: {mode}. Current lineup: {json.dumps(current, ensure_ascii=False)}.
+Mode chosen by the user (fixed): {mode}. Current lineup: {json.dumps(current, ensure_ascii=False)}.
 
 Council modes and what each role needs:
 {modes}
-How to pick models for each mode (apply the rule of the mode you recommend):
+How to pick models in the chosen mode:
 {pick_rules}
-When the question asks to invent names, brands, slogans, concepts, campaign or product ideas, recommend "creative".
 
 Research mode details: proposal length target {research_words} words; claims are checked by a separate search model
 ({search_model}) in the arbitration step, so web search for authors is optional (useful for fresh numbers).
@@ -334,7 +334,7 @@ sessions: wins, average critic score, failures), reviews (web research about the
 
 Rules:
 1. First analyse the task: type, expected size of the work and of the final answer, special needs.
-2. Pick the mode that fits (the user can keep theirs) and explain why in one sentence.
+2. Keep the chosen mode "{mode}" — put it into "mode" unchanged; "mode_why" stays empty.
 3. Pick 4-6 models: exactly one "chair", optionally one "devil" (devil's advocate), the rest "member". Prefer
    different developers for diversity of views; prefer the stronger sibling (e.g. pro instead of flash) when the task
    is large or needs deep reasoning; prefer cheap and fast ones only for simple or quick tasks. Respect the budget.
@@ -343,7 +343,7 @@ Rules:
    "catalog" (facts above), "history" (user's sessions), "reviews" (the reviews field), "knowledge" (your own general
    knowledge — use it only when the data above says nothing, it may be outdated). Do not invent benchmark numbers.
 5. "avoid": models from the current lineup or the candidates that fit this task worse, with the reason.
-6. If the mode is research, put tuned settings into "research_settings" and a reason per setting into
+6. If the chosen mode is research, put tuned settings into "research_settings" and a reason per setting into
    "research_why" (same keys). Leave both empty for other modes or when the current values fit.
 7. "caveats": what you are unsure about (little data on a model, no history yet, etc.).
 8. First state a baseline in "baseline": the current lineup if it is valid; every deviation needs a benefit for this
@@ -401,11 +401,11 @@ def finalize(advice: Advice, cands: list[dict[str, Any]], cfg: CouncilConfig, mo
     avoid = [a.model_copy(update={"basis": [b for b in a.basis if b in BASIS] or ["knowledge"]})
              for a in advice.avoid if a.model not in seen]
     words = advice.research_words if advice.research_words and 300 <= advice.research_words <= 5000 else None
-    final_mode = advice.mode if advice.mode in MODES else mode
+    final_mode = mode if mode in MODES else (advice.mode if advice.mode in MODES else "debate")  # режим выбирает человек
     rs, why = clean_research(advice.research_settings, advice.research_why, cfg) if final_mode == "research" else ({}, {})
     if words and "max_words" not in rs and words != cfg.research.max_words:
         rs["max_words"] = words
-    return advice.model_copy(update={"picks": picks, "avoid": avoid, "caveats": notes, "mode": final_mode,
+    return advice.model_copy(update={"picks": picks, "avoid": avoid, "caveats": notes, "mode": final_mode, "mode_why": "",
                                      "research_words": rs.get("max_words"), "research_settings": rs,
                                      "research_why": why,
                                      "research_cost": {k: v for k, v in advice.research_cost.items() if k in rs}})
@@ -445,9 +445,9 @@ _LANDSCAPE_RE = re.compile(r"сравни|конкурент|существую�
 _FRESH_RE = re.compile(r"актуальн|текущ|сейчас|сегодня|202\d|последн|новост|цен[аыу]|курс|price|latest|current", re.I)
 
 
-def analyse(question: str, attachments: list[dict[str, Any]]) -> TaskAnalysis:
+def analyse(question: str, attachments: list[dict[str, Any]], mode: str = "") -> TaskAnalysis:
     n = len(question)
-    creative = bool(_CREATIVE_RE.search(question))
+    creative = mode == "creative" or (not mode and bool(_CREATIVE_RE.search(question)))
     research = bool(_RESEARCH_RE.search(question)) and not creative
     size = "large" if n > 2500 or (research and n > 800) else "medium" if n > 400 or research else "small"
     needs = []
@@ -473,10 +473,9 @@ def _sentence(t: str) -> str:
 def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[str, Any]],
                 history: dict[str, dict[str, Any]], attachments: list[dict[str, Any]]) -> Advice:
     """Подбор по правилам — только факты каталога и ваша история (без ключа, в демо, при сбое советника)."""
-    task = analyse(question, attachments)
+    task = analyse(question, attachments, mode)
     big = task.size == "large"
-    rec_mode = ("research" if task.kind == "исследование" and big and mode != "evaluate"
-                else "creative" if task.kind == "творческая задача" and mode in ("debate", "quick") else mode)
+    rec_mode = mode  # режим выбирает человек; советник подбирает модели под него
     creative = rec_mode == "creative"
     by_id = {c["id"]: c for c in cands}
     need_ctx = sum(int(a.get("chars") or 0) for a in attachments) // 3 + 20_000
@@ -574,11 +573,7 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
         if task.size == "small" and cfg.research.max_words > 1000:
             rs["max_words"] = 900
             rwhy["max_words"] = "вопрос узкий — короткие варианты дешевле и не теряют сути"
-    return Advice(task=task, mode=rec_mode, mode_why=("большая задача на поиск и сравнение — режим «Исследование»"
-                                                      if rec_mode == "research" and mode != "research"
-                                                      else "нужно придумать названия или идеи — режим «Креатив»: много "
-                                                           "смелых вариантов, ремикс и шорт-лист"
-                                                      if creative and mode != "creative" else "режим оставлен как выбран"),
+    return Advice(task=task, mode=rec_mode, mode_why="",
                   picks=picks, caveats=caveats, research_settings=rs, research_why=rwhy, research_cost=rcost,
                   research_words=rs.get("max_words"))
 

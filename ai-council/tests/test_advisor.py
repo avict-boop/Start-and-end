@@ -98,7 +98,8 @@ def test_overrides_reject_bad_members():
 def test_rules_pick_stronger_siblings_and_research_for_a_big_market_study():
     c = cfg()
     q = "Проведи исследование мирового рынка и найди производителей средств от гипергидроза. " * 20
-    adv = A.finalize(A.rule_advice(q, "debate", c, A.candidates(c, CATALOG), {}, []), A.candidates(c, CATALOG), c, "debate")
+    adv = A.finalize(A.rule_advice(q, "research", c, A.candidates(c, CATALOG), {}, []), A.candidates(c, CATALOG), c,
+                     "research")
     ids = {p.model: p for p in adv.picks}
     assert adv.mode == "research" and adv.task.size == "large"
     assert "deepseek/deepseek-v4-pro" in ids and "google/gemini-4-pro" in ids  # pro вместо flash
@@ -263,24 +264,28 @@ def test_light_models_are_detected_by_whole_words():
     assert is_light("google/gemini-2.0-flash-lite") and not is_light("x-ai/grok-4.7")
 
 
-def test_rules_recommend_creative_mode_for_naming_without_search():
+def test_rules_pick_for_creative_mode_without_changing_it():
     c = cfg()
     q = "Придумай название и слоган для новой линейки средств от потливости — актуальные тренды 2026"
     cands = A.candidates(c, CATALOG)
-    adv = A.finalize(A.rule_advice(q, "debate", c, cands, {}, []), cands, c, "debate")
-    assert adv.mode == "creative" and adv.task.kind == "творческая задача"
+    # режим не меняется: в «Подробном обсуждении» советник остаётся в нём, даже если вопрос творческий
+    assert A.finalize(A.rule_advice(q, "debate", c, cands, {}, []), cands, c, "debate").mode == "debate"
+    adv = A.finalize(A.rule_advice(q, "creative", c, cands, {}, []), cands, c, "creative")
+    assert adv.mode == "creative" and adv.task.kind == "творческая задача" and not adv.mode_why
     assert sum(p.web_search for p in adv.picks) == 1  # «актуальные тренды» — ищет один автор, остальные независимо
     assert len({A.provider(p.model) for p in adv.picks}) == len(adv.picks)  # по одной модели от разработчика
-    assert any("Креатив" in x for x in adv.caveats) and "Креатив" in adv.mode_why
-    plain = A.finalize(A.rule_advice("Придумай название для кофейни у моря", "debate", c, cands, {}, []), cands, c, "debate")
+    assert any("Креатив" in x for x in adv.caveats)
+    plain = A.finalize(A.rule_advice("Придумай название для кофейни у моря", "creative", c, cands, {}, []), cands, c,
+                       "creative")
     assert plain.mode == "creative" and not any(p.web_search for p in plain.picks)
-    comp = A.finalize(A.rule_advice("Придумай название, сравни с конкурентами", "debate", c, cands, {}, []), cands, c, "debate")
+    comp = A.finalize(A.rule_advice("Придумай название, сравни с конкурентами", "creative", c, cands, {}, []), cands, c,
+                      "creative")
     assert sum(p.web_search for p in comp.picks) == 1
     # советнику-модели передаётся правило подбора для «Креатива»
     p = A.advise_prompt(question=q, mode="creative", attachments=[], followup=False, budget=3, current={},
                         cands=cands, history={}, dossiers={}, language="Russian", research_words=1400,
                         search_model="x/y")
-    assert "DIVERSITY OF IMAGINATION" in p and "debate|quick|evaluate|research|creative" in p
+    assert "DIVERSITY OF IMAGINATION" in p and "do NOT suggest another" in p and "research: long context" not in p
 
 
 def test_history_is_split_by_mode():
