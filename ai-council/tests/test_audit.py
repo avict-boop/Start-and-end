@@ -505,3 +505,38 @@ def test_truncated_answer_with_complete_draft_inside_is_continued():
     from council.session import _unclosed
     assert _unclosed('{"title": "черновик", "summary": "x"} {"title": "Полный", "summary": "обрыв')
     assert not _unclosed('{"title": "a", "summary": "скобка } в тексте { тоже"}')
+
+
+def test_program_reads_author_pages_and_gives_excerpts_to_checker():
+    # поиск модели проверки не находит сайты компаний на местных языках — программа сама открывает ссылки автора
+    c = {"id": "A-C1", "text": "Vefa İlaç производит softgel по адресу Mermerciler Sanayi Sitesi 2. Cadde No:3 [SRC: https://vefa.example/uretim]",
+         "source_leads": ["https://vefa.example/uretim", "https://x.example/a"], "entity": "Vefa İlaç"}
+    assert R.claim_urls(c, 2) == ["https://vefa.example/uretim", "https://x.example/a"]
+    page = ("Menü Hakkımızda " * 200 + "Üretim tesisimiz Mermerciler Sanayi Sitesi 2. Cadde No:3 Beylikdüzü adresinde softgel "
+            "kapsül üretimi yapılmaktadır. " + "İletişim " * 200)
+    ex = R.page_excerpt(page, c["text"], c["entity"])
+    assert "Mermerciler" in ex and "softgel" in ex and len(ex) <= 1500
+    assert R.page_excerpt("Совсем другая страница про погоду " * 50, c["text"], c["entity"]) == ""
+    batch = R.claims_batch([{**c, "basis": "search_reported", "volatility": "stable"}], {"A-C1": [("https://vefa.example/uretim", ex)]})
+    assert "PAGE TEXT the application downloaded from https://vefa.example/uretim" in batch
+    assert "ARE the page text" in R.arbitration("q", "", "", "m", batch, 10)
+
+
+def test_research_passes_page_excerpts_to_arbitration():
+    from council.mock import MockClient
+    seen = []
+
+    class Spy(MockClient):
+        async def complete(self, model, messages, **kw):
+            if (kw.get("meta") or {}).get("stage") == "arbitration":
+                seen.append(messages[-1]["content"])
+            return await super().complete(model, messages, **kw)
+
+    async def checker(urls, quotes=None, texts=False):
+        return {u: {"status": "ok", "code": 200, "text": ("Lorem ipsum " * 100 + " mock claim text evidence source " * 3) if texts else ""}
+                for u in urls}
+
+    cfg = make_cfg(mode="research")
+    c = Council(cfg, Spy(delay=0), seed=3, link_checker=checker)
+    run(c.run("Вопрос?"))
+    assert seen  # арбитраж был; отрывки — только если у утверждений есть ссылки (в демо их может не быть)

@@ -416,6 +416,41 @@ async def check_links(sess: Council, R: Any, ledger: dict[str, Any], rc: Any) ->
         sess._emit("links", **ledger["links"])
 
 
+async def read_leads(sess: Council, R: Any, selected: list[dict[str, Any]]) -> dict[str, list[tuple[str, str]]]:
+    """Страницы, на которые сослались авторы: программа скачивает их сама (HTML и PDF) и отдаёт модели проверки
+    отрывки по каждому утверждению — её поиск часто не находит сайты компаний на местных языках."""
+    fc = sess.cfg.fact_check
+    if not (fc.read_leads and fc.lead_pages and sess.link_checker):
+        return {}
+    want = {c["id"]: R.claim_urls(c, fc.lead_pages) for c in selected}
+    urls = list(dict.fromkeys(u for us in want.values() for u in us))
+    if not urls:
+        return {}
+    cache = sess.page_cache
+    todo = [u for u in urls if u not in cache]
+    if todo:
+        sess._emit("links_check", count=len(todo))
+        try:
+            got = await sess.link_checker(todo, texts=True)
+        except TypeError:  # проверка ссылок без чтения текста (старый вариант, тесты)
+            got = {}
+        except Exception as e:  # noqa: BLE001 — не прочитали страницы: проверка идёт как раньше, поиском
+            log.warning("%sстраницы авторов не скачались: %s", sess._tag, e)
+            got = {}
+        for u, r in (got or {}).items():
+            cache[u] = (r or {}).get("text") or ""
+    pages: dict[str, list[tuple[str, str]]] = {}
+    for c in selected:
+        for u in want[c["id"]]:
+            ex = R.page_excerpt(cache.get(u, ""), c["text"], c.get("entity") or "")
+            if ex:
+                pages.setdefault(c["id"], []).append((u, ex))
+    read = sum(1 for u in urls if cache.get(u))
+    log.info("%sссылки авторов: открыто %d из %d, отрывки для %d утверждений", sess._tag, read, len(urls), len(pages))
+    sess._emit("leads_read", urls=len(urls), read=read, claims=len(pages))
+    return pages
+
+
 async def search(sess: Council, R: Any, question: str, as_of: str, scope: str, selected: list[dict[str, Any]], rc: Any,
                   stage: str, *, recheck: bool = False, missions: int | None = None) -> list[Any]:
     """Поисковые вызовы по пачкам утверждений: подтвердить и опровергнуть (второй поиск — другими запросами).
@@ -434,7 +469,8 @@ async def search(sess: Council, R: Any, question: str, as_of: str, scope: str, s
     n_missions = 1 if recheck else (missions or rc.missions)
     plan = [(i, chunk) for chunk in chunks for i in range(n_missions)]
     snippet = rc.snippet_rule != "off"
-    jobs = [sess._ask(checker, stage, R.arbitration(question, as_of, scope, R.MISSIONS[i], R.claims_batch(chunk),
+    pages = await read_leads(sess, R, selected)
+    jobs = [sess._ask(checker, stage, R.arbitration(question, as_of, scope, R.MISSIONS[i], R.claims_batch(chunk, pages),
                                                     per_chunk, snippet=snippet, recheck=recheck,
                                                     fetch=fc.fetch_pages),
                       R.EvidenceResult, meta={"mission": i + 1, "claims": [c["id"] for c in chunk], "research": True,

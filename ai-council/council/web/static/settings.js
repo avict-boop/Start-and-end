@@ -228,6 +228,7 @@ function renderSettings() {
           <div class="muted small">${modelInfo(fc.model)}</div></label>
         <label class="field"><span>Сколько лидеров проверять</span><input type="number" id="fTop" min="1" max="5" value="${fc.top}" ${ro}></label>
         <label class="field"><span>Утверждений на вариант</span><input type="number" id="fClaims" min="1" max="10" value="${fc.max_claims}" ${ro}></label>
+        <label class="field"><span>Ссылок автора открывает программа</span><input type="number" id="fLeads" min="0" max="5" value="${fc.read_leads === false ? 0 : (fc.lead_pages ?? 2)}" ${ro}><small class="hint">программа сама скачивает страницы, на которые сослался автор утверждения, и даёт модели проверки нужные отрывки — поиск модели часто не находит сайты компаний на турецком, китайском и других языках. Бесплатно, до пары минут; 0 — не открывать</small></label>
         <label class="field"><span>Страниц читать целиком</span><input type="number" id="fFetch" min="0" max="10" value="${fc.fetch_pages ?? 3}" ${ro}><small class="hint">модель проверки открывает страницу, а не довольствуется фрагментом выдачи (около $0,01 за страницу); 0 — не читать</small></label>
       </div>
       <div class="row2" style="margin-top:.4rem"><button type="button" class="secondary" id="searchTest">Проверить поиск</button>
@@ -368,6 +369,7 @@ function bindSettings() {
   bindVal("fTop", (t) => { d.fact_check.top = num(t.value); });
   bindVal("fClaims", (t) => { d.fact_check.max_claims = num(t.value); });
   bindVal("fFetch", (t) => { d.fact_check.fetch_pages = num(t.value); });
+  bindVal("fLeads", (t) => { const n = num(t.value) || 0; d.fact_check.lead_pages = n; d.fact_check.read_leads = n > 0; });
   bindVal("sVoteReason", (t) => { d.vote_reasoning = t.value; });
   bindVal("sEngine", (t) => { d.search_engine = t.value; });
   bindVal("sLogLevel", (t) => { d.log_level = t.value; });

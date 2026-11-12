@@ -2101,10 +2101,16 @@ $("budgetBtn").addEventListener("click", raiseBudget);
 $("redoBtn").addEventListener("click", async () => {
   const s = current;
   if (!s) return;
-  const suggest = Math.ceil((Number(s.cost || 0) + Math.max(1, Number(config.budget || 1))) * 2) / 2;
+  // сбой на раннем этапе (не было варианта автора) — заново пройдут все этапы после него: стоит почти как заседание
+  const early = (s.failures || []).some((f) => ["framing", "proposal"].includes(f.stage));
+  const cost = Number(s.cost || 0);
+  const suggest = Math.ceil((cost * (early ? 2.1 : 1) + Math.max(1, Number(config.budget || 1)) * (early ? 0 : 1)) * 2) / 2;
   const ok = await ask({ title: "Доделать заседание?", ok: "Доделать",
     html: `<p>Ответы, которые модели уже дали (и за которые заплачено), возьмутся из сохранённого. Заново спросим только `
       + `шаги со сбоями и всё, что от них зависит (например, голосование и итог). Новый итог заменит этот.</p>`
+      + (early ? `<p class="alert warn small"><b>Сбой был на вариантах ответа.</b> Новый вариант меняет всё дальше: критику, проверку `
+        + `утверждений, доработку, голосование и итог придётся пройти заново — это стоит примерно как само заседание `
+        + `(≈ ${money(cost)} сверху). Если вариант одной модели не важен, доделывать не обязательно: итог уже есть.</p>` : "")
       + `<p class="muted small">Если сбой был из-за лимита ключа или баланса OpenRouter — сначала поднимите лимит или пополните баланс.</p>`
       + `<label class="field"><span>Бюджет заседания, $ (уже потрачено ${money(s.cost)})</span><input id="redoBudget" type="number" min="0.1" step="0.5" value="${suggest}" inputmode="decimal"></label>` });
   if (!ok) return;

@@ -637,6 +637,14 @@ FETCH_NOTE = ("You can open up to {n} pages in full with the web fetch tool. Ope
               "(material_seen = page) and can quote it verbatim. A snippet is not a reading.\n")
 
 
+LEADS_NOTE = """For some claims the application has already downloaded the page the author cited and included
+excerpts from it ("PAGE TEXT … from URL"). These excerpts ARE the page text: if they directly support or contradict the
+claim, use that URL as a source with "material_seen": "page" and a verbatim "quote" copied from the excerpt (the
+application checks it against the page). Judge strictly — an excerpt that only mentions the company is not a
+confirmation. Excerpts may be partial: search further for what they do not cover.
+"""
+
+
 def arbitration(question: str, as_of: str, scope: str, mission: str, claims_batch: str, max_evidence: int,
                 snippet: bool = True, recheck: bool = False, fetch: int = 0) -> str:
     return f"""Question (as of {as_of or 'today'}): {question}
@@ -647,7 +655,7 @@ Claims selected from anonymous proposals (contradictions, key numbers, fast-chan
 fixed — use them exactly:
 {claims_batch}
 
-{RECHECK_NOTE if recheck else ""}{FETCH_NOTE.format(n=fetch) if fetch else ""}Investigate EVERY claim. Look for evidence both for and against. Prefer primary sources for numbers, dates, laws and
+{RECHECK_NOTE if recheck else ""}{FETCH_NOTE.format(n=fetch) if fetch else ""}{LEADS_NOTE if "PAGE TEXT" in claims_batch else ""}Investigate EVERY claim. Look for evidence both for and against. Prefer primary sources for numbers, dates, laws and
 technical facts; check dates, geography, units and definitions. Where estimates differ, find the reason. Two articles
 restating one underlying report count as ONE source (mark the later one "secondary"). Record only sources your search
 actually returned; never invent a URL, date or quotation. If you saw only a snippet or a search summary, say so in
@@ -975,6 +983,7 @@ def prepare_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, 
         rc = by_id.get(c["id"].upper())
         c = {**c, "subquestions": list(rc.subquestions) if rc else [], "checkability": rc.checkability if rc else "public",
              "check_path": rc.check_path if rc else "", "dup_ids": [],
+             "source_leads": list(rc.source_leads) if rc else [],
              "decisive": bool(rc and rc.decisive) or bool(c.get("decisive_by_critics")),
              # «важное» (фрагмент выдачи не подтверждает, нужна страница): спорное, быстро меняющееся или решающее по
              # мнению двух и больше критиков. Одна метка автора — только выше в очереди: иначе важным становилось почти
@@ -1024,13 +1033,66 @@ def prepare_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, 
     return out, deferred
 
 
-def claims_batch(selected: list[dict[str, Any]]) -> str:
+_LEAD_URL_RE = re.compile(r"https?://[^\s\]\)>\"'<,;]+")
+
+
+def claim_urls(c: dict[str, Any], limit: int = 2) -> list[str]:
+    """Ссылки, на которые сослался автор утверждения: source_leads и [SRC: …] в тексте."""
+    urls = [u for u in c.get("source_leads") or [] if str(u).startswith(("http://", "https://"))]
+    urls += _LEAD_URL_RE.findall(c.get("text") or "")
+    out = []
+    for u in urls:
+        u = u.rstrip(".")
+        if _url_key(u) not in {_url_key(x) for x in out}:
+            out.append(u)
+    return out[:limit]
+
+
+_WORD_RE = re.compile(r"[\w][\w.\-]*", re.U)
+
+
+def page_excerpt(text: str, claim: str, entity: str = "", limit: int = 1500) -> str:
+    """Отрывки страницы, относящиеся к утверждению: куски текста с наибольшим числом слов и чисел утверждения
+    (названия, адреса, номера, длинные слова). Пусто — на странице нет ничего похожего."""
+    if not text:
+        return ""
+    terms = {w.lower() for w in _WORD_RE.findall(f"{claim} {entity}") if len(w) >= 5 or any(ch.isdigit() for ch in w)}
+    terms |= {w.lower() for w in _WORD_RE.findall(entity) if len(w) >= 3}
+    if not terms:
+        return ""
+    step = 350
+    windows = []
+    for i in range(0, max(1, len(text) - 1), step):
+        piece = text[i:i + step * 2]
+        low = piece.lower()
+        score = sum(1 for t in terms if t in low)
+        if score:
+            windows.append((score, i, piece))
+    if not windows:
+        return ""
+    best = sorted(windows, key=lambda w: -w[0])
+    if best[0][0] < 2:  # одно совпавшее слово — скорее случайность
+        return ""
+    picked, used = [], 0
+    for score, i, piece in best:
+        if any(abs(i - j) < step * 2 for j, _ in picked):
+            continue
+        picked.append((i, piece))
+        used += len(piece)
+        if used >= limit:
+            break
+    return " … ".join(p.strip() for _, p in sorted(picked))[:limit]
+
+
+def claims_batch(selected: list[dict[str, Any]], pages: dict[str, list[tuple[str, str]]] | None = None) -> str:
     lines = []
     for c in selected:
         why = f" | critics: {'; '.join(c['reasons'])}" if c.get("reasons") else ""
         lines.append(f"{c['id']}{' CRITICAL' if c.get('critical') else ''}{' DECISIVE' if c.get('decisive') else ''}: {c['text']}"
                      + (f" (scope: {c['scope']})" if c.get("scope") else "")
                      + f" [basis {c['basis']}, {c['volatility']}]{why}")
+        for url, excerpt in (pages or {}).get(c["id"], []):
+            lines.append(f"   PAGE TEXT the application downloaded from {url} (excerpts relevant to {c['id']}): «{excerpt}»")
     return "\n".join(lines)
 
 

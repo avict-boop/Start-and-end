@@ -96,8 +96,11 @@ async def is_internal(url: str) -> bool:
     return any(_bad_ip(i[4][0]) for i in infos)
 
 
-async def _one(client: httpx.AsyncClient, url: str, sem: asyncio.Semaphore, quotes: list[str] | None = None
-               ) -> dict[str, Any]:
+MAX_TEXT = 300_000  # сколько текста страницы отдаётся программе для отрывков (texts=True)
+
+
+async def _one(client: httpx.AsyncClient, url: str, sem: asyncio.Semaphore, quotes: list[str] | None = None,
+               want_text: bool = False) -> dict[str, Any]:
     async with sem:
         try:
             for _ in range(MAX_REDIRECTS + 1):
@@ -110,7 +113,8 @@ async def _one(client: httpx.AsyncClient, url: str, sem: asyncio.Semaphore, quot
                     out: dict[str, Any] = {"status": classify_code(r.status_code), "code": r.status_code}
                     ctype = r.headers.get("content-type", "").lower()
                     is_pdf = "pdf" in ctype or url.lower().split("?")[0].endswith(".pdf")
-                    if quotes and out["status"] == "ok" and (is_pdf or "html" in ctype or "text/plain" in ctype):
+                    if (quotes or want_text) and out["status"] == "ok" and (is_pdf or "html" in ctype
+                                                                         or "text/plain" in ctype):
                         limit = MAX_PDF if is_pdf else MAX_BODY
                         body = b""
                         async for chunk in r.aiter_bytes():
@@ -123,7 +127,10 @@ async def _one(client: httpx.AsyncClient, url: str, sem: asyncio.Semaphore, quot
                             text = page_text(body.decode(r.encoding or "utf-8", errors="ignore"))
                         out["text_len"] = len(text)
                         out["pdf"] = is_pdf
-                        out["quotes"] = {q: plain(q) in text for q in quotes if plain(q)}
+                        if quotes:
+                            out["quotes"] = {q: plain(q) in text for q in quotes if plain(q)}
+                        if want_text:
+                            out["text"] = text[:MAX_TEXT]
                     return out
             return {"status": "error", "code": None, "error": "слишком много перенаправлений"}
         except httpx.HTTPError as e:
@@ -133,9 +140,9 @@ async def _one(client: httpx.AsyncClient, url: str, sem: asyncio.Semaphore, quot
 
 
 async def check_links(urls: list[str], *, timeout: float = 10, concurrency: int = 5,
-                      quotes: dict[str, list[str]] | None = None) -> dict[str, dict[str, Any]]:
+                      quotes: dict[str, list[str]] | None = None, texts: bool = False) -> dict[str, dict[str, Any]]:
     """Проверяет ссылки параллельно (не больше concurrency сразу); у каждой — свой таймаут. quotes: ссылка ->
-    цитаты, которые надо найти на странице."""
+    цитаты, которые надо найти на странице. texts=True — вернуть и текст страницы (HTML или PDF) в "text"."""
     todo = [u for u in dict.fromkeys(urls) if str(u).startswith(("http://", "https://"))]
     if not todo:
         return {}
@@ -143,7 +150,8 @@ async def check_links(urls: list[str], *, timeout: float = 10, concurrency: int 
 
     async def one(client: httpx.AsyncClient, u: str) -> dict[str, Any]:
         try:  # медленный сайт, отдающий страницу по байту, не задержит проверку дольше LINK_DEADLINE
-            return await asyncio.wait_for(_one(client, u, sem, (quotes or {}).get(u)), LINK_DEADLINE)
+            return await asyncio.wait_for(_one(client, u, sem, (quotes or {}).get(u), **({"want_text": True} if texts else {})),
+                                         LINK_DEADLINE)
         except asyncio.TimeoutError:
             return {"status": "error", "code": None, "error": "слишком долго"}
 
