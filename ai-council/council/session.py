@@ -521,11 +521,11 @@ class Council:
         return (chars / self.CHARS_PER_TOKEN * price.prompt + out * price.completion + price.request
                 + (self.SEARCH_RESERVE_USD if web else 0.0))
 
-    def _docs_text(self) -> str:
-        """Текст документов пользователя и описания картинок — для сверки цитат «из документов» в «известно»."""
-        parts = [a.text for a in self.attachments if a.kind == "document" and a.text]
-        parts += [str(x) for x in (self.image_notes or {}).values() if x]
-        return "\n".join(parts)
+    def _docs_text(self) -> dict[str, str]:
+        """Текст документов пользователя и описания картинок по файлам — для сверки цитат «из документов»."""
+        out = {a.name: a.text for a in self.attachments if a.kind == "document" and a.text}
+        out.update({str(n): str(x) for n, x in (self.image_notes or {}).items() if x})
+        return out
 
     def _input_gaps(self, gaps: list[str], chair: MemberConfig) -> None:
         """Председатель заметил, что вход обрезан или недоступен, — показать это пользователю."""
@@ -918,7 +918,8 @@ class Council:
                                  "1 = identical rankings, 0 = unrelated)") if agree else "",
                                 prompts.factcheck_block(facts), ballot_notes, leader=leader, follow_vote=follow,
                                 compact=bool(self.compact), req=req, co_leaders=tied if len(tied) > 1 else None,
-                                ideas=ideas_text, allow_none=mode == "evaluate" and self.cfg.evaluate_allow_none),
+                                ideas=ideas_text, allow_none=mode == "evaluate" and self.cfg.evaluate_allow_none,
+                                from_voters=mode == "quick"),
                 Verdict,
                 check=check_verdict,
                 max_tokens=self.verdict_tokens(chair),

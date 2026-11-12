@@ -913,3 +913,4 @@ details[open] > summary .params-edit { visibility: hidden; }
   .badges .badge { font-size: .78rem; padding: .15rem .55rem; }
 }
 .qbox .q-label { margin: .75rem 1rem 0; }
+.dc-unverified { margin-top: .6rem; padding: .5rem .7rem; border-radius: 8px; background: var(--warn-soft); font-size: .9rem; }

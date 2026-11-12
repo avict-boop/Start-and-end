@@ -1468,7 +1468,8 @@ function renderResearch(s) {
   // карточка решения — первой, до текста итога: решение, известное, пробелы, шаги
   $("vCard").innerHTML = card.summary_decision || (card.top_known || []).length
     ? `<div class="decision-card"><div class="dc-title">Карточка решения</div>${card.summary_decision ? `<p class="dc-sum">${inline(card.summary_decision)}</p>` : ""}
-      <div class="dc-grid">${cardList("Известно", card.top_known)}${cardList("Главные пробелы", card.key_unknowns)}${cardList("Следующие шаги", card.next_steps)}</div></div>` : "";
+      <div class="dc-grid">${cardList("Известно", card.top_known)}${cardList("Главные пробелы", card.key_unknowns)}${cardList("Следующие шаги", card.next_steps)}</div>
+      ${(card.unverified || []).length ? `<div class="dc-unverified">⚠ <b>В карточке не подтверждено:</b> ${card.unverified.map(inline).join("; ")}</div>` : ""}</div>` : "";
   let h = `<h3>Что известно, что спорно, чего не знает никто</h3><p class="muted small">«Известно» — только то, что подтвердили найденные источники или ваши документы; согласие моделей сюда не попадает.</p>`;
   h += `<div class="kcu"><div class="kcu-col ok"><h4>Известно</h4>${(v.known || []).length ? `<ul>${v.known.map((k) => `<li>${inline(k.statement)} ${refs(k.evidence_ids)}${k.volatility === "changes_fast" ? ' <span class="muted small">· быстро меняется</span>' : ""}${knownBasis(k)}</li>`).join("")}</ul>` : '<p class="muted small">Подтверждённых источниками утверждений нет.</p>'}</div>`;
   h += `<div class="kcu-col warn"><h4>Спорно</h4>${(v.contested || []).length ? `<ul>${v.contested.map((c) => `<li><b>${inline(c.issue)}</b>${(c.positions || []).length ? `<div class="small">${c.positions.map(inline).join(" · ")}</div>` : ""}${c.why_they_differ ? `<div class="muted small">почему: ${inline(c.why_they_differ)}</div>` : ""} ${refs(c.evidence_ids)}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div>`;

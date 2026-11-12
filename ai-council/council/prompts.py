@@ -295,6 +295,7 @@ def verdict(
     co_leaders: list[str] | None = None,
     ideas: str = "",
     allow_none: bool = False,
+    from_voters: bool = False,
 ) -> str:
     labels = ", ".join(proposals)
     if follow_vote and leader:
@@ -336,7 +337,7 @@ Voting results, in final order (schulze wins = how many rivals the proposal beat
 {agree}
 Key critique points:
 {critique_notes or "(no critique round)"}
-{_ideas_block(ideas)}
+{_ideas_block(ideas, from_voters)}
 Write the council's final verdict.
 {winner_rule}
 - "final_answer": the complete, ready-to-use final answer for the user, based on the winner and improved with the best ideas from other proposals (markdown allowed). {FORMAT_RULE} Do not drop requested sections even if the proposals skipped them — write them yourself.
@@ -355,12 +356,14 @@ JSON format:
 {{"winner": "A", "final_answer": "...", "why": "...", "dissent": ["..."], "risks": ["..."], "deviation": ""{', "ideas": [{"id": "I1", "decision": "included", "reason": "..."}]' if ideas else ""}{', "acceptable": true, "decisive_defects": []' if allow_none else ""}}}"""
 
 
-def _ideas_block(ideas: str) -> str:
-    """Идеи, которые критики советовали сохранить: председатель решает по каждой."""
+def _ideas_block(ideas: str, from_voters: bool = False) -> str:
+    """Идеи, которые критики (в «Быстром ответе» — голосующие) советовали сохранить: председатель решает по каждой."""
     if not ideas:
         return ""
+    origin = ("voters flagged them in their ballots; they refer to the proposals as written" if from_voters
+              else "critics flagged them; they refer to versions BEFORE revision")
     return f"""
-Ideas worth keeping from the other proposals (critics flagged them; they refer to versions BEFORE revision):
+Ideas worth keeping from the other proposals ({origin}):
 {ideas}
 
 This is research, not only a vote: valuable findings of proposals that did not win must not be lost silently.

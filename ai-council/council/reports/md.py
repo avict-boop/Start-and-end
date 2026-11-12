@@ -81,7 +81,8 @@ def _card(v: View) -> list[str]:
     out = ["> **Карточка решения**", ">"]
     if c.get("summary_decision"):
         out += [f"> {c['summary_decision']}", ">"]
-    for t, k in (("Известно", "top_known"), ("Главные пробелы", "key_unknowns"), ("Следующие шаги", "next_steps")):
+    for t, k in (("Известно", "top_known"), ("Главные пробелы", "key_unknowns"), ("Следующие шаги", "next_steps"),
+                 ("⚠ Не подтверждено", "unverified")):
         if c.get(k):
             out += [f"> **{t}:**", *[f"> - {x}" for x in c[k]], ">"]
     return out[:-1] + [""]

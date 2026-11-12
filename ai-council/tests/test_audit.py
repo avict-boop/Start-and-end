@@ -225,7 +225,8 @@ def test_known_rests_on_named_claims_without_new_numbers_and_on_verbatim_documen
          "doc_quote": "оборот за 2025 год составил 120 млн рублей"},
         {"statement": "из документа, но цитаты там нет", "evidence_ids": ["DOC"], "doc_quote": "такой фразы нет"},
         {"statement": "документ и чужой источник", "evidence_ids": ["DOC", "E7"], "doc_quote": "оборот за 2025 год"}],
-        decision_card={"summary_decision": "Идти к Y.", "top_known": ["X выпускает Y [E1]", "Y даёт эксклюзив [E2]"]})
+        decision_card={"summary_decision": "Идти к Y: окупится за 7 месяцев.", "known_item_ids": ["K1", "K3", "K9"],
+                       "key_unknown_ids": ["U1"]})
     docs = "Отчёт. Оборот за 2025 год составил 120 млн рублей; прибыль — 8 млн."
     out = R.check_verdict(v, ledger=_led(), n_subq=0, strict=False, mark=True, docs_text=docs)
     assert [k.statement for k in out.known] == ["Препарат X выпускает компания Y", "Оборот дистрибьютора 120 млн"]
@@ -236,8 +237,11 @@ def test_known_rests_on_named_claims_without_new_numbers_and_on_verbatim_documen
     assert "цитата не найдена" in why["из документа, но цитаты там нет"]
     assert "не подтверждён" in why["документ и чужой источник"]  # «DOC» больше не пропускает чужие ссылки
     assert out.final_answer.startswith("> ⚠ **4 утв.") and "[E9 ⚠ нет в реестре]" in out.final_answer
-    assert out.decision_card.top_known == ["X выпускает Y [E1]"]   # E2 — не из прошедшего «известно»
-    assert any("не подтверждено" in x for x in out.decision_card.key_unknowns)
+    card = out.decision_card
+    assert card.top_known == ["Препарат X выпускает компания Y [E1]"]  # текст — из проверенного пункта K1
+    assert any("не прошло проверку" in x for x in card.unverified) and any("K9" in x for x in card.unverified)
+    assert any("7" in x for x in card.unverified)  # число в «решении», которого нет в выбранных фактах
+    assert card.key_unknowns == ["без опорного утверждения"]  # U1 — первый перенесённый пункт
 
 
 def test_all_moved_items_are_listed():
@@ -275,3 +279,45 @@ def test_unacceptable_leader_is_not_counted_as_a_win(tmp_path):
     st = compute(Archive(tmp_path))
     assert st["models"]
     assert sum(m["wins"] for m in st["models"]) == 0
+
+
+def test_numbers_keep_decimals_and_single_digits_and_doc_needs_file_and_numbers():
+    assert R._extra_numbers("рост 1,4 раза", ["рост в 14 раз"]) == ["1.4"]
+    assert R._extra_numbers("3 компании", ["2 компании"]) == ["3"]
+    assert R._extra_numbers("выручка 1 360 млн", ["выручка 1360 млн"]) == []
+    assert R._extra_numbers("цена 1,360", ["цена 1360"]) == []  # неоднозначное — засчитывается любая форма
+    led = {"evidence": [], "claims": []}
+    docs = {"отчёт.pdf": "Оборот за 2025 год составил 120 млн рублей.", "план.docx": "Оборот планируется 200 млн."}
+    v = R.ResearchVerdict(final_answer="Итог.", known=[
+        {"statement": "Оборот 120 млн", "evidence_ids": ["DOC"], "doc_ref": "отчёт.pdf, с. 1",
+         "doc_quote": "оборот за 2025 год составил 120 млн рублей"},
+        {"statement": "Оборот 150 млн", "evidence_ids": ["DOC"], "doc_ref": "отчёт.pdf",
+         "doc_quote": "оборот за 2025 год составил 120 млн рублей"},
+        {"statement": "Оборот планируется 200 млн", "evidence_ids": ["DOC"], "doc_ref": "отчёт.pdf",
+         "doc_quote": "Оборот планируется 200 млн"},
+        {"statement": "Без файла", "evidence_ids": ["DOC"], "doc_quote": "Оборот планируется 200 млн"}])
+    out = R.check_verdict(v, ledger=led, n_subq=0, strict=False, docs_text=docs)
+    why = {u.gap: u.how_to_check for u in out.unknown}
+    assert [k.statement for k in out.known] == ["Оборот 120 млн"]
+    assert "150" in why["Оборот 150 млн"] and "не найдена в указанном" in why["Оборот планируется 200 млн"]
+    assert "не указан файл" in why["Без файла"]
+
+
+def test_existing_but_unconfirmed_source_is_marked_in_the_answer():
+    led = {"evidence": [{"id": "E1"}, {"id": "E2"}], "claims": [{"id": "A-C1", "status": "confirmed", "evidence": ["E1"]},
+                                                                {"id": "A-C2", "status": "unclear", "evidence": ["E2"]}]}
+    v = R.ResearchVerdict(final_answer="Факт [E1]. Слух [E2].")
+    out = R.check_verdict(v, ledger=led, n_subq=0, strict=False, mark=True)
+    assert "Факт [E1]." in out.final_answer and "[E2 · не подтверждено]" in out.final_answer
+
+
+def test_registry_claims_are_not_private_and_critics_mark_decisive_claims():
+    from council.schemas import CritiqueSet
+    props = props_with({"A": [{"text": "Препарат X зарегистрирован в ГРЛС", "checkability": "private"},
+                              {"text": "Условия эксклюзива для нас", "checkability": "private"},
+                              {"text": "Рынок растёт на 5% в год"}]})
+    crit = {"x": CritiqueSet(reviews=[{"label": "A", "scores": {"k": 5}, "decisive_claims": ["A-C3"]}])}
+    sel, deferred = R.prepare_claims(props, crit, 10)
+    by = {c["id"]: c for c in sel}
+    assert "A-C1" in by and [d["ids"] for d in deferred] == [["A-C2"]]
+    assert by["A-C3"]["decisive"] and by["A-C3"]["critical"]

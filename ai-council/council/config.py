@@ -108,7 +108,7 @@ class CouncilConfig(BaseModel):
     min_quorum: int = Field(default=2, ge=1)
     max_cost_usd: float = Field(default=2.0, gt=0)
     temperature: float = 0.7
-    max_tokens: int = 8000
+    max_tokens: int = 16000
     max_tokens_cap: int = 32000  # до скольких токенов можно поднять лимит, если ответ обрезан
     reasoning_effort: Effort = "low"  # глубина скрытых рассуждений «думающих» моделей; none — не задавать
     timeout_s: float = 180

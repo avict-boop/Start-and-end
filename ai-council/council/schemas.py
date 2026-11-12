@@ -234,7 +234,18 @@ class Review(BaseModel):
     keep: list[str] = Field(default_factory=list)  # что стоит сохранить из варианта, даже если он не победит
     # режим «Исследование»: спорные утверждения (id утверждения + причина) и пропущенные подвопросы
     disputed_claims: list[dict[str, Any]] = Field(default_factory=list)
+    decisive_claims: list[str] = Field(default_factory=list)  # посылки, на которых держится вывод варианта
     missing_subquestions: list[str] = Field(default_factory=list)
+
+    @field_validator("decisive_claims", mode="before")
+    @classmethod
+    def _decisive(cls, v: Any) -> list[str]:
+        out = []
+        for x in v if isinstance(v, list) else ([v] if v else []):
+            x = to_text(_pick(x, "claim_id", "id", "claim") or "") if isinstance(x, dict) else to_text(x)
+            if x.strip():
+                out.append(x.strip().upper())
+        return out[:6]
 
     @field_validator("label", mode="before")
     @classmethod

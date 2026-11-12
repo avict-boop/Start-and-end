@@ -873,7 +873,8 @@ class _Report:
         c = v.decision_card
         if c:
             parts = [c.get("summary_decision", "")]
-            for t, k in (("Известно", "top_known"), ("Главные пробелы", "key_unknowns"), ("Следующие шаги", "next_steps")):
+            for t, k in (("Известно", "top_known"), ("Главные пробелы", "key_unknowns"), ("Следующие шаги", "next_steps"),
+                         ("⚠ Не подтверждено", "unverified")):
                 if c.get(k):
                     parts.append(f"{t}: " + "; ".join(c[k]))
             self.callout("Карточка решения", "\n".join(p for p in parts if p))

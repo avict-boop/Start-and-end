@@ -428,7 +428,7 @@ def _card(v: View) -> str:
     return ('<div class="callout card-decision"><b class="t">Карточка решения</b>'
             + (f'<p>{_inline(c.get("summary_decision", ""))}</p>' if c.get("summary_decision") else "")
             + block("Известно", c.get("top_known")) + block("Главные пробелы", c.get("key_unknowns"))
-            + block("Следующие шаги", c.get("next_steps")) + "</div>")
+            + block("Следующие шаги", c.get("next_steps")) + block("⚠ Не подтверждено", c.get("unverified")) + "</div>")
 
 
 def _decision(v: View, *, first: bool = True) -> str:

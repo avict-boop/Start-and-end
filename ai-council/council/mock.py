@@ -192,9 +192,8 @@ def _research(stage: str, who: str, meta: dict[str, Any]) -> dict[str, Any]:
                                  "### Q2. Экономика\nОкупаемость 14–20 месяцев [CALC].\n\n### Q3. Риски\nЛетний спад [MEM].\n\n"
                                  "**Источники:** [E1] https://example.com/stat"),
                 "why": "Синтез по подвопросам: каркас — варианты-лидеры разделов (демо).",
-                "decision_card": {"summary_decision": "Открывать стоит при аренде до 150 тыс. ₽ и потоке от 400 гостей в день (демо).",
-                                  "top_known": [f"Средний чек 250–350 ₽ [{ok[0]}]" if ok else "Подтверждённых фактов нет"],
-                                  "key_unknowns": ["Выручка конкретных точек у вузов — запросить у арендодателя"],
+                "decision_card": {"summary_decision": "Открывать стоит, если подтвердятся аренда и поток гостей в часы пик (демо).",
+                                  "known_item_ids": ["K1"] if ok else [], "key_unknown_ids": ["U1"],
                                   "next_steps": ["Узнать аренду у трёх ближайших вузов", "Посчитать поток в часы пик"]},
                 "known": [{"statement": "Средний чек кофейни у вуза — 250–350 ₽", "evidence_ids": ok[:1], "scope": "Россия, 2025",
                            "claim_ids": [(meta.get("claims_ok") or {}).get(ok[0], "")] if ok else [],
