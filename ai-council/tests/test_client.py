@@ -369,6 +369,7 @@ def test_stalled_stream_is_retried(monkeypatch):
         if len(calls) == 1:
             class Slow(httpx.AsyncByteStream):
                 async def __aiter__(self):
+                    yield b'data: {"choices":[{"delta":{"reasoning":"thinking"}}]}\n\n'  # начала и замолчала
                     for _ in range(20):
                         await asyncio.sleep(0.01)
                         yield b": OPENROUTER PROCESSING\n\n"
@@ -393,3 +394,28 @@ def test_search_limits_are_configurable():
     c = make(handler)
     asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=10, web_search=True, search_uses=8, search_results=6))
     assert seen[0]["tools"][0]["parameters"] == {"max_results": 6, "max_uses": 8, "max_total_results": 48, "engine": "exa"}
+
+
+
+def test_silence_before_first_output_is_not_a_stall(monkeypatch):
+    # модели OpenAI молча рассуждают до первого слова — это не зависание, запрос не обрывается
+    import council.client as cl
+    monkeypatch.setattr(cl, "STALL_S", 0.05)
+    calls = []
+
+    def handler(req):
+        calls.append(1)
+
+        class Quiet(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                for _ in range(15):
+                    await asyncio.sleep(0.01)
+                    yield b": OPENROUTER PROCESSING\n\n"
+                yield b'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'
+                yield b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"cost":0}}\n\ndata: [DONE]\n\n'
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Quiet())
+
+    c = make(handler, retries=1)
+    c.stream = True
+    comp = asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=10))
+    assert comp.text == "ok" and len(calls) == 1
