@@ -121,21 +121,22 @@
                 <small class="hint" id="depthHint"></small></label>
               <label class="field" id="freshField"><span class="label">Свежие данные из интернета</span>
                 <select id="fresh">
-                  <option value="0">не нужны — авторы независимы</option>
+                  <option value="0">не нужны</option>
                   <option value="1">ищет один автор</option>
                   <option value="2">ищут два автора</option>
                   <option value="custom" hidden>свой выбор</option>
                 </select>
-                <small class="hint">Для цен, рынков и новостей. Около $0,02 за запрос; кто ищет — в «Составе и параметрах».</small></label>
+                <small class="hint">Для цен, рынков и новостей; около $0,02 за запрос. Без поиска авторы независимее.</small></label>
               <label class="field"><span class="label">Объём итога</span>
                 <select id="answerSize">
-                  <option value="full">полный — как требует вопрос</option>
-                  <option value="brief">краткий — до ~500 слов</option>
-                </select></label>
+                  <option value="full">полный</option>
+                  <option value="brief">краткий (до 500 слов)</option>
+                </select>
+                <small class="hint">Полный — в структуре, которую требует вопрос.</small></label>
               <div class="field budget-field">
                 <label for="budget" class="label">Бюджет заседания, $</label>
                 <input id="budget" type="number" min="0.01" max="100" step="any" inputmode="decimal">
-                <small class="hint">Перед каждым запросом программа оценивает его цену: если вместе с уже отправленными бюджет будет превышен — пауза, полученное сохранится.</small>
+                <small class="hint">Не хватит — пауза, полученное сохранится.</small>
               </div>
             </div>
 
