@@ -914,3 +914,7 @@ details[open] > summary .params-edit { visibility: hidden; }
 }
 .qbox .q-label { margin: .75rem 1rem 0; }
 .dc-unverified { margin-top: .6rem; padding: .5rem .7rem; border-radius: 8px; background: var(--warn-soft); font-size: .9rem; }
+.decisions { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .4rem 1rem; margin: .9rem 0 .2rem; }
+.decisions .field { margin: 0; }
+.trust { color: var(--muted); margin-top: .15rem; }
+.ok-text { color: var(--ok); font-weight: 600; }

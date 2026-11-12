@@ -13,7 +13,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
@@ -146,6 +146,7 @@ class RunRequest(BaseModel):
     extra_members: list[dict[str, str]] | None = None
     web_search: list[str] | None = None
     budget: float | None = Field(default=None, gt=0, le=100)
+    answer_size: Literal["full", "brief"] | None = None  # объём итога на это заседание
     mock: bool = False
     attachments: list[str] = Field(default_factory=list, max_length=MAX_FILES)  # id загрузок
     parent: str | None = None  # уточнение к этому заседанию
@@ -248,7 +249,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                   research_words=req.research_words if req.mode == "research" else None,
                                   research_shorten=req.research_shorten if req.mode == "research" else None,
                                   research=req.research if req.mode == "research" else None,
-                                  models=req.models, extra_members=req.extra_members, web_search=req.web_search)
+                                  models=req.models, extra_members=req.extra_members, web_search=req.web_search,
+                                  answer_size=req.answer_size)
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
 
@@ -640,7 +642,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                    "members": [m.name for m in cfg.active_members], "chair": cfg.chair,
                    "devil_advocate": cfg.devil_advocate or "", "budget": cfg.max_cost_usd,
                    "chair_proposes": cfg.chair_proposes, "fact_check": cfg.fact_check.enabled,
-                   "compact_proposals": cfg.compact_proposals, "mock": req.mock,
+                   "compact_proposals": cfg.compact_proposals, "mock": req.mock, "answer_size": cfg.answer_size,
                    **({"research_words": cfg.research.max_words, "research_shorten": cfg.research.shorten_long,
                        "research_overrides": req.research or {}} if mode == "research" else {}),
                    "models": {m.name: m.model for m in cfg.active_members},

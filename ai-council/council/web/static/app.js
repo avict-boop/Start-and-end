@@ -233,6 +233,8 @@ let mode = "debate";
 
 function setMode(m) {
   mode = m;
+  if ($("depthField")) $("depthField").hidden = m !== "research";
+  if ($("freshField")) $("freshField").hidden = m === "evaluate";
   for (const r of $("modeSeg").querySelectorAll("input[name=mode]")) r.checked = r.value === m;
   $("roundsField").hidden = m !== "debate";
   $("optionsField").hidden = m !== "evaluate";
@@ -340,6 +342,7 @@ function renderWebMembers() {
   for (const n of [...lineup.web]) if (!names.includes(n)) lineup.web.delete(n);
   $("webField").hidden = mode === "evaluate" || !names.length;
   $("webMembers").innerHTML = names.map((n) => `<button type="button" class="chip-tg${lineup.web.has(n) ? " on" : ""}" data-web="${esc(n)}" aria-pressed="${lineup.web.has(n)}">🌐 ${esc(n)}</button>`).join("");
+  syncFresh();
   updateResetBtn();
 }
 
@@ -364,6 +367,7 @@ function updateParamsSummary() {
   const web = [...lineup.web].filter((x) => selectedMembers().includes(x));
   if (web.length && mode !== "evaluate") bits.push(`поиск: ${web.join(", ")}`);
   if ($("mock").checked) bits.push("демо");
+  if ($("answerSize").value === "brief") bits.push("краткий итог");
   $("paramsSummary").textContent = bits.join(" · ");
 }
 
@@ -482,6 +486,7 @@ function payload() {
     research: mode === "research" && Object.keys(researchTuned).length
       ? Object.fromEntries(Object.entries(researchTuned).filter(([k]) => !["max_words", "shorten_long"].includes(k))) : null,
     budget: Number($("budget").value) || null,
+    answer_size: $("answerSize").value,
     mock: $("mock").checked,
     attachments: uploads.filter((u) => u.status === "ready").map((u) => u.meta.id),
     parent: formMode && formMode.kind === "followup" ? formMode.id : null,
@@ -506,6 +511,7 @@ function applyLineup(r) {
   if (r.devil_advocate !== undefined) $("devil").value = selectedMembers().includes(r.devil_advocate) ? r.devil_advocate : "";
   if (r.chair_proposes !== undefined) $("chairProposes").checked = !!r.chair_proposes;
   if (r.fact_check !== undefined) $("factCheck").checked = !!r.fact_check;
+  if (r.answer_size) $("answerSize").value = r.answer_size;
   if (r.compact_proposals !== undefined) $("compact").checked = !!r.compact_proposals;
   if (r.research_words) { $("researchWords").value = r.research_words; updateShortenHint(); }
   if (r.research_shorten !== undefined) $("researchShorten").checked = !!r.research_shorten;
@@ -1471,7 +1477,7 @@ function renderResearch(s) {
       <div class="dc-grid">${cardList("Известно", card.top_known)}${cardList("Главные пробелы", card.key_unknowns)}${cardList("Следующие шаги", card.next_steps)}</div>
       ${(card.unverified || []).length ? `<div class="dc-unverified">⚠ <b>В карточке не подтверждено:</b> ${card.unverified.map(inline).join("; ")}</div>` : ""}</div>` : "";
   let h = `<h3>Что известно, что спорно, чего не знает никто</h3><p class="muted small">«Известно» — только то, что подтвердили найденные источники или ваши документы; согласие моделей сюда не попадает.</p>`;
-  h += `<div class="kcu"><div class="kcu-col ok"><h4>Известно</h4>${(v.known || []).length ? `<ul>${v.known.map((k) => `<li>${inline(k.statement)} ${refs(k.evidence_ids)}${k.volatility === "changes_fast" ? ' <span class="muted small">· быстро меняется</span>' : ""}${knownBasis(k)}</li>`).join("")}</ul>` : '<p class="muted small">Подтверждённых источниками утверждений нет.</p>'}</div>`;
+  h += `<div class="kcu"><div class="kcu-col ok"><h4>Известно</h4>${(v.known || []).length ? `<ul>${v.known.map((k) => `<li>${inline(k.statement)} ${refs(k.evidence_ids)}${k.volatility === "changes_fast" ? ' <span class="muted small">· быстро меняется</span>' : ""}${knownBasis(k, s)}</li>`).join("")}</ul>` : '<p class="muted small">Подтверждённых источниками утверждений нет.</p>'}</div>`;
   h += `<div class="kcu-col warn"><h4>Спорно</h4>${(v.contested || []).length ? `<ul>${v.contested.map((c) => `<li><b>${inline(c.issue)}</b>${(c.positions || []).length ? `<div class="small">${c.positions.map(inline).join(" · ")}</div>` : ""}${c.why_they_differ ? `<div class="muted small">почему: ${inline(c.why_they_differ)}</div>` : ""} ${refs(c.evidence_ids)}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div>`;
   h += `<div class="kcu-col bad"><h4>Неизвестно</h4>${(v.unknown || []).length ? `<ul>${v.unknown.map((u) => `<li>${inline(u.gap)}${u.reason ? ` <span class="muted small">· ${esc(GAP_WORD[u.reason] || u.reason)}</span>` : ""}${u.how_to_check ? `<div class="muted small">как узнать: ${inline(u.how_to_check)}</div>` : ""}</li>`).join("")}</ul>` : '<p class="muted small">Нет.</p>'}</div></div>`;
   const subq = s.subq || [];
@@ -2631,7 +2637,7 @@ function renderAdvice(r) {
     ${Object.keys(a.research_settings || {}).length ? `<h4>Настройки исследования для этого вопроса</h4>
       <ul class="adv-rs">${Object.entries(a.research_settings).map(([k, v]) => `<li><label class="rs-row"><input type="checkbox" data-rs="${esc(k)}" checked>
         <span class="rs-body"><span class="rs-name">${esc(RS_NAME[k] || k)}:</span> <b>${esc(rsVal(v))}</b>
-          <span class="muted small">(сейчас ${esc(rsVal((config.research_all || {})[k]))}${(a.research_cost || {})[k] != null ? ` · ${a.research_cost[k] >= 0 ? "+" : "−"}$${Math.abs(a.research_cost[k]).toFixed(2)} к цене` : ""})</span>
+          <span class="muted small">(сейчас ${esc(rsVal((config.research_all || {})[k]))}${(a.research_cost || {})[k] != null ? ` · ${a.research_cost[k] >= 0 ? "+" : "−"}$${Math.abs(a.research_cost[k]).toFixed(2)} к цене${r.research_cost_by === "estimate" ? " (расчёт по каталогу)" : " (оценка советника)"}` : ""})</span>
           ${(a.research_why || {})[k] ? `<span class="rs-why">${esc(a.research_why[k])}</span>` : ""}</span></label></li>`).join("")}</ul>` : ""}
     ${a.baseline ? `<p class="muted small adv-base"><b>Исходная точка:</b> ${esc(a.baseline)}</p>` : ""}
     <h4>Состав</h4><ol class="adv-picks">${picks}</ol>
@@ -2722,10 +2728,23 @@ function applyAdvice(r) {
 }
 
 // на что опирается пункт «известно»: проверенная формулировка реестра или цитата из документа пользователя
-function knownBasis(k) {
+const SEEN_TEXT = { page: "страница прочитана", snippet: "только фрагмент выдачи", search_answer: "только ответ поиска" };
+const LINK_TEXT = { ok: "ссылка открывается", dead: "ссылка не открывается", blocked: "сайт не пускает проверку", error: "не открылась при проверке" };
+function knownBasis(k, s) {
   const same = (a, b) => (a || "").trim().toLowerCase() === (b || "").trim().toLowerCase();
   const v = (k.verified || []).filter((t) => !same(t, k.statement));
   const out = [];
+  // индикатор доверия: откуда, когда, что реально видела модель, открывается ли ссылка, найдена ли цитата
+  const led = (s && s.ledger) || {};
+  const evs = Object.fromEntries((led.evidence || []).map((e) => [e.id, e]));
+  const claims = Object.fromEntries((led.claims || []).map((c) => [c.id, c]));
+  const quote = (k.claim_ids || []).some((c) => claims[c] && claims[c].quote_found);
+  const trust = (k.evidence_ids || []).filter((i) => evs[i]).map((i) => {
+    const e = evs[i];
+    let host = ""; try { host = new URL(e.url).hostname.replace(/^www\./, ""); } catch { host = e.url || ""; }
+    return [`${i}: ${host}`, e.date ? `от ${e.date}` : "", SEEN_TEXT[e.material_seen] || "", LINK_TEXT[e.link] || ""].filter(Boolean).join(", ");
+  });
+  if (trust.length) out.push(`<div class="trust small">${trust.map(esc).join(" · ")}${quote ? ' · <span class="ok-text">цитата найдена на странице</span>' : ""}</div>`);
   if (v.length) out.push(`<div class="muted small">проверено: «${v.map(esc).join("», «")}»</div>`);
   if ((k.evidence_ids || []).includes("DOC")) out.push(`<div class="muted small">по вашему документу${k.doc_ref ? ` (${esc(k.doc_ref)})` : ""}${k.doc_quote ? `: «${esc(k.doc_quote)}»` : ""} — не независимая проверка</div>`);
   return out.join("");
@@ -2765,3 +2784,44 @@ $("howBtn").addEventListener("click", () => {
   $("howBox").hidden = !open;
   $("howBtn").setAttribute("aria-expanded", String(open));
 });
+
+/* ------------------------------------------------------------ пять решений владельца: глубина, свежие данные, объём */
+// пресеты исследования — стартовые значения из третьей проверки совета (гипотезы для пилота, а не замеры)
+const DEPTH = {
+  fast: { label: "Быстро и дёшево", budget: 4, words: 800,
+    rs: { max_claims: 5, arbitration_claims: 10, missions: 1, recheck_unclear: 0, post_revision_claims: 2, section_vote: false, digest_table_rows: 12 } },
+  standard: { label: "Стандарт", budget: 8, words: 1400,
+    rs: { max_claims: 8, arbitration_claims: 20, missions: 2, recheck_unclear: 3, post_revision_claims: 4, section_vote: true, digest_table_rows: 12 } },
+  deep: { label: "Тщательно", budget: 12, words: 2000,
+    rs: { max_claims: 12, arbitration_claims: 30, missions: 2, recheck_unclear: 5, post_revision_claims: 4, section_vote: true, digest_table_rows: 24 } },
+};
+$("depth").addEventListener("change", () => {
+  const d = DEPTH[$("depth").value];
+  if (!d) { researchTuned = {}; $("depthHint").textContent = ""; renderResearchTuned(); formChanged(); return; }
+  researchTuned = { ...d.rs };
+  $("researchWords").value = d.words; updateShortenHint();
+  $("budget").value = d.budget;
+  $("depthHint").textContent = `вариант до ${d.words} слов · утверждений у автора до ${d.rs.max_claims} · проверка ${d.rs.arbitration_claims} утв.`
+    + ` · второй поиск ${d.rs.recheck_unclear} · бюджет $${d.budget}. Правила «известно» не ослабляются.`;
+  renderResearchTuned(); formChanged();
+});
+// свежие данные: сколько авторов ищут в интернете (кто именно — в «Составе и параметрах»)
+function freshAuthors() {
+  const chair = $("chair").value;
+  return selectedMembers().filter((n) => n !== chair || $("chairProposes").checked);
+}
+function syncFresh() {
+  const web = [...lineup.web].filter((n) => selectedMembers().includes(n));
+  const authors = freshAuthors();
+  const n = web.length;
+  const standard = n <= 2 && web.every((x, i) => x === authors[i]);
+  $("fresh").value = standard ? String(n) : "custom";
+  $("fresh").querySelector('[value="custom"]').hidden = standard;
+}
+$("fresh").addEventListener("change", () => {
+  const n = Number($("fresh").value);
+  if (Number.isNaN(n)) return;
+  lineup.web = new Set(freshAuthors().slice(0, n));
+  renderWebMembers(); formChanged();
+});
+$("answerSize").addEventListener("change", formChanged);

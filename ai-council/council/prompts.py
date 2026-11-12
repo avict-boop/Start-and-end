@@ -296,6 +296,7 @@ def verdict(
     ideas: str = "",
     allow_none: bool = False,
     from_voters: bool = False,
+    brief: bool = False,
 ) -> str:
     labels = ", ".join(proposals)
     if follow_vote and leader:
@@ -320,6 +321,8 @@ def verdict(
     if co_leaders and len(co_leaders) > 1:
         agree += (f"\nTie for first place: {', '.join(co_leaders)} are equal on every voting measure (only lot separates "
                   "them). You may name any of them as the winner without a deviation reason — explain the choice in why.\n")
+    if brief:
+        agree += "\n" + BRIEF_RULE + "\n"
     if compact:
         agree += ("\nThe proposals were written compactly on purpose, without the requested format. Your final_answer "
                   "is the full deliverable: expand the winning proposal (with the best ideas of others) into the complete "
@@ -354,6 +357,11 @@ Write the council's final verdict.
 
 JSON format:
 {{"winner": "A", "final_answer": "...", "why": "...", "dissent": ["..."], "risks": ["..."], "deviation": ""{', "ideas": [{"id": "I1", "decision": "included", "reason": "..."}]' if ideas else ""}{', "acceptable": true, "decisive_defects": []' if allow_none else ""}}}"""
+
+
+BRIEF_RULE = ("The user asked for a BRIEF final answer: \"final_answer\" at most about 500 words — the decision first, then "
+              "the key reasons and the main caveats; keep every hard requirement, but no long tables or background "
+              "unless a requirement demands them.")
 
 
 def _ideas_block(ideas: str, from_voters: bool = False) -> str:

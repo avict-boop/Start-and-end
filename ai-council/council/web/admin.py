@@ -320,8 +320,34 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
         key = os.environ.get("OPENROUTER_API_KEY")
         cost, info = 0.0, {"dossiers_built": 0, "dossiers_cached": 0, "source": "rules"}
 
+        def priced(adv: A.Advice) -> A.Advice:
+            """Цена каждой предложенной настройки исследования — расчётом по каталогу OpenRouter (как в оценке
+            стоимости), а не со слов модели: разница с текущими настройками на этом вопросе."""
+            rs = adv.research_settings or {}
+            if not rs or (adv.mode or body.mode) != "research":
+                return adv
+            from ..config import with_overrides
+            from ..estimate import estimate, parse_pricing
+            pricing = parse_pricing(models)
+
+            def mid(c: CouncilConfig) -> float:
+                e = estimate(c, pricing, mode="research", rounds=1, question_chars=len(body.question))
+                return (e.low + e.high) / 2
+            try:
+                base = mid(cfg)
+            except Exception:  # noqa: BLE001 — оценка не должна ломать подбор
+                return adv
+            cost: dict[str, float] = {}
+            for k, val in rs.items():
+                try:
+                    cost[k] = round(mid(with_overrides(cfg, research={k: val})) - base, 2)
+                except Exception:  # noqa: BLE001 — настройку нельзя посчитать — без цены
+                    continue
+            info["research_cost_by"] = "estimate"
+            return adv.model_copy(update={"research_cost": cost})
+
         def finish(adv: A.Advice) -> dict[str, Any]:
-            adv = A.finalize(adv, cands, cfg, body.mode)
+            adv = priced(A.finalize(adv, cands, cfg, body.mode))
             plan = A.assign(adv, cfg)
             by_id = {c["id"]: c for c in cands}
             return {"advice": adv.model_dump(), "plan": plan, "cost": round(cost, 4), **info,

@@ -768,6 +768,8 @@ JSON format:
 {{"ranking": ["best label", "...", "worst label"], "rationale": "why the top choice wins"{sec_json}}}"""
 
 
+from .prompts import BRIEF_RULE  # noqa: E402 — общий текст «краткого итога»
+
 DECISION_CARD_NOTE = ("\n- \"decision_card\": a one-page executive brief shown FIRST to the user. Your \"known\" items are "
                       "numbered K1, K2, … in the order you list them, your \"unknown\" items U1, U2, …. Select facts ONLY by "
                       "these ids: known_item_ids (at most 5) and key_unknown_ids (at most 5) — do not write or paraphrase facts "
@@ -781,7 +783,8 @@ DECISION_CARD_JSON = ('\n "decision_card": {{"summary_decision": "...", "known_i
 
 def verdict(rhead: str, criteria: list[str], proposals_txt: str, ledger: str, section_tally: str, overall_tally: str,
             critique_notes: str, ideas: str, leader: str, labels: list[str], agreement: str, ballot_notes: str,
-            req: list[str] | None, co_leaders: list[str] | None, subq: list[str], card: bool = True) -> str:
+            req: list[str] | None, co_leaders: list[str] | None, subq: list[str], card: bool = True,
+            brief: bool = False) -> str:
     qids = ", ".join(f"Q{i}" for i in range(1, len(subq) + 1))
     tie = (f"\nTie for first place overall: {', '.join(co_leaders)} — you may name any of them as \"winner\".\n"
            if co_leaders and len(co_leaders) > 1 else "")
@@ -817,7 +820,7 @@ Write a RESEARCH SYNTHESIS, not a defence of one winner.
   be known unless the ledger re-checked them.
 - In "final_answer" itself, label memory-only, new_after_ledger and unresolved statements as uncertain; a vote or
   agreement is not evidence. Claims the ledger lists as "not checkable by public search" go to "unknown" with how
-  to check them.{DECISION_CARD_NOTE if card else ""}
+  to check them.{DECISION_CARD_NOTE if card else ""}{(chr(10) + "- " + BRIEF_RULE) if brief else ""}
 - "contested": conflicting sources or genuine methodological splits; give both positions, E-ids, why they differ
   (definitions, dates, methods, sources, values) and what would resolve it.
 - "unknown": memory-only claims, unresolved gaps, data not found; a subquestion without an answer goes here with the reason.

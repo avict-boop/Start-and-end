@@ -110,6 +110,35 @@
             </fieldset>
             <small id="modeHint" class="sr-only" aria-live="polite"></small>
 
+            <div class="decisions" id="decisions">
+              <label class="field" id="depthField" hidden><span class="label">Глубина исследования</span>
+                <select id="depth">
+                  <option value="">как в настройках</option>
+                  <option value="fast">Быстро и дёшево</option>
+                  <option value="standard">Стандарт</option>
+                  <option value="deep">Тщательно — каталог, много сущностей</option>
+                </select>
+                <small class="hint" id="depthHint"></small></label>
+              <label class="field" id="freshField"><span class="label">Свежие данные из интернета</span>
+                <select id="fresh">
+                  <option value="0">не нужны — авторы независимы</option>
+                  <option value="1">ищет один автор</option>
+                  <option value="2">ищут два автора</option>
+                  <option value="custom" hidden>свой выбор</option>
+                </select>
+                <small class="hint">Для цен, рынков и новостей. Около $0,02 за запрос; кто ищет — в «Составе и параметрах».</small></label>
+              <label class="field"><span class="label">Объём итога</span>
+                <select id="answerSize">
+                  <option value="full">полный — как требует вопрос</option>
+                  <option value="brief">краткий — до ~500 слов</option>
+                </select></label>
+              <div class="field budget-field">
+                <label for="budget" class="label">Бюджет заседания, $</label>
+                <input id="budget" type="number" min="0.01" max="100" step="any" inputmode="decimal">
+                <small class="hint">Перед каждым запросом программа оценивает его цену: если вместе с уже отправленными бюджет будет превышен — пауза, полученное сохранится.</small>
+              </div>
+            </div>
+
             <div class="field" id="optionsField" hidden>
               <label for="options" class="label">Ваши варианты</label>
               <textarea id="options" rows="5" placeholder="Каждый вариант с новой строки.&#10;Многострочные варианты разделяйте строкой ---"></textarea>
@@ -177,11 +206,6 @@
                     <span><b>Председатель тоже предлагает решение</b><small>Обычно он только ставит задачу, голосует и пишет итог — так он не судит своё.</small></span></label>
                   <label class="switch"><input id="mock" type="checkbox"><span class="sw" aria-hidden="true"></span>
                     <span><b>Демо-режим</b><small>Без ключа и без затрат — ответы ненастоящие, чтобы посмотреть, как всё работает.</small></span></label>
-                </div>
-                <div class="field budget-field">
-                  <label for="budget" class="label">Бюджет заседания, $</label>
-                  <input id="budget" type="number" min="0.01" max="100" step="any" inputmode="decimal">
-                  <small class="hint">Перед каждым запросом программа оценивает его цену: если вместе с уже отправленными бюджет будет превышен — заседание встанет на паузу, полученное сохранится, продолжить можно с бóльшим бюджетом.</small>
                 </div>
               </div>
             </details>

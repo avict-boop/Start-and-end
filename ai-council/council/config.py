@@ -140,6 +140,9 @@ class CouncilConfig(BaseModel):
     # останавливается с понятной ошибкой, сайт и бот продолжают работать. Пик каждой сборки сохраняется
     # («Настройки → Заседание»): по нему и стоит подбирать предел. 600 — для сервера на 1 ГБ, 1200 — на 2 ГБ (сайт и бот — ~300)
     reports_memory_mb: int = Field(default=600, ge=0, le=16000)
+    # Объём итога: full — в структуре и объёме, которых требует запрос; brief — кратко (до ~500 слов: решение,
+    # главные доводы и оговорки). Меняется для каждого вопроса
+    answer_size: Literal["full", "brief"] = "full"
     # Пилот: модель для «ответа одной модели с поиском» — контрольная группа к совету; пусто — модель председателя
     pilot_solo_model: str = ""
     chair: str
@@ -215,7 +218,7 @@ def load_dotenv(path: str | Path = ".env") -> None:
 # какие настройки исследования можно менять для одного заседания (советник и «Параметры» вопроса)
 RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "max_claims", "revision_digest",
                     "section_vote", "fresh_scouts", "max_words", "shorten_long", "long_factor", "link_check",
-                    "recheck_unclear", "post_revision_claims", "vote_ledger", "snippet_rule")
+                    "recheck_unclear", "post_revision_claims", "vote_ledger", "snippet_rule", "digest_table_rows")
 
 
 class OverrideError(ValueError):
@@ -238,11 +241,14 @@ def with_overrides(
     models: dict[str, str] | None = None,
     extra_members: list[dict[str, str]] | None = None,
     web_search: list[str] | None = None,
+    answer_size: str | None = None,
 ) -> CouncilConfig:
     """Возвращает копию конфига с выбранными участниками/ролями/бюджетом, проверяя результат."""
     from pydantic import ValidationError
 
     data = base.model_dump()
+    if answer_size:
+        data["answer_size"] = answer_size
     # Состав на одно заседание (например, по «Подобрать состав»): другая модель у участника, новые участники,
     # поиск в интернете у выбранных. Настройки программы при этом не меняются.
     known = {m["name"] for m in data["members"]}
