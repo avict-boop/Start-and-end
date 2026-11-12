@@ -277,3 +277,15 @@ def test_rules_recommend_creative_mode_for_naming_without_search():
                         cands=cands, history={}, dossiers={}, language="Russian", research_words=1400,
                         search_model="x/y")
     assert "DIVERSITY OF IMAGINATION" in p and "debate|quick|evaluate|research|creative" in p
+
+
+def test_history_is_split_by_mode():
+    from council.model_notes import history
+    def sess(mode, winner):
+        return {"mode": mode, "authors": {"A": "k", "B": "c"}, "verdict": {"winner": winner},
+                "tally": [{"label": "A", "avg_score": 8}, {"label": "B", "avg_score": 6}],
+                "transcript": [{"member": "k", "model": "m/kimi"}, {"member": "c", "model": "m/claude"}],
+                "stats": {"k": {}, "c": {}}}
+    h = history([sess("research", "A")] * 4 + [sess("creative", "B")] * 3)
+    assert h["m/kimi"]["by_mode"]["research"]["wins"] == 4 and h["m/kimi"]["by_mode"]["creative"]["wins"] == 0
+    assert h["m/claude"]["by_mode"]["creative"]["win_rate"] == 1.0

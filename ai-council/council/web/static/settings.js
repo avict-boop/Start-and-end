@@ -74,6 +74,8 @@ async function openModelCard(id) {
   const h = c.history;
   const hist = h ? `<ul class="card-list"><li>заседаний: <b>${h.sessions}</b>${h.cost_per_session != null ? `, в среднем $${h.cost_per_session} за заседание` : ""}</li>
       ${h.proposals ? `<li>вариант модели победил: <b>${h.wins} из ${h.proposals}</b>${h.win_rate != null ? ` (${Math.round(h.win_rate * 100)}%)` : ""}${h.avg_score != null ? `, средняя оценка критиков ${h.avg_score}` : ""}</li>` : ""}
+      ${h.by_mode && Object.keys(h.by_mode).length > 1 ? `<li>по режимам: ${Object.entries(h.by_mode).filter(([, b]) => b.proposals)
+        .map(([m, b]) => `${({ debate: "обсуждение", quick: "быстрый", evaluate: "сравнение", research: "исследование", creative: "креатив" })[m] || m} — ${b.wins} из ${b.proposals}`).join("; ")}</li>` : ""}
       <li>сбоев: <b>${h.failures}</b>${h.reasoning_off ? `; рассуждения пришлось выключать в ${h.reasoning_off} заседаниях` : ""}</li></ul>`
     : '<p class="muted small">В ваших заседаниях эта модель ещё не участвовала.</p>';
   const html = !c.found ? `<p class="bad-text">${c.available ? "Такой модели сейчас нет в каталоге OpenRouter." : "Каталог OpenRouter недоступен."}</p>${hist}` : `

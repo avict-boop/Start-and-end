@@ -271,7 +271,9 @@ def advise_prompt(*, question: str, mode: str, attachments: list[dict[str, Any]]
         r["developer_says"] = c.get("description", "")[:300]
         h = history.get(c["id"])
         if h:
-            r["your_history"] = h
+            r["your_history"] = {k: v for k, v in h.items() if k != "by_mode"}
+            mine = (h.get("by_mode") or {}).get(mode)
+            r["your_history_in_this_mode"] = mine or "no sessions in this mode yet"
         d = dossiers.get(c["id"])
         if d:
             r["reviews"] = {k: d.get(k) for k in ("strengths", "weaknesses", "known_issues", "best_for", "benchmarks")
@@ -343,7 +345,9 @@ Rules:
    "research_why" (same keys). Leave both empty for other modes or when the current values fit.
 7. "caveats": what you are unsure about (little data on a model, no history yet, etc.).
 8. First state a baseline in "baseline": the current lineup if it is valid; every deviation needs a benefit for this
-   question. "your_history" is shown only for models with at least {history_min} of the user's sessions. Basis
+   question. "your_history" is shown only for models with at least {history_min} of the user's sessions; it mixes
+   all modes, so for wins and scores rely on "your_history_in_this_mode" (results in the mode chosen now) — success
+   in research or debate says little about creative ideation and vice versa. Basis
    "knowledge" alone is allowed only with "confidence": "low" and must be mentioned in caveats. General benchmarks
    are not evidence of length compliance, strict JSON or evidence-citation behaviour in this app. Never prefer a model
    because it comes from your own developer. If the question text was truncated, say so in caveats.
@@ -480,7 +484,10 @@ def rule_advice(question: str, mode: str, cfg: CouncilConfig, cands: list[dict[s
         else:
             s = 2.0 * c["reasoning"] + (0 if c["light"] else 1.5 if big or rec_mode == "research" else 0.3)
             s += min((c["max_out"] or 8000) / 32000, 2) * (1 if rec_mode in ("research", "debate") else 0.3)
-        s += (h.get("win_rate") or 0) * 2 - min(h.get("failures") or 0, 5) * 0.4
+        hm = (h.get("by_mode") or {}).get(rec_mode) or {}
+        # победы — в этом режиме (если в нём уже есть хотя бы 3 варианта модели), иначе общие, но с половинным весом
+        wr = hm.get("win_rate") if (hm.get("proposals") or 0) >= 3 else (h.get("win_rate") or 0) * 0.5
+        s += (wr or 0) * 2 - min(h.get("failures") or 0, 5) * 0.4
         if c["context"] and c["context"] < need_ctx:
             s -= 5
         if c["builtin_search"]:

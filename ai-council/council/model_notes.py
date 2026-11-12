@@ -90,7 +90,11 @@ def history(sessions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """Ваша статистика по моделям (а не по именам участников): заседания, победы вариантов, оценки, сбои."""
     acc: dict[str, dict[str, Any]] = defaultdict(lambda: {"sessions": 0, "proposals": 0, "wins": 0, "scores": [],
                                                           "failures": 0, "cost": 0.0, "reasoning_off": 0})
+    # по режимам: победы в исследовании ничего не говорят о том, как модель придумывает названия
+    by_mode: dict[str, dict[str, dict[str, Any]]] = defaultdict(lambda: defaultdict(
+        lambda: {"proposals": 0, "wins": 0, "scores": []}))
     for d in sessions:
+        mode = d.get("mode") or "debate"
         used: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
         for e in d.get("transcript") or []:
             if e.get("member") and e.get("model"):
@@ -114,16 +118,24 @@ def history(sessions: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
             a = acc[model]
             a["proposals"] += 1
             a["wins"] += int(label == winner)
+            bm = by_mode[model][mode]
+            bm["proposals"] += 1
+            bm["wins"] += int(label == winner)
             sc = (tally.get(label) or {}).get("avg_score")
             if sc is not None:
                 a["scores"].append(float(sc))
+                bm["scores"].append(float(sc))
     out = {}
     for model, a in acc.items():
         out[model] = {"sessions": a["sessions"], "proposals": a["proposals"], "wins": a["wins"],
                       "win_rate": round(a["wins"] / a["proposals"], 2) if a["proposals"] else None,
                       "avg_score": round(mean(a["scores"]), 1) if a["scores"] else None,
                       "failures": a["failures"], "reasoning_off": a["reasoning_off"],
-                      "cost_per_session": round(a["cost"] / a["sessions"], 3) if a["sessions"] else None}
+                      "cost_per_session": round(a["cost"] / a["sessions"], 3) if a["sessions"] else None,
+                      "by_mode": {m: {"proposals": b["proposals"], "wins": b["wins"],
+                                      "win_rate": round(b["wins"] / b["proposals"], 2) if b["proposals"] else None,
+                                      "avg_score": round(mean(b["scores"]), 1) if b["scores"] else None}
+                                  for m, b in by_mode[model].items()}}
     return out
 
 
