@@ -289,6 +289,8 @@ class OpenRouterClient:
         json_mode: bool = False,
         web_tools: bool = True,
         search_engine: str = "exa",
+        search_uses: int = SEARCH_USES,
+        search_results: int = 5,
     ) -> Completion:
         """Запрос к модели с потоковой передачей ответа.
 
@@ -323,7 +325,8 @@ class OpenRouterClient:
         tools: list[dict[str, Any]] = []
         if web_search and not model.startswith("perplexity/"):  # у Perplexity поиск встроенный
             if web_tools and model not in _NO_FEATURE["tools"]:
-                params: dict[str, Any] = {"max_results": 5, "max_uses": SEARCH_USES, "max_total_results": 5 * SEARCH_USES}
+                uses, per = max(1, int(search_uses)), max(1, int(search_results))
+                params: dict[str, Any] = {"max_results": per, "max_uses": uses, "max_total_results": per * uses}
                 if search_engine and search_engine != "auto":
                     params["engine"] = search_engine
                 tools.append({"type": "openrouter:web_search", "parameters": params})

@@ -381,3 +381,15 @@ def test_stalled_stream_is_retried(monkeypatch):
     c.stream = True
     comp = asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=10))
     assert comp.text == "ok" and len(calls) == 2
+
+
+def test_search_limits_are_configurable():
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=ok_body())
+
+    c = make(handler)
+    asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=10, web_search=True, search_uses=8, search_results=6))
+    assert seen[0]["tools"][0]["parameters"] == {"max_results": 6, "max_uses": 8, "max_total_results": 48, "engine": "exa"}

@@ -196,6 +196,10 @@ function renderSettings() {
         <select id="sEngine" ${ro}>${[["exa", "Exa через OpenRouter — с лимитом (рекомендуем)"], ["auto", "встроенный поиск провайдера, где есть"], ["parallel", "Parallel"], ["perplexity", "Perplexity Search"]]
           .map(([v, t]) => `<option value="${v}" ${(d.search_engine ?? "exa") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
         <small class="hint">Exa соблюдает лимит: не больше 3 поисков по 5 результатов за запрос. Встроенный поиск OpenAI и Google лимитов не знает — автор может прочитать миллионы токенов (12.11: $1,14 за один запрос)</small></label>
+      <div class="row2">
+        <label class="field"><span>Поисков у автора за запрос</span><input type="number" data-k="search_uses" min="1" max="10" step="1" value="${d.search_uses ?? 3}" ${ro}><small class="hint">3 — обычный вопрос; 6–10 — широкий скрининг (20–30 компаний). Каждый поиск заново читает весь запрос: вход и цена растут примерно пропорционально</small></label>
+        <label class="field"><span>Результатов в каждом поиске</span><input type="number" data-k="search_results" min="1" max="10" step="1" value="${d.search_results ?? 5}" ${ro}><small class="hint">страниц на один поиск; всего за запрос — поисков × результатов</small></label>
+      </div>
       <label class="field" style="max-width:360px"><span>Глубина рассуждений на голосовании</span>
         <select id="sVoteReason" ${ro}>${[["", "как у участника"], ["none", "без рассуждений"], ["low", "низкая — дешевле (рекомендуем)"], ["medium", "средняя"], ["high", "высокая"]]
           .map(([v, t]) => `<option value="${v}" ${(d.vote_reasoning ?? "low") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
