@@ -14,7 +14,7 @@ dev = ["pytest>=8"]
 council = "council.cli:main"
 
 [tool.setuptools]
-packages = ["council", "council.web", "council.telegram", "council.reports"]
+packages = ["council", "council.modes", "council.web", "council.telegram", "council.reports"]
 
 [tool.setuptools.package-data]
 "council.web" = ["static/*"]
