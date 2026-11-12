@@ -20,7 +20,7 @@ from .config import AdvisorConfig, BrandingConfig, CouncilConfig, FactCheckConfi
 TOP_KEYS = ("language", "mode", "debate_rounds", "min_quorum", "max_cost_usd", "temperature", "max_tokens",
             "reasoning_effort", "chair", "chair_proposes", "chair_follows_vote", "devil_advocate", "transcribe_model",
             "compact_proposals", "compact_words", "max_concurrency", "judge_temperature", "verdict_max_tokens",
-            "max_requirements", "quick_keep", "evaluate_allow_none", "budget_reserve", "reserve_output_share", "answer_size", "quorum_large", "reports_memory_mb",
+            "max_requirements", "quick_keep", "evaluate_allow_none", "budget_reserve", "reserve_output_share", "answer_size", "chair_critiques", "chair_votes", "key_reserve", "quorum_large", "reports_memory_mb",
             "pilot_solo_model")
 SECTIONS = {"branding": BrandingConfig, "fact_check": FactCheckConfig, "research": ResearchConfig,
             "advisor": AdvisorConfig}

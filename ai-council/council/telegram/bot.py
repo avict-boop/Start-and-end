@@ -1075,9 +1075,13 @@ class CouncilBot:
                     atts = await asyncio.to_thread(cp.attachments)
                     journal = await asyncio.to_thread(Journal, cp.journal_path)
                     pricing = None if sp.get("mock") else parse_pricing(await self.catalog.get() or [])
+                    rdir = self.runs_dir
+                    stage_out = await asyncio.to_thread(learn_lengths, rdir)
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
                                       seed=sp.get("seed"), journal=journal, labels=sp.get("labels"),
-                                      link_checker=None if sp.get("mock") else check_links, pricing=pricing)
+                                      link_checker=None if sp.get("mock") else check_links, pricing=pricing,
+                                      stage_out=stage_out, session_id=cp.id, shared_dir=rdir / "notes",
+                                      key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     council_ref["c"] = council
                     r = self.running.get(chat_id)
                     if r:

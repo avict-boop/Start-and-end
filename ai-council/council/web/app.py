@@ -115,7 +115,8 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
         ev.append({"type": "member_failed", "stage": "verdict", "member": cf[0], "error": cf[1]})
     ev.append({"type": "verdict", "verdict": d["verdict"], "ideas": d.get("ideas") or []})
     ev.append({"type": "done", "id": session_id, "total_cost": d.get("total_cost_usd", 0),
-               "duration_s": d.get("duration_s"), "stats": d.get("stats", {})})
+               "duration_s": d.get("duration_s"), "stats": d.get("stats", {}),
+               "semantic": (d.get("research") or {}).get("semantic_audit")})
     return ev
 
 
@@ -721,9 +722,12 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     atts = await asyncio.to_thread(cp.attachments)
                     journal = await asyncio.to_thread(Journal, cp.journal_path)
                     pricing = None if sp.get("mock") else parse_pricing(await catalog.get() or [])
+                    stage_out = await asyncio.to_thread(learn_lengths, runs_dir(cfg))
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
                                       seed=sp.get("seed"), journal=journal, labels=sp.get("labels"),
-                                      link_checker=None if sp.get("mock") else check_links, pricing=pricing)
+                                      link_checker=None if sp.get("mock") else check_links, pricing=pricing,
+                                      stage_out=stage_out, session_id=sid, shared_dir=runs_dir(cfg) / "notes",
+                                      key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     st.council = council
                     if journal.replayable or journal.loose:
                         st.push({"type": "resumed", "replayable": journal.replayable or len(journal.loose),
@@ -740,7 +744,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     await asyncio.to_thread(cp.remove)
                     final = "done"
                     st.push({"type": "done", "id": sid, "total_cost": res.total_cost, "duration_s": res.duration_s,
-                             "stats": jsonable(res.stats)})
+                             "stats": jsonable(res.stats), "semantic": (res.research or {}).get("semantic_audit")})
                     cached = sum(s.cached_tokens for s in res.stats.values())
                     log.info("заседание %s: готово, $%.4f, %s с, из кэша %d входных токенов, из журнала %d ответов",
                              sid, res.total_cost, res.duration_s, cached, council.replayed)

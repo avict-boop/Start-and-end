@@ -355,3 +355,47 @@ def test_quote_not_found_on_a_readable_page_does_not_confirm_an_important_claim(
             "claims": [{"id": "A-C1", "status": "confirmed", "critical": True, "evidence": ["E1"]}]}
     R.apply_links(led2, {"u1": {"status": "ok", "code": 200, "quotes": {"x y": False}, "text_len": 300}})
     assert led2["claims"][0]["status"] == "confirmed"  # мало текста (страница на JavaScript) — не судим
+
+
+def test_semantic_audit_is_recorded_without_changing_known():
+    client = Rec()
+    res = run(Council(make_cfg(mode="research"), client, seed=3).run("Стоит ли открывать кофейню у вуза?"))
+    sem = res.research["semantic_audit"]
+    assert sem["checked"] == len(res.verdict.known) >= 1 and sem["flagged"] == 0
+    assert any(c["stage"] == "semantic" for c in client.log)
+
+
+def test_chair_can_sit_out_critique_and_vote():
+    cfg = make_cfg(chair_critiques=False, chair_votes=False, chair_proposes=False)
+    client = Rec()
+    run(Council(cfg, client, seed=1).run("Вопрос?"))
+    chair_model = next(m.model for m in cfg.members if m.name == cfg.chair)
+    assert not [c for c in client.log if c["model"] == chair_model and c["stage"] in ("critique", "vote")]
+
+
+def test_key_limit_is_shared_between_sessions(tmp_path):
+    from council.client import KeyLimit
+    from council.estimate import Price
+    from council.inflight import InFlight
+    InFlight(tmp_path, "other").set(0.95)  # другое заседание (бот) уже ждёт ответов на $0,95
+    assert InFlight(tmp_path, "me").others() == 0.95
+    cfg = make_cfg(max_cost_usd=50)
+    m = cfg.members[0]
+
+    async def key():
+        return {"remaining": 1.0}
+    c = Council(cfg, MockClient(delay=0), pricing={m.model: Price(prompt=3e-6, completion=15e-6)}, key_limit=key,
+                shared_dir=tmp_path, session_id="me")
+    with pytest.raises(KeyLimit, match="лимита ключа"):
+        run(c._ask(m, "proposal", "x" * 30000, R.ResearchProposal, max_tokens=8000))
+
+
+def test_reserve_uses_typical_stage_output_from_history():
+    from council.estimate import Price
+    cfg = make_cfg()
+    m = cfg.members[0]
+    msgs = [{"role": "user", "content": "x" * 3000}]
+    plain = Council(cfg, MockClient(delay=0), pricing={m.model: Price(prompt=0, completion=1e-5)})
+    learned = Council(cfg, MockClient(delay=0), pricing={m.model: Price(prompt=0, completion=1e-5)}, stage_out={"vote": 500})
+    assert plain._call_estimate(m, msgs, 16000, False, "vote") == pytest.approx(16000 * 0.5 * 1e-5)
+    assert learned._call_estimate(m, msgs, 16000, False, "vote") == pytest.approx(750 * 1e-5)

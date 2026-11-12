@@ -128,6 +128,8 @@ class MockClient:
 
 def _research(stage: str, who: str, meta: dict[str, Any]) -> dict[str, Any]:
     """Демо-ответы режима «Исследование»."""
+    if stage == "semantic":
+        return {"items": [{"item_id": i, "status": "supported"} for i in meta.get("items") or []]}
     if stage == "framing":
         return {"refined_question": "Каков рынок кофеен у вузов и стоит ли открывать точку? (демо)",
                 "criteria": ["Полнота покрытия", "Качество доказательств", "Калибровка неопределённости", "Практическая ценность"],

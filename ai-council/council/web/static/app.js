@@ -1291,6 +1291,7 @@ function apply(s, ev) {
       setTimeout(() => refreshBalance(true), 3000);  // расход заседания уже списан
       logAdd(s, `✓ Заседание завершено, отчёты готовы`, "k-ok");
       s.done = ev;
+      s.semantic = ev.semantic || null;
       s.cost = ev.total_cost ?? s.cost;
       if (s.stage) s.doneStages.add(s.stage);
       s.stage = null; s.work = {};
@@ -1490,6 +1491,7 @@ function renderResearch(s) {
       return `<li><span class="rq">${id}</span> ${esc(q)} <span class="muted small">· ${esc(COVER_WORD[a.status] || a.status || "—")}${lead ? ` · каркас — вариант ${esc(lead)}` : ""}</span></li>`;
     }).join("")}</ul>`;
   }
+  h += entityCoverage(s);
   if ((v.next_questions || []).length) h += `<h4>Что исследовать дальше</h4><ul>${v.next_questions.map((x) => `<li>${inline(x)}</li>`).join("")}</ul>`;
   const claims = [...((s.ledger && s.ledger.claims) || []).map((c) => (c.duplicate_of
     ? { ...c, notes: [`то же утверждение, что ${c.duplicate_of} — проверено вместе`, ...(c.notes || [])] } : c)),
@@ -2744,6 +2746,8 @@ function knownBasis(k, s) {
     let host = ""; try { host = new URL(e.url).hostname.replace(/^www\./, ""); } catch { host = e.url || ""; }
     return [`${i}: ${host}`, e.date ? `от ${e.date}` : "", SEEN_TEXT[e.material_seen] || "", LINK_TEXT[e.link] || ""].filter(Boolean).join(", ");
   });
+  const sem = s && s.semantic && s.semantic.items && s.semantic.items[k.item_id];
+  if (sem && sem.status !== "supported") out.push(`<div class="small"><span class="badge warn" title="Теневая сверка смысла одной моделью — только для сведения, статус не менялся">сверка смысла: ${sem.status === "contradicted" ? "противоречит опоре" : "следует не полностью"}</span> <span class="muted">${esc([sem.reason, (sem.unsupported_parts || []).join("; ")].filter(Boolean).join(" — "))}</span></div>`);
   if (trust.length) out.push(`<div class="trust small">${trust.map(esc).join(" · ")}${quote ? ' · <span class="ok-text">цитата найдена на странице</span>' : ""}</div>`);
   if (v.length) out.push(`<div class="muted small">проверено: «${v.map(esc).join("», «")}»</div>`);
   if ((k.evidence_ids || []).includes("DOC")) out.push(`<div class="muted small">по вашему документу${k.doc_ref ? ` (${esc(k.doc_ref)})` : ""}${k.doc_quote ? `: «${esc(k.doc_quote)}»` : ""} — не независимая проверка</div>`);
@@ -2825,3 +2829,20 @@ $("fresh").addEventListener("change", () => {
   renderWebMembers(); formChanged();
 });
 $("answerSize").addEventListener("change", formChanged);
+
+// охват по объектам (компании, продукты): сколько утверждений о каждом проверено и подтверждено — для каталогов
+function entityCoverage(s) {
+  const claims = ((s.ledger && s.ledger.claims) || []).filter((c) => c.entity && !c.duplicate_of && !c.derived_from);
+  const by = {};
+  for (const c of claims) {
+    const k = c.entity.trim();
+    const r = by[k] || (by[k] = { n: 0, ok: 0 });
+    r.n += 1; if (c.status === "confirmed") r.ok += 1;
+  }
+  for (const c of ((s.ledger && s.ledger.claims) || [])) if (c.derived_from && c.entity && by[c.entity.trim()] && c.status === "confirmed") by[c.entity.trim()].ok += 1;
+  const rows = Object.entries(by).sort((a, b) => b[1].n - a[1].n);
+  if (rows.length < 3) return "";
+  return `<h4>Охват по объектам</h4><p class="muted small">Сколько утверждений о каждом объекте проверено поиском и сколько подтверждено. Объектов, которых здесь нет, поиск не проверял — данные о них из памяти моделей.</p>
+    <div class="table-wrap"><table class="table"><thead><tr><th>Объект</th><th class="num">Проверено</th><th class="num">Подтверждено</th></tr></thead><tbody>
+    ${rows.map(([k, r]) => `<tr><td>${esc(k)}</td><td class="num">${r.n}</td><td class="num">${r.ok}</td></tr>`).join("")}</tbody></table></div>`;
+}

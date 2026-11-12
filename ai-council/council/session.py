@@ -18,9 +18,10 @@ log = logging.getLogger("council.session")
 
 from . import prompts
 from .checkpoint import Journal, call_key
-from .client import Completion, LLMClient, OutOfCredits, ProviderError
+from .client import Completion, KeyLimit, LLMClient, OutOfCredits, ProviderError
 from .config import CouncilConfig, MemberConfig, Mode
 from .attachments import Attachment, documents_block, image_parts, images_note
+from .inflight import InFlight
 from .filerefs import FIX_MESSAGE, refs_in
 from .schemas import Ballot, CritiqueSet, FactCheck, Framing, ImageNotes, Proposal, Revision, Verdict
 from .voting import (
@@ -166,6 +167,10 @@ class Council:
         labels: dict[str, str] | None = None,
         link_checker: Callable[[list[str]], Awaitable[dict[str, Any]]] | None = None,
         pricing: dict[str, Any] | None = None,
+        stage_out: dict[str, Any] | None = None,
+        key_limit: Callable[[], Awaitable[dict[str, Any] | None]] | None = None,
+        shared_dir: Any = None,
+        session_id: str = "",
     ) -> None:
         """labels — метки вариантов, как в прошлом прогоне («доделать» заседание из архива: ответы из стенограммы
         ссылаются на эти метки)."""
@@ -182,6 +187,14 @@ class Council:
         self._in_flight = 0      # запросы к моделям, отправленные и ещё не вернувшиеся (резерв бюджета)
         self._reserved = 0.0     # оценка их цены
         self.pricing = pricing or {}  # модель -> estimate.Price (каталог OpenRouter): резерв по конкретному запросу
+        # сколько токенов модели обычно пишут на этапе (по прошлым заседаниям) — резерв выхода без перестраховки
+        self.stage_out = {k: v for k, v in (stage_out or {}).items() if isinstance(v, (int, float))}
+        # общий учёт лимита ключа сайта и бота: остаток лимита и запросы всех идущих заседаний
+        self.key_limit = key_limit
+        self.shared = InFlight(shared_dir, session_id) if shared_dir and session_id else None
+        self._key_left: float | None = None
+        self._key_at = 0.0
+        self._key_spent = 0.0
         self._requests_done = 0
         self._fresh_stage = ""   # первый этап, где ответ пришлось получать от модели (не из журнала)
         self.link_checker = link_checker  # проверка ссылок реестра (в демо и тестах — нет)
@@ -371,7 +384,8 @@ class Council:
                 raise BudgetExceeded(
                     f"достигнут лимит бюджета ${self.budget:g} (потрачено ${self.total_cost:.4f})"
                 )
-            cost_est = self._call_estimate(member, messages, max_tokens, web_search) if self.cfg.budget_reserve else 0.0
+            cost_est = self._call_estimate(member, messages, max_tokens, web_search, stage) if self.cfg.budget_reserve else 0.0
+            await self._check_key(cost_est)
             if self.cfg.budget_reserve and self.total_cost + self._reserved + cost_est >= self.budget:
                 raise BudgetExceeded(
                     f"бюджет ${self.budget:g} будет превышен: потрачено ${self.total_cost:.4f}, запросы в работе "
@@ -387,12 +401,16 @@ class Council:
                         extra = {"web_search": True} if web_search else {}
                         self._in_flight += 1
                         self._reserved += cost_est
+                        if self.shared:
+                            self.shared.set(self._reserved)
                         try:
                             comp = await self._complete(member, messages, temperature, max_tokens, effort, meta, progress,
                                                         extra)
                         finally:
                             self._in_flight -= 1
                             self._reserved = max(0.0, self._reserved - cost_est)
+                            if self.shared:
+                                self.shared.set(self._reserved)
                         self._requests_done += 1
             except ProviderError as e:
                 if e.spent is not None:  # неудачные попытки тоже стоят денег
@@ -507,7 +525,34 @@ class Council:
     SEARCH_RESERVE_USD = 0.02  # поиск в интернете на запрос — оценка сверху (у OpenRouter оплачивается отдельно)
     CHARS_PER_TOKEN = 3.0      # для оценки входа: русский текст ~2,5–3 знака на токен, английский ~4
 
-    def _call_estimate(self, member: MemberConfig, messages: list, max_tokens: int | None, web: bool) -> float:
+    KEY_REFRESH_S = 300  # остаток лимита ключа уточняется не чаще раза в 5 минут (и когда он близок к концу)
+
+    async def _check_key(self, cost_est: float) -> None:
+        """Общий лимит ключа OpenRouter: остаток минус потраченное с последней сверки, минус запросы в работе у всех
+        заседаний сайта и бота. Не хватает — пауза «лимит ключа» до того, как ключ откажет посреди этапа."""
+        if not (self.cfg.key_reserve and self.key_limit):
+            return
+        now = time.monotonic()
+        left = None if self._key_left is None else self._key_left - (self.total_cost - self._key_spent)
+        if left is None or now - self._key_at > self.KEY_REFRESH_S or left < 5:
+            try:
+                info = await self.key_limit()
+            except Exception:  # noqa: BLE001 — не узнали остаток — не мешаем работе
+                info = None
+            self._key_at = now
+            if not info:
+                self._key_left = None
+                return
+            self._key_left, self._key_spent = float(info["remaining"]), self.total_cost
+            left = self._key_left
+        others = self.shared.others() if self.shared else 0.0
+        if left - others - self._reserved - cost_est < 0:
+            raise KeyLimit(f"лимита ключа OpenRouter не хватает: осталось ≈${max(left, 0):.2f}, запросы в работе у всех "
+                           f"заседаний ≈${others + self._reserved:.2f}, этот запрос ≈${cost_est:.2f}. Пауза — продолжите, "
+                           "когда лимит обновится или его поднимут")
+
+    def _call_estimate(self, member: MemberConfig, messages: list, max_tokens: int | None, web: bool,
+                       stage: str = "") -> float:
         """Сколько может стоить этот запрос: вход по длине, выход — доля предела ответа, поиск. Цена модели — по
         каталогу; если её нет — средняя цена уже сделанных запросов (так было раньше)."""
         chars = 0
@@ -517,7 +562,12 @@ class Council:
         price = self.pricing.get(member.model)
         if price is None:
             return self.total_cost / self._requests_done if self._requests_done else 0.0
-        out = (max_tokens or member.max_tokens or self.cfg.max_tokens or 4000) * self.cfg.reserve_output_share
+        limit = max_tokens or member.max_tokens or self.cfg.max_tokens or 4000
+        hist = self.stage_out.get(stage)
+        if hist:  # по прошлым заседаниям: обычная длина ответа на этапе с запасом (критика — на все варианты сразу)
+            out = min(limit, hist * (6 if stage == "critique" else 1) * 1.5)
+        else:
+            out = limit * self.cfg.reserve_output_share
         return (chars / self.CHARS_PER_TOKEN * price.prompt + out * price.completion + price.request
                 + (self.SEARCH_RESERVE_USD if web else 0.0))
 
@@ -526,6 +576,13 @@ class Council:
         out = {a.name: a.text for a in self.attachments if a.kind == "document" and a.text}
         out.update({str(n): str(x) for n, x in (self.image_notes or {}).items() if x})
         return out
+
+    def _sits_out(self, m: MemberConfig, stage: str, members: list[MemberConfig]) -> bool:
+        """Эксперимент пилота: председатель без своего варианта не критикует и/или не голосует (если без него
+        останется хотя бы два судьи)."""
+        if m.name != self.cfg.chair or not self.chair_judge or len(members) - 1 < 2:
+            return False
+        return (stage == "critique" and not self.cfg.chair_critiques) or (stage == "vote" and not self.cfg.chair_votes)
 
     def _input_gaps(self, gaps: list[str], chair: MemberConfig) -> None:
         """Председатель заметил, что вход обрезан или недоступен, — показать это пользователю."""
@@ -786,6 +843,8 @@ class Council:
             self._emit("stage", stage="critique", title=f"Критика, раунд {r + 1}/{critique_rounds}")
             jobs = {}
             for m in members:
+                if self._sits_out(m, "critique", members):
+                    continue
                 target = self._shuffled(others(m.name))  # свой порядок для каждого судьи — гасит эффект позиции
                 if not target:
                     continue
@@ -836,6 +895,8 @@ class Council:
         keep_in_vote = mode == "quick" and self.cfg.quick_keep  # без критики идеи проигравших называют голосующие
         jobs = {}
         for m in members:
+            if self._sits_out(m, "vote", members):
+                continue
             target = self._shuffled(others(m.name))
             if not target:
                 continue
@@ -1064,6 +1125,8 @@ class Council:
         self._emit("stage", stage="critique", title="Критика и спорные утверждения")
         jobs = {}
         for m in members:
+            if self._sits_out(m, "critique", members):
+                continue
             target = self._shuffled(others(m.name))
             if not target:
                 continue
@@ -1148,6 +1211,8 @@ class Council:
         self._emit("stage", stage="vote", title="Голосование: каркас по подвопросам")
         jobs = {}
         for m in members:
+            if self._sits_out(m, "vote", members):
+                continue
             target = self._shuffled(others(m.name))
             if not target:
                 continue
@@ -1249,6 +1314,7 @@ class Council:
             d = by_id.get(i["id"])
             i["decision"], i["reason"] = (d.decision, d.reason) if d else ("not_addressed", "")
         self._emit("verdict", verdict=verdict, ideas=ideas)
+        semantic = await self._semantic_audit(R, chair, verdict, ledger, rc, rmeta)
         return SessionResult(
             question=question, refined_question=refined, criteria=criteria, mode="research", authors=authors,
             initial_proposals=initial, proposals=proposals, critiques=critiques, ballots=ballots, tally=rows,
@@ -1262,8 +1328,34 @@ class Council:
             research={"scope": scope, "as_of": as_of, "subquestions": subq, "lenses": lenses,
                       "lens_of": {label_of[n]: lens_of.get(n, "") for n in label_of},
                       "scouts": sorted(label_of[n] for n in scouts if n in label_of),
-                      "ledger": ledger, "sections": sections, "settings": rc.model_dump()},
+                      "ledger": ledger, "sections": sections, "settings": rc.model_dump(),
+                      **({"semantic_audit": semantic} if semantic else {})},
         )
+
+    async def _semantic_audit(self, R: Any, chair: MemberConfig, verdict: Any, ledger: dict[str, Any] | None,
+                              rc: Any, rmeta: dict[str, Any]) -> dict[str, Any] | None:
+        """Теневая сверка смысла «известно»: следует ли каждый пункт из своей опоры. Только записывается —
+        статусы не меняются (пилот: сравнить с ручной проверкой, потом решать, делать ли её фильтром)."""
+        known = [k for k in verdict.known if k.item_id]
+        if not (rc.semantic_audit and known):
+            return None
+        member = chair.model_copy(update={"model": rc.semantic_audit_model or chair.model, "max_tokens": 4000,
+                                          "reasoning_effort": "none"})
+        try:
+            got = await self._ask(member, "semantic", R.semantic_audit(R.semantic_items(known, ledger)), R.SemanticAudit,
+                                  meta={"items": [k.item_id for k in known], **rmeta})
+        except (ProviderError, InvalidResponse) as e:
+            if isinstance(e, OutOfCredits):
+                raise
+            log.warning("смысловая сверка не удалась: %s", e)
+            return None
+        by = {i.item_id: i.model_dump() for i in got.items if i.item_id in {k.item_id for k in known}}
+        flagged = [i for i in by.values() if i["status"] != "supported"]
+        if flagged:
+            self._emit("warning", stage="verdict", member=member.name,
+                       text=f"смысловая сверка: {len(flagged)} из {len(known)} пунктов «известно» не следуют из опоры полностью "
+                            "(только для сведения — статус не менялся)")
+        return {"model": member.model, "items": by, "flagged": len(flagged), "checked": len(known)}
 
     def _ledger(self, R: Any, selected: list[dict[str, Any]], results: list[Any], rc: Any,
                 deferred: list[dict[str, Any]]) -> dict[str, Any]:

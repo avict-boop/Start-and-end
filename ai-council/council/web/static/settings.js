@@ -162,7 +162,7 @@ function renderSettings() {
         <label class="field"><span>Лимит заседания, $</span><input type="number" id="sBudget" min="0.01" step="any" value="${d.max_cost_usd}" ${ro}></label>
         <label class="field"><span>Кворум</span><input type="number" id="sQuorum" min="1" value="${d.min_quorum}" ${ro}><small class="hint">минимум вариантов, чтобы продолжить</small></label>
         <label class="field"><span>Глубина рассуждений</span>${sel("sEffort", EFFORTS.slice(1), d.reasoning_effort, ro)}<small class="hint">для «думающих» моделей</small></label>
-        <label class="field"><span>Лимит длины ответа, токенов</span><input type="number" id="sMaxTokens" min="500" step="500" value="${d.max_tokens}" ${ro}><small class="hint">длинные ответы продолжаются автоматически</small></label>
+        <label class="field"><span>Лимит длины ответа, токенов</span><input type="number" id="sMaxTokens" min="500" step="500" value="${d.max_tokens}" ${ro}><small class="hint">платится только написанное; при меньшем пределе длинные ответы дописываются продолжениями, и каждое заново читает весь вход — рекомендуем 16000</small></label>
         <label class="field"><span>Температура</span><input type="number" id="sTemp" min="0" max="2" step="0.1" value="${d.temperature}" ${ro}><small class="hint">0 — строже, 1 — креативнее</small></label>
         <label class="field"><span>Язык ответов</span><input type="text" id="sLang" value="${esc(d.language)}" ${ro}><small class="hint">по-английски: Russian, English…</small></label>
       </div>
@@ -175,6 +175,9 @@ function renderSettings() {
       <p class="muted small">Значения по умолчанию — по рекомендациям аудита совета. Менять стоит, если видно, что мешают.</p>
       ${[["quick_keep", "Идеи проигравших в «Быстром ответе»", "голосующие называют ценное из вариантов не на первом месте — его не теряем"],
          ["evaluate_allow_none", "«Ни один вариант не подходит» в «Выборе из вариантов»", "председатель может честно сказать, что все варианты непригодны, с причиной и цитатой"],
+         ["chair_critiques", "Председатель участвует в критике", "эксперимент пилота: выключите — дешевле, но у каждой пары вариантов меньше оценок"],
+         ["chair_votes", "Председатель голосует", "эксперимент пилота: выключите — дешевле, но меньше бюллетеней"],
+         ["key_reserve", "Общий учёт лимита ключа", "сайт и бот вместе следят за остатком лимита OpenRouter: пауза до того, как ключ откажет посреди этапа"],
          ["budget_reserve", "Резерв бюджета на запросы", "новый запрос не уходит, если с ним и уже отправленными бюджет будет превышен — цена каждого запроса оценивается по каталогу; пауза — чуть раньше, но без перерасхода"]].map(([k, t, h]) =>
         `<label class="switch"><input type="checkbox" data-kb="${k}" ${d[k] ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>${t}</b><small>${h}</small></span></label>`).join("")}
       <div class="row2" style="margin-top:.6rem">
@@ -219,6 +222,7 @@ function renderSettings() {
          ["rClaimIds", "require_claim_ids", "«Известно» — только с проверенным утверждением", "каждый пункт называет утверждения реестра, на которые опирается; без них — в «неизвестно»"],
          ["rNums", "known_numbers_check", "Не расширять проверенное", "в «известно» нет чисел, которых нет в проверенном утверждении; иначе — в «неизвестно» с причиной"],
          ["rDecisive", "check_decisive_private", "Решающее «непубличное» — проверять", "автор мог ошибиться с меткой: правообладатель и регистрация часто публичны — один публичный поиск"],
+         ["rSemantic", "semantic_audit", "Теневая сверка смысла «известно»", "одна модель без поиска проверяет, следует ли каждый пункт из своей опоры; только показывается, статус не меняет (центы)"],
          ["rQuote", "quote_check", "Искать цитату на странице", "поиск приводит дословную фразу источника, программа находит её на самой странице; для важного утверждения не нашлась — не засчитано (бесплатно)"],
          ["rLinks", "link_check", "Проверять ссылки", "открыть каждую ссылку реестра: мёртвая ничего не подтверждает"]].map(([id, k, t, h]) =>
         `<label class="switch"><input type="checkbox" id="${id}" data-r="${k}" ${d.research[k] ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>${t}</b><small>${h}</small></span></label>`).join("")}

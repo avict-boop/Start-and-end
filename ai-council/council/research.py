@@ -96,6 +96,7 @@ class RClaim(BaseModel):
     checkability: str = "public"   # public | registry | private — можно ли проверить открытым поиском
     check_path: str = ""           # где проверять (реестр, документ, правообладатель)
     decisive: bool = False         # вывод или рекомендация изменились бы, окажись утверждение ложным
+    entity: str = ""               # о ком или о чём утверждение (компания, продукт) — для охвата каталога
 
     @model_validator(mode="before")
     @classmethod
@@ -123,7 +124,7 @@ class RClaim(BaseModel):
             return v.strip().lower() in ("true", "yes", "1", "да", "high", "critical")
         return bool(v)
 
-    @field_validator("text", "scope", "why_it_matters", "id", "check_path", mode="before")
+    @field_validator("text", "scope", "why_it_matters", "id", "check_path", "entity", mode="before")
     @classmethod
     def _txt(cls, v: Any) -> str:
         return to_text(v)
@@ -509,6 +510,7 @@ the claim false."""
 CLAIM_JSON = ('{"text": "one atomic checkable statement", "basis": "user_doc|calc|memory|search_reported", '
               '"scope": "period, geography, units", "volatility": "stable|changes_fast|unknown", '
               '"subquestions": ["Q1"], "checkability": "public|registry|private", "check_path": "", "decisive": true|false, '
+              '"entity": "company or product the claim is about", '
               '"source_leads": ["..."], "why_it_matters": "..."}')
 
 
@@ -908,7 +910,7 @@ def select_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, A
             scored.append((s, label, {"id": c.id, "label": label, "text": c.text, "scope": c.scope,
                                       "basis": c.basis, "volatility": c.volatility,
                                       "disputed": disputed.get(c.id.upper(), 0),
-                                      "decisive_by_critics": c.id.upper() in decisive_by,
+                                      "decisive_by_critics": c.id.upper() in decisive_by, "entity": c.entity,
                                       "reasons": reasons.get(c.id.upper(), [])[:2]}))
     scored.sort(key=lambda x: -x[0])
     out, seen = [], set()
@@ -1495,3 +1497,57 @@ def fallback_verdict(leader: str, proposals: dict[str, Proposal], ledger: dict[s
                            coverage_audit=[CoverageItem(subquestion_id=f"Q{i}", status="unknown", note="синтез не выполнен")
                                            for i in range(1, len(subq) + 1)],
                            risks=list(top.risks) if top else [])
+
+
+# ---------------------------------------------------------------- теневая смысловая сверка «известно»
+
+class SemanticItem(BaseModel):
+    item_id: str
+    status: str = "insufficient"      # supported | contradicted | insufficient
+    unsupported_parts: list[str] = Field(default_factory=list)
+    reason: str = ""
+
+    @field_validator("item_id", "reason", mode="before")
+    @classmethod
+    def _t(cls, v: Any) -> str:
+        return to_text(v).strip()
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _s(cls, v: Any) -> str:
+        return _norm(v, ("supported", "contradicted", "insufficient"), "insufficient")
+
+    @field_validator("unsupported_parts", mode="before")
+    @classmethod
+    def _p(cls, v: Any) -> list[str]:
+        return to_list(v)
+
+
+class SemanticAudit(BaseModel):
+    items: list[SemanticItem] = Field(default_factory=list)
+
+
+def semantic_items(known: list[KnownItem], ledger: dict[str, Any] | None) -> str:
+    claim_by = {c["id"].upper(): c for c in (ledger or {}).get("claims", [])}
+    out = []
+    for k in known:
+        basis = [f"- verified claim: {claim_by[c].get('text', '')} (scope: {claim_by[c].get('scope', '') or '—'})"
+                 for c in k.claim_ids if c in claim_by]
+        if "DOC" in k.evidence_ids and k.doc_quote:
+            basis.append(f"- user-document quotation ({k.doc_ref or 'file not named'}): \"{k.doc_quote}\"")
+        out.append(f"{k.item_id}: {k.statement}\n" + ("\n".join(basis) or "- (no verified basis)"))
+    return "\n\n".join(out)
+
+
+def semantic_audit(items: str) -> str:
+    return f"""Check whether EACH statement below is fully entailed ONLY by its supplied verified claim texts or the exact
+user-document quotation. Check subject, polarity, modality, quantities, units, period, geography and every qualifier.
+Do not use outside knowledge. A matching number, an existing evidence id or a related quotation is not proof. Treat
+user documents as user-provided evidence, not independent verification. Return "supported" only if every part is
+directly supported; otherwise "contradicted" or "insufficient", and quote the unsupported words. Do not rewrite
+statements and never mark anything confirmed.
+
+{items}
+
+JSON format:
+{{"items": [{{"item_id": "K1", "status": "supported|contradicted|insufficient", "unsupported_parts": ["..."], "reason": "..."}}]}}"""
