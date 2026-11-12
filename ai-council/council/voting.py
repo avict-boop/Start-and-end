@@ -16,14 +16,27 @@ _TRAILING_COMMA = re.compile(r",(\s*[}\]])")
 
 
 def _first_object(chunk: str) -> dict | None:
-    for m in re.finditer(r"\{", chunk):
+    """Самый большой JSON-объект верхнего уровня в тексте. Не первый: модель с поиском пишет текст между шагами
+    и может сначала выдать маленький черновой объект, а полный ответ — после (12.11 у kimi так в варианты попал
+    черновик из одной фразы вместо готового ответа)."""
+    best: tuple[int, dict] | None = None
+    pos = 0
+    while True:
+        m = re.compile(r"\{").search(chunk, pos)
+        if m is None:
+            break
         try:
-            obj, _ = _decoder.raw_decode(chunk, m.start())
+            obj, end = _decoder.raw_decode(chunk, m.start())
         except json.JSONDecodeError:
+            pos = m.start() + 1
             continue
         if isinstance(obj, dict):
-            return obj
-    return None
+            if best is None or end - m.start() > best[0]:
+                best = (end - m.start(), obj)
+            pos = end  # вложенные объекты этого объекта не рассматриваем отдельно
+        else:
+            pos = m.start() + 1
+    return best[1] if best else None
 
 
 def extract_json(text: str) -> dict:

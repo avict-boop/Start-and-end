@@ -491,3 +491,17 @@ def test_pdf_text_and_link_deadline(monkeypatch):
     monkeypatch.setattr(links, "LINK_DEADLINE", 0.2)
     got = run(links.check_links(["https://a.example/x"]))
     assert got["https://a.example/x"]["status"] == "error" and got["https://a.example/x"]["error"] == "слишком долго"
+
+
+def test_draft_object_before_full_answer_is_not_taken():
+    # модель с поиском: сначала черновой объект из одной фразы, потом полный ответ — берётся полный
+    from council.voting import extract_json
+    text = 'Ищу… {"title": "черновик", "summary": "одна фраза"} нашёл. {"title": "Полный", "summary": "' + "текст " * 200 + '"}'
+    assert extract_json(text)["title"] == "Полный"
+
+
+def test_truncated_answer_with_complete_draft_inside_is_continued():
+    # ответ оборван на лимите, но внутри есть целый черновой объект — не принимаем черновик, просим продолжить
+    from council.session import _unclosed
+    assert _unclosed('{"title": "черновик", "summary": "x"} {"title": "Полный", "summary": "обрыв')
+    assert not _unclosed('{"title": "a", "summary": "скобка } в тексте { тоже"}')

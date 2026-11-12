@@ -494,6 +494,9 @@ class Council:
             if acc:
                 entry["continuation"] = continuations
             try:
+                if comp.finish_reason in ("length", "max_tokens", "MAX_TOKENS") and _unclosed(text):
+                    # ответ оборван на лимите: найденный в нём целый объект — лишь черновик или часть, а не ответ
+                    raise ValueError("JSON-объект оборван (похоже, ответ обрезан по лимиту токенов)")
                 obj = self._parse(schema, text, comp.text if acc else None)
                 if check:
                     obj = check(obj)
@@ -914,6 +917,26 @@ def _letters(text: str) -> int:
 def _is_placeholder(text: str) -> bool:
     t = (text or "").strip()
     return bool(PLACEHOLDER_RE.search(t)) and _letters(t) < 400
+
+
+def _unclosed(text: str) -> bool:
+    """В конце ответа остался незакрытый JSON-объект (скобки вне строк не сходятся)."""
+    depth, in_str, esc = 0, False, False
+    for ch in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+    return depth > 0 or in_str
 
 
 def check_substance(p: Proposal, *, previous: Proposal | None = None, compact: bool = False) -> Proposal:
