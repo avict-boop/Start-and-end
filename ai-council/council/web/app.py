@@ -305,8 +305,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         try:
             return with_overrides(base_config(), members=req.members, chair=req.chair,
                                   devil_advocate=req.devil_advocate, budget=req.budget,
-                                  chair_proposes=req.chair_proposes, fact_check=req.fact_check,
-                                  compact=False if req.mode == "research" else req.compact,
+                                  chair_proposes=req.chair_proposes,
+                                  # в «Креативе» проверки фактов нет — не тратить на неё и не показывать её этап
+                                  fact_check=False if req.mode == "creative" else req.fact_check,
+                                  compact=False if req.mode in ("research", "creative") else req.compact,
                                   research_words=req.research_words if req.mode == "research" else None,
                                   research_shorten=req.research_shorten if req.mode == "research" else None,
                                   # «Свежие данные» на экране вопроса — явный список; «разведчики» по умолчанию

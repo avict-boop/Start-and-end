@@ -171,7 +171,7 @@ def estimate(
     plan = plan_calls(cfg, mode, rounds, n_options, has_criteria)
     opt_len = int(options_chars / 3 / n_options) + 100 if n_options and options_chars else out["proposal"]
     first_len = opt_len if n_options else out["proposal"]           # вариант до доработки
-    final_len = out["revision"] if mode in ("debate", "research") else first_len  # вариант, который читают голосующие и председатель
+    final_len = out["revision"] if mode in ("debate", "research", "creative") else first_len  # вариант, который читают голосующие и председатель
     small_docs = 0 < doc_tokens * 3 <= VOTE_DOC_CHARS
 
     def call_tokens(stage: str, n: int, att: int, critique_round: int) -> tuple[int, int]:

@@ -584,7 +584,7 @@ class Council:
     def _quorum(self, authors: int, mode: str) -> int:
         """Сколько вариантов нужно: при 4+ авторах в обсуждении и исследовании — не меньше quorum_large
         (при двух вариантах у судьи один чужой, выбор по сути делает председатель)."""
-        if mode in ("debate", "research") and authors >= 4:
+        if mode in ("debate", "research", "creative") and authors >= 4:
             return max(self.cfg.min_quorum, self.cfg.quorum_large)
         return self.cfg.min_quorum
 
@@ -641,8 +641,12 @@ class Council:
             out = min(limit, hist * (6 if stage == "critique" else 1) * 1.5)
         else:
             out = limit * self.cfg.reserve_output_share
-        return (chars / self.CHARS_PER_TOKEN * price.prompt + out * price.completion + price.request
-                + (self.SEARCH_RESERVE_USD if web else 0.0) + fetch)
+        # с поиском модель получает весь запрос заново на каждом шаге поиска (вход растёт в разы), а сам поиск
+        # оплачивается по числу результатов (Exa ≈ $0,004 за результат)
+        steps = 1 + self.cfg.search_uses / 2 if web else 1
+        search = (max(self.SEARCH_RESERVE_USD, 0.004 * self.cfg.search_uses * self.cfg.search_results) if web else 0.0)
+        return (chars / self.CHARS_PER_TOKEN * price.prompt * steps + out * price.completion + price.request
+                + search + fetch)
 
     def _docs_text(self) -> dict[str, str]:
         """Текст документов пользователя и описания картинок по файлам — для сверки цитат «из документов»."""

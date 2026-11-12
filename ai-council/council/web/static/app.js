@@ -242,7 +242,8 @@ function setMode(m) {
   $("roundsField").hidden = m !== "debate";
   $("optionsField").hidden = m !== "evaluate";
   // у исследования своя длина варианта (Настройки → Исследование) — «компактные варианты» к нему не относятся
-  $("compact").closest("label").hidden = m === "research";
+  // «Компактные варианты» (до N слов) противоречат «12–20 идей» «Креатива» и длине варианта исследования
+  $("compact").closest("label").hidden = m === "research" || m === "creative";
   $("researchLen").hidden = m !== "research";
   // в исследовании вместо неё — арбитраж доказательств; в «Креативе» проверять нечего
   $("factCheckRow").hidden = m === "research" || m === "creative";
@@ -373,7 +374,7 @@ function updateParamsSummary() {
   if ($("chair").value) bits.push(`председатель ${$("chair").value}`);
   if (mode === "debate") { const r = Number($("rounds").value) || 1; bits.push(`${r} ${plural(r, "раунд", "раунда", "раундов")}`); }
   bits.push(`бюджет $${Number($("budget").value) || config.budget}`);
-  if ($("compact").checked && mode !== "research") bits.push("компактно");
+  if ($("compact").checked && mode !== "research" && mode !== "creative") bits.push("компактно");
   if (mode === "research") bits.push(noLimit() ? "вариант без ограничения длины"
     : `вариант до ${Number($("researchWords").value) || "—"} слов${$("researchShorten").checked ? ", длинные — на сокращение" : ""}`);
   if (mode === "research" && researchTuned.arbitration_claims) bits.push(`проверка ${researchTuned.arbitration_claims} утв.`);
@@ -496,7 +497,7 @@ function payload() {
     devil_advocate: $("devil").value,
     chair_proposes: $("chairProposes").checked,
     fact_check: mode === "creative" ? false : $("factCheck").checked,
-    compact: mode === "research" ? false : $("compact").checked,
+    compact: mode === "research" || mode === "creative" ? false : $("compact").checked,
     research_words: mode === "research" ? (noLimit() ? 0 : Number($("researchWords").value) || null) : null,
     research_shorten: mode === "research" ? $("researchShorten").checked : null,
     research: mode === "research" && Object.keys(researchTuned).length

@@ -338,7 +338,10 @@ class OpenRouterClient:
                           "parameters": {"max_uses": int(web_fetch), "max_content_tokens": FETCH_TOKENS}})
         if tools:
             payload["tools"] = tools
-        if json_mode and model not in _NO_FEATURE["json"] and not model.startswith("perplexity/"):
+        # OpenAI не принимает строгий JSON вместе с поиском («Web Search cannot be used with JSON mode») — не тратим
+        # запрос с ошибкой (и не теряем строгий JSON у этой модели для запросов без поиска)
+        openai_search = model.startswith("openai/") and any(t["type"] == "openrouter:web_search" for t in tools)
+        if json_mode and model not in _NO_FEATURE["json"] and not model.startswith("perplexity/") and not openai_search:
             payload["response_format"] = {"type": "json_object"}
         spent = Completion(text="")  # расходы всех попыток, включая неудачные
         last_error = "неизвестная ошибка"

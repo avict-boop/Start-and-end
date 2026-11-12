@@ -212,7 +212,7 @@ class Progress:
         if self.mode == "research":  # вместо проверки лидеров — арбитраж; проверка новых — если была
             return skip | {"factcheck"} | (set() if "recheck" in self.done_stages or self.stage == "recheck" else {"recheck"})
         skip = skip | {"arbitration", "recheck"}
-        return skip if self.fact_check else skip | {"factcheck"}
+        return skip if self.fact_check and self.mode != "creative" else skip | {"factcheck"}
 
     def render(self, *, final: str | None = None) -> str:
         head = final or "🏛 <b>Совет заседает…</b>"
@@ -351,8 +351,9 @@ class CouncilBot:
         if members is not None:
             known = {m.name for m in base.members}
             members = [m for m in members if m in known]  # участника могли удалить из config.yaml
-        return with_overrides(base, members=members, budget=s.budget, fact_check=s.fact_check,
-                              compact=False if s.mode == "research" else s.compact)
+        return with_overrides(base, members=members, budget=s.budget,
+                              fact_check=False if s.mode == "creative" else s.fact_check,
+                              compact=False if s.mode in ("research", "creative") else s.compact)
 
     async def send(self, chat_id: int, text: str, **kw: Any) -> dict[str, Any] | None:
         """Отправка длинного HTML с разбиением; при ошибке разметки — простым текстом."""
