@@ -900,8 +900,30 @@ def _restore(html: str, store: list[str]) -> str:
     return re.sub(r"⟦m(\d+)⟧", lambda m: f'<span class="math">{store[int(m.group(1))]}</span>', html)
 
 
+_SAFE_HREF = re.compile(r"^(https?://|mailto:|#)", re.I)
+_HREF = re.compile(r'(<a\b[^>]*?\bhref=")([^"]*)(")', re.I)
+_IMG = re.compile(r"<img\b[^>]*>", re.I)
+_ATTR = re.compile(r'\b(src|alt)="([^"]*)"', re.I)
+
+
+def _safe_links(html: str) -> str:
+    """Ссылки и картинки из текста модели: только http(s), mailto и якоря отчёта. «javascript:» и «data:» в ссылке
+    выполнили бы код от имени сайта при щелчке (модель могла взять такую ссылку со страницы или из документа);
+    картинка со стороннего сайта при открытии отчёта сообщила бы ему адрес читателя — вместо неё ссылка."""
+    html = _HREF.sub(lambda m: m.group(1) + (m.group(2) if _SAFE_HREF.match(m.group(2).strip()) else "#") + m.group(3), html)
+
+    def img(m: re.Match) -> str:
+        attrs = {k.lower(): v for k, v in _ATTR.findall(m.group(0))}
+        src, alt = attrs.get("src", "").strip(), attrs.get("alt") or "изображение"
+        if src.lower().startswith(("http://", "https://")):
+            return f'<a href="{src}">{alt}</a>'
+        return f"[{alt}]"
+    return _IMG.sub(img, html)
+
+
 def md_to_html(text: str, *, breaks: bool = False) -> str:
-    """Безопасно: сырой HTML из ответа модели не исполняется, а выводится как текст.
+    """Безопасно: сырой HTML из ответа модели не исполняется, а выводится как текст; опасные ссылки и сторонние
+    картинки обезврежены (_safe_links).
 
     breaks=True сохраняет одиночные переносы строк (для текста запроса, написанного человеком).
     """
@@ -910,7 +932,7 @@ def md_to_html(text: str, *, breaks: bool = False) -> str:
     md.preprocessors.deregister("html_block")
     md.inlinePatterns.deregister("html")
     src, store = _protect(normalize_md(text))
-    return _TABLE_HTML.sub(_wrap_table, _restore(md.convert(src), store))
+    return _TABLE_HTML.sub(_wrap_table, _restore(_safe_links(md.convert(src)), store))
 
 
 def _plural(n: int, one: str, few: str, many: str) -> str:

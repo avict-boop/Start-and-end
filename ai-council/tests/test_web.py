@@ -327,3 +327,19 @@ def test_costs_pilot_solo_and_replay_in_demo(client):
     assert p["solo"]["answer"] and p["replay"]["after"]["checked"] and p["solo_rating"] == 3
     s = client.get("/api/stats").json()
     assert s["stages"] and s["research"][-1]["solo_rating"] == 3
+
+
+def test_actions_from_another_site_are_refused(client):
+    r = client.post("/api/system/restart", headers={"Origin": "https://evil.example"})
+    assert r.status_code == 403
+    r = client.post("/api/estimate", json={"question": "Вопрос?", "mock": True}, headers={"Origin": "http://testserver"})
+    assert r.status_code == 200
+    assert client.post("/api/estimate", json={"question": "Вопрос?", "mock": True},
+                       headers={"Referer": "https://evil.example/page"}).status_code == 403
+    assert client.post("/api/estimate", json={"question": "Вопрос?", "mock": True}).status_code == 200  # не браузер
+
+
+def test_report_links_cannot_run_code():
+    from council.reports.view import md_to_html
+    h = md_to_html("[a](javascript:alert(1)) ![b](https://t.example/x.png) [c](https://ok.example)")
+    assert "javascript:" not in h and "<img" not in h and 'href="https://ok.example"' in h

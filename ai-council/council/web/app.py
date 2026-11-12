@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -211,6 +211,33 @@ class RunState:
 # ---------------------------------------------------------------- app
 
 
+async def _limited_body(request: Any, limit: int, too_big: str) -> bytes:
+    """Тело запроса не больше limit байт: читается частями и обрывается сразу — огромный файл не займёт память
+    сервера целиком до проверки размера."""
+    try:
+        if int(request.headers.get("content-length") or 0) > limit:
+            raise HTTPException(413, too_big)
+    except ValueError:
+        pass
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > limit:
+            raise HTTPException(413, too_big)
+    return bytes(data)
+
+
+def _same_site(src: str, request: Any) -> bool:
+    """Страница-источник запроса — этот же сайт (с учётом прокси: X-Forwarded-Host)."""
+    from urllib.parse import urlsplit
+    if src == "null":
+        return False
+    host = urlsplit(src).netloc.lower()
+    own = {h.strip().lower() for h in (request.headers.get("host", ""), request.headers.get("x-forwarded-host", ""))
+           if h.strip()}
+    return bool(host) and host in own
+
+
 def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: str | None = None) -> FastAPI:
     config_path = Path(config_path)
     @asynccontextmanager
@@ -226,6 +253,20 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         yield
 
     app = FastAPI(title="Совет нейросетей", docs_url="/api/docs", lifespan=lifespan)
+
+    @app.middleware("http")
+    async def same_origin_only(request: Request, call_next: Any) -> Any:
+        """Защита от подделки запросов с чужих сайтов (CSRF). Пароль сайта браузер подставляет сам, поэтому чужая
+        страница, открытая у того же человека, могла бы отправить сюда действие — запустить платное заседание,
+        обновить или перезапустить программу. Браузер всегда сообщает, с какой страницы идёт запрос (Origin или
+        Referer): действия принимаются только со страниц самого сайта. Запросы не из браузера (curl, бот) — без
+        этих заголовков — проходят как раньше."""
+        if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+            src = request.headers.get("origin") or request.headers.get("referer") or ""
+            if src and not _same_site(src, request):
+                return JSONResponse({"detail": "запрос со стороннего сайта отклонён"}, status_code=403)
+        return await call_next(request)
+
     runs: dict[str, RunState] = {}
     catalog = ModelCatalog(MODELS_TTL)
 
@@ -329,9 +370,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         """Загрузка одного файла (тело запроса — содержимое файла). Возвращает описание для формы."""
         import secrets
         name = safe_name(name)
-        data = await request.body()
-        if len(data) > MAX_FILE_BYTES:
-            raise HTTPException(413, f"«{name}» больше {MAX_FILE_BYTES // 1024 // 1024} МБ")
+        data = await _limited_body(request, MAX_FILE_BYTES, f"«{name}» больше {MAX_FILE_BYTES // 1024 // 1024} МБ")
         try:
             att = await asyncio.to_thread(load_attachment, data, name)
         except AttachmentError as e:
@@ -354,9 +393,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     async def transcribe_audio(request: Request, mock: bool = False) -> dict[str, Any]:
         """Голосовой ввод: тело запроса — запись из браузера (WebM/MP4/OGG/WAV). Возвращает распознанный текст."""
         from ..transcribe import MAX_AUDIO_BYTES, TranscribeError, transcribe
-        data = await request.body()
-        if len(data) > MAX_AUDIO_BYTES:
-            raise HTTPException(413, "запись больше 20 МБ")
+        data = await _limited_body(request, MAX_AUDIO_BYTES, "запись больше 20 МБ")
         cfg = base_config()
         if mock:
             client = MockClient(delay=0.3)
@@ -511,8 +548,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         import mimetypes
         mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         inline = mime.startswith("image/") or mime == "application/pdf"
+        # «песочница»: картинка (в том числе SVG со скриптом) или PDF из вложения не выполнит код от имени сайта
         return FileResponse(path, media_type=mime, filename=path.name.split("-", 1)[-1],
-                            content_disposition_type="inline" if inline else "attachment")
+                            content_disposition_type="inline" if inline else "attachment",
+                            headers={"Content-Security-Policy": "sandbox", "X-Content-Type-Options": "nosniff"})
 
     def find_file(sid: str, ext: str) -> Path:
         if not ID_RE.match(sid):

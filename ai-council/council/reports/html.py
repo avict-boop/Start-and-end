@@ -541,11 +541,13 @@ def _scope(v: View) -> str:
         st = r["status"]
         color = {"covered": "var(--ok)", "partial": "var(--warn)", "unknown": "var(--bad)"}.get(st, "var(--muted)")
         votes = ", ".join(f"{l}: {n}" for l, n in sorted(r["counts"].items(), key=lambda x: -x[1]))
+        # без «\"» внутри f-строк: на Python 3.10–3.11 это синтаксическая ошибка
+        note = '<div class="muted small">' + _inline(r["note"]) + "</div>" if r["note"] else ""
+        backbone = '<span class="lbl">' + _e(r["backbone"]) + "</span>" if r["backbone"] else "—"
+        vote_html = '<div class="muted small">голоса: ' + _e(votes) + "</div>" if votes else ""
         rows.append(f'<tr><td><span class="lbl">{_e(r["id"])}</span> {_inline(r["text"])}</td>'
-                    f'<td style="color:{color}"><b>{_e(v.COVER_WORD.get(st, st or "—"))}</b>'
-                    f'{"<div class=\"muted small\">" + _inline(r["note"]) + "</div>" if r["note"] else ""}</td>'
-                    f'<td>{"<span class=\"lbl\">" + _e(r["backbone"]) + "</span>" if r["backbone"] else "—"}'
-                    f'{"<div class=\"muted small\">голоса: " + _e(votes) + "</div>" if votes else ""}</td></tr>')
+                    f'<td style="color:{color}"><b>{_e(v.COVER_WORD.get(st, st or "—"))}</b>{note}</td>'
+                    f'<td>{backbone}{vote_html}</td></tr>')
     scope = f'<p><b>Рамки:</b> {_e(v.scope_line)}</p>' if v.scope_line else ""
     return (f'<section id="scope"><h2>Рамки и подвопросы</h2>{scope}'
             '<table><thead><tr><th>Подвопрос</th><th style="width:20%">В итоге</th><th style="width:22%">Каркас раздела</th>'
@@ -571,10 +573,11 @@ def _sources(v: View) -> str:
         if link:
             flag += f'<div class="small" style="color:{link[0]}">{link[1]}</div>'
         url = v.safe_url(e.get("url", ""))
+        meta_html = '<div class="muted small">' + meta + "</div>" if meta else ""
+        seen_html = '<div class="muted">' + seen + "</div>" if seen else ""
         rows.append(f'<tr id="src-{_e(e["id"])}"><td><b>{_e(e["id"])}</b></td><td>{_e(e.get("title") or url)}'
-                    f'<div class="small"><a href="{_e(url)}">{_e(url)}</a></div>'
-                    f'{"<div class=\"muted small\">" + meta + "</div>" if meta else ""}{flag}</td>'
-                    f'<td class="small">{_e(", ".join(e.get("claims") or []))}{"<div class=\"muted\">" + seen + "</div>" if seen else ""}</td></tr>')
+                    f'<div class="small"><a href="{_e(url)}">{_e(url)}</a></div>{meta_html}{flag}</td>'
+                    f'<td class="small">{_e(", ".join(e.get("claims") or []))}{seen_html}</td></tr>')
     return (f'<section id="sources"><h2>Источники</h2><p class="muted small">Нашла поисковая модель '
             f'({_e(v.ledger.get("model", ""))}) на этапе арбитража доказательств — {_e(v.ledger_line)}.</p>'
             '<table><thead><tr><th style="width:7%">№</th><th>Источник</th><th style="width:22%">Утверждения</th>'
