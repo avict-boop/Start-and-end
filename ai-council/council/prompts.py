@@ -150,6 +150,13 @@ JSON format:
 {{"refined_question": "...", "criteria": ["...", "..."], "requirements": ["...", "..."], "input_gaps": ["..."]}}"""
 
 
+# Поиск у председателя при итоге — для проверки, а не для нового материала: после итога критики и голосования нет
+CHAIR_WEB_NOTE = ("\n\nYou have web search while writing the final answer. Use it ONLY to verify: resolve contradictions "
+                  "between proposals, check a doubtful fact, date, price or name the final answer relies on, or confirm "
+                  "that something still holds. Do not add new topics or new recommendations from search — nobody will "
+                  "critique them after you. Cite the URL next to every fact you checked; if search contradicts a "
+                  "proposal, say so plainly in the answer.")
+
 WEB_NOTE = ("\n\nYou have web search in this step: use it for current facts, prices, dates and news, and cite the URLs "
             "you actually used next to the claims they support. Do not cite pages you did not open.")
 

@@ -350,8 +350,9 @@ async def verdict(c: Council, b: Board, k: Count, facts: dict[str, dict], ideas:
                             prompts.factcheck_block(facts), k.notes, leader=leader, follow_vote=follow,
                             compact=bool(c.compact), req=b.req, co_leaders=k.tied if len(k.tied) > 1 else None,
                             ideas=ideas_text, allow_none=allow_none, from_voters=from_voters,
-                            brief=c.cfg.answer_size == "brief") + b.note("verdict"),
-            Verdict, check=check_verdict, max_tokens=c.verdict_tokens(chair),
+                            brief=c.cfg.answer_size == "brief") + b.note("verdict")
+            + (prompts.CHAIR_WEB_NOTE if chair.web_search and b.web else ""),
+            Verdict, check=check_verdict, max_tokens=c.verdict_tokens(chair), web_search=chair.web_search and b.web,
             meta={"labels": valid, "leader": leader, "ideas": idea_ids},
         )
     except (ProviderError, InvalidResponse) as e:

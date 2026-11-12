@@ -312,8 +312,12 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
                       _critique_notes(critiques), ideas_text, leader, valid,
                       (f"{agree['level']} (mean Kendall tau = {agree['tau']:.2f})") if agree else "", ballot_notes,
                       req, tied if len(tied) > 1 else None, subq, card=rc.decision_card,
-                      brief=sess.cfg.answer_size == "brief"),
-            R.ResearchVerdict, check=check_verdict, max_tokens=sess.verdict_tokens(chair),
+                      brief=sess.cfg.answer_size == "brief")
+            # проверка спорного при синтезе; найденное — не «известно» (его нет в реестре), новые утверждения итога
+            # проверяет «Проверка новых утверждений»
+            + (prompts.CHAIR_WEB_NOTE + " Facts you found yourself are not in the ledger: never put them into "
+               "\"known\" — keep them in the text, contested or unknown, with the URL." if chair.web_search else ""),
+            R.ResearchVerdict, check=check_verdict, max_tokens=sess.verdict_tokens(chair), web_search=chair.web_search,
             meta={"labels": valid, "leader": leader, "ideas": idea_ids, "subquestions": len(subq),
                   "evidence_ok": sorted(R.confirmed_ids(ledger)),
                   "claims_ok": {e: c["id"] for c in reversed((ledger or {}).get("claims", []))  # первое утверждение источника

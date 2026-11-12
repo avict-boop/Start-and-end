@@ -349,14 +349,10 @@ function renderWebMembers() {
   const names = selectedMembers();
   for (const n of [...lineup.web]) if (!names.includes(n)) lineup.web.delete(n);
   $("webField").hidden = mode === "evaluate" || !names.length;
-  // председатель-судья не пишет вариант — поиск ему не нужен (ищут только при написании и доработке вариантов)
-  const authors = freshAuthors();
-  const chips = names.map((n) => {
-    const judge = !authors.includes(n);
-    return `<button type="button" class="chip-tg${lineup.web.has(n) && !judge ? " on" : ""}" data-web="${esc(n)}" aria-pressed="${lineup.web.has(n) && !judge}"`
-      + `${judge ? ' disabled title="Председатель без своего варианта: поиск ему не нужен"' : ""}>🌐 ${esc(n)}</button>`;
-  }).join("");
-  for (const n of [...lineup.web]) if (!authors.includes(n)) lineup.web.delete(n);
+  // председатель ищет при итоге — чтобы проверить спорное (если пишет и свой вариант — ещё и в нём)
+  const chair = $("chair") ? $("chair").value : "";
+  const chips = names.map((n) => `<button type="button" class="chip-tg${lineup.web.has(n) ? " on" : ""}" data-web="${esc(n)}" aria-pressed="${lineup.web.has(n)}"`
+    + `${n === chair ? ' title="Председатель: при итоге проверит в интернете спорное (дорого: итог читает всё заседание)"' : ""}>🌐 ${esc(n)}${n === chair ? " · итог" : ""}</button>`).join("");
   $("webMembers").innerHTML = chips;
   if ($("freshPick")) $("freshPick").innerHTML = chips;
   syncFresh();
@@ -2882,8 +2878,9 @@ function freshAuthors() {
 }
 var freshCustom = false;  // человек выбрал «свой выбор» — показываем отметки, даже если выбор совпал со стандартным
 function syncFresh() {
-  const web = [...lineup.web].filter((n) => selectedMembers().includes(n));
   const authors = freshAuthors();
+  // авторы с поиском (председатель-судья ищет только при итоге — он не входит в «ищут N авторов»)
+  const web = [...lineup.web].filter((n) => selectedMembers().includes(n) && authors.includes(n));
   const n = web.length;
   const firstN = web.every((x) => authors.slice(0, n).includes(x));
   const value = freshCustom ? "custom" : n && n === authors.length ? "all" : n <= 3 && firstN ? String(n) : "custom";
@@ -2891,12 +2888,14 @@ function syncFresh() {
   $("fresh").querySelector('[value="3"]').hidden = authors.length < 4;  // «три» — только если авторов больше трёх
   $("freshPick").hidden = value !== "custom";
   const hint = $("freshHint");
-  if (hint) hint.textContent = n === 0 ? "Для цен, рынков и новостей; около $0,02 за запрос. Без поиска авторы независимее."
+  const chairWeb = lineup.web.has($("chair").value);
+  if (hint) hint.textContent = (n === 0 ? "Для цен, рынков и новостей; около $0,02 за запрос. Без поиска авторы независимее."
     : `Ищут: ${web.join(", ")}. ` + (n >= 3 ? "Чем больше авторов ищут, тем больше они опираются на одно и то же найденное и тем дороже заседание. " : "")
       + (mode === "research" ? "В исследовании ищут при написании варианта; на доработке — если включено «Поиск и на доработке»."
         : mode === "creative" ? (n === authors.length ? "Ищут все: идеи рискуют стать похожими — обычно хватает одного-двух, остальные придумывают независимо."
           : "Ищущие изучают конкурентов и существующие решения, остальные придумывают независимо.")
-          : "Ищут при написании и доработке варианта.");
+          : "Ищут при написании и доработке варианта."))
+    + (chairWeb ? " Председатель проверит спорное в интернете при итоге — это дороже: каждый поиск заново читает всё заседание." : "");
 }
 $("fresh").addEventListener("change", () => {
   const v = $("fresh").value;
@@ -2904,7 +2903,10 @@ $("fresh").addEventListener("change", () => {
   freshCustom = v === "custom";
   if (!freshCustom) {
     const authors = freshAuthors();
+    const chair = $("chair").value;
+    const keepChair = lineup.web.has(chair) && !authors.includes(chair);  // проверка председателем — отдельно
     lineup.web = new Set(v === "all" ? authors : authors.slice(0, Number(v) || 0));
+    if (keepChair) lineup.web.add(chair);
   }
   renderWebMembers(); formChanged();
 });

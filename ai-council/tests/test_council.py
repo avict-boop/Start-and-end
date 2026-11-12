@@ -687,3 +687,26 @@ def test_creative_mode_roles_remix_shortlist_without_fact_check():
     assert all(w and "study the landscape" in p for _, _, w, p in props)
     assert any("yes, and" in x[3] for x in c.seen if x[0] == "critique")
     assert any("SHORTLIST" in x[3] for x in c.seen if x[0] == "verdict")
+
+
+def test_chair_with_search_checks_at_verdict_only_to_verify():
+    from council.mock import MockClient
+
+    class Spy(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.seen = []
+
+        async def complete(self, model, messages, **kw):
+            m = kw.get("meta") or {}
+            self.seen.append((m.get("stage"), m.get("member"), bool(kw.get("web_search")), messages[-1]["content"]))
+            return await super().complete(model, messages, **kw)
+
+    for mode in ("debate", "research"):
+        cfg = make_cfg(mode=mode, chair_proposes=False,
+                       members=[{"name": n, "model": f"m/{n}", "web_search": n == "a"} for n in "abcd"])
+        c = Spy()
+        run(Council(cfg, c, seed=2).run("Вопрос?"))
+        v = [x for x in c.seen if x[0] == "verdict"]
+        assert v and all(w and "ONLY to verify" in t for _, _, w, t in v), mode
+        assert not any(w for st, who, w, _ in c.seen if who == "a" and st in ("proposal", "revision"))
