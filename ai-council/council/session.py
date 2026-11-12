@@ -1278,12 +1278,22 @@ class Council:
         if not (ledger and ledger.get("evidence") and rc.link_check and self.link_checker):
             return
         todo = [e["url"] for e in ledger["evidence"] if e.get("url") and not e.get("link")]
+        quotes = {e["url"]: list(e["quotes"].values()) for e in ledger["evidence"]
+                  if e.get("url") in todo and e.get("quotes")} if rc.quote_check else {}
         try:
-            found = await self.link_checker(todo) if todo else {}
+            if not todo:
+                found = {}
+            elif quotes:
+                try:
+                    found = await self.link_checker(todo, quotes=quotes)
+                except TypeError:  # проверка ссылок без поиска цитат (старые и тестовые реализации)
+                    found = await self.link_checker(todo)
+            else:
+                found = await self.link_checker(todo)
         except Exception as e:  # noqa: BLE001 — проверка ссылок не должна ронять исследование
             log.warning("проверка ссылок не удалась: %s", e)
             found = {}
-        R.apply_links(ledger, found)
+        R.apply_links(ledger, found, quote_check=rc.quote_check)
         if ledger.get("links"):
             self._emit("links", **ledger["links"])
 

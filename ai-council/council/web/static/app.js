@@ -1491,7 +1491,7 @@ function renderResearch(s) {
   if (claims.length) {
     h += `<details class="sources"><summary>Проверка утверждений и источники (${claims.length} утв., ${Object.keys(ev).length} источн.)</summary><ul class="claims">${claims.map((c) => {
       const [k, t] = CLAIM_BADGE[c.status] || CLAIM_BADGE.not_checked;
-      return `<li><span class="badge ${k}">${t}</span> <span class="lbl">${esc(c.id)}</span> ${inline(c.text)} ${refs(c.evidence)}${(c.notes || []).length ? `<div class="muted small">${c.notes.map(inline).join(" · ")}</div>` : ""}</li>`;
+      return `<li><span class="badge ${k}">${t}</span> <span class="lbl">${esc(c.id)}</span> ${inline(c.text)} ${refs(c.evidence)}${c.quote_found ? ' <span class="badge ok" title="Дословная фраза, которую привёл поиск, найдена на странице источника">цитата найдена на странице</span>' : ""}${(c.notes || []).length ? `<div class="muted small">${c.notes.map(inline).join(" · ")}</div>` : ""}</li>`;
     }).join("")}</ul><ol class="srcs">${Object.values(ev).map((e) => `<li><b>${esc(e.id)}</b> <a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title || e.url)}</a> <span class="muted small">${esc([e.publisher, e.date].filter(Boolean).join(", "))}${e.search_returned === false ? " · нет в результатах поиска" : ""}</span>${LINK_BADGE[e.link] || ""}</li>`).join("")}</ol></details>`;
   }
   box.innerHTML = h;

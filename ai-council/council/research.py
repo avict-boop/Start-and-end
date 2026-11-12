@@ -27,7 +27,8 @@ from .schemas import Ballot, Framing, Proposal, Verdict, _pick, to_list, to_text
 
 BASIS = ("user_doc", "calc", "memory", "search_reported")
 VOLATILITY = ("stable", "changes_fast", "unknown")
-CLAIM_STATUS = ("confirmed", "refuted", "contested_in_sources", "unclear", "user_doc", "search_unavailable")
+CLAIM_STATUS = ("confirmed", "partially_confirmed", "refuted", "contested_in_sources", "unclear", "user_doc",
+                "search_unavailable")
 STATUS_RANK = {"confirmed": 0, "refuted": 1, "contested_in_sources": 2, "user_doc": 3, "unclear": 4,
                "search_unavailable": 5, "not_checked": 6}
 DEFAULT_LENSES = [  # по-русски: их видит и пользователь; ключ — чтобы не добавлять угол, который уже есть
@@ -220,6 +221,7 @@ class ESource(BaseModel):
     source_type: str = "unknown"
     material_seen: str = "snippet"
     relation: str = "supports"
+    quote: str = ""   # дословная фраза со страницы (до 25 слов) — программа ищет её на скачанной странице
 
     @model_validator(mode="before")
     @classmethod
@@ -228,7 +230,8 @@ class ESource(BaseModel):
             return {"url": data}
         return data
 
-    @field_validator("url", "title", "publisher", "date", "source_type", "material_seen", "relation", mode="before")
+    @field_validator("url", "title", "publisher", "date", "source_type", "material_seen", "relation", "quote",
+                     mode="before")
     @classmethod
     def _txt(cls, v: Any) -> str:
         return "" if v is None else to_text(v).strip()
@@ -242,13 +245,14 @@ class CheckedClaim(BaseModel):
     verified_parts: list[str] = Field(default_factory=list)    # какие части утверждения подтверждены
     unverified_parts: list[str] = Field(default_factory=list)  # какие — нет
     queries_used: list[str] = Field(default_factory=list)      # каким запросами искали (для второго поиска)
+    verified_claim_text: str = ""  # частичное подтверждение: самостоятельная формулировка только доказанной части
 
     @field_validator("verified_parts", "unverified_parts", "queries_used", mode="before")
     @classmethod
     def _parts(cls, v: Any) -> list[str]:
         return to_list(v)
 
-    @field_validator("claim_id", "note", mode="before")
+    @field_validator("claim_id", "note", "verified_claim_text", mode="before")
     @classmethod
     def _txt(cls, v: Any) -> str:
         return to_text(v).strip()
@@ -640,20 +644,24 @@ actually returned; never invent a URL, date or quotation. If you saw only a snip
 availability. A related page is not a confirmation. Absence of a found source is not a refutation.
 {SNIPPET_RULE if snippet else ""}Test subject, value, date, geography, units and every qualifier separately; list
 them in "verified_parts" and "unverified_parts".
+For every source give "quote": ONE verbatim phrase (at most 25 words) copied from the page text you actually read
+that bears on the claim; leave it empty if you saw only a snippet or a search summary; never paraphrase. The
+application looks for this phrase on the page itself.
 Statuses: confirmed (a source directly supports EVERY part of the claim in its stated scope — each number, date,
-age, dose, name and owner; if only some parts are supported, use unclear and list in "notes" which parts are
-confirmed and which are not); refuted (a reliable source directly
+age, dose, name and owner); partially_confirmed (sources directly support only a separable part: do not confirm the
+original claim — write a standalone "verified_claim_text" with ONLY the directly supported subject, value, units,
+period, geography and qualifiers, and put the rest in "unverified_parts"); refuted (a reliable source directly
 contradicts it); contested_in_sources (reputable sources conflict; report both); unclear (no reliable evidence found);
 user_doc (checkable only from the user's own documents); search_unavailable.
 Return at most {max_evidence} sources in total.
 
 JSON format:
-{{"checked_claims": [{{"claim_id": "A-C1", "status": "confirmed|refuted|contested_in_sources|unclear|user_doc|search_unavailable",
-   "note": "what the sources state, with exact figures, scope and caveats",
+{{"checked_claims": [{{"claim_id": "A-C1", "status": "confirmed|partially_confirmed|refuted|contested_in_sources|unclear|user_doc|search_unavailable",
+   "note": "what the sources state, with exact figures, scope and caveats", "verified_claim_text": "",
    "verified_parts": ["..."], "unverified_parts": ["..."], "queries_used": ["..."],
    "sources": [{{"url": "https://...", "title": "...", "publisher": "...", "date": "YYYY-MM-DD or empty",
                 "source_type": "primary|secondary|unknown", "material_seen": "page|snippet|search_answer",
-                "relation": "supports|contradicts|context"}}]}}],
+                "relation": "supports|contradicts|context", "quote": "verbatim words from the page"}}]}}],
  "gaps": [{{"question": "...", "searched_for": "...", "why_unresolved": "..."}}]}}"""
 
 
@@ -1036,6 +1044,7 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
     notes: dict[str, list[str]] = {k: [] for k in by_id}
     evid: dict[str, dict[str, Any]] = {}
     claim_ev: dict[str, list[str]] = {k: [] for k in by_id}
+    derived: dict[str, dict[str, Any]] = {}   # частичное подтверждение: доказанная часть — отдельным утверждением
     gaps: list[dict[str, Any]] = []
     for mi, res in enumerate(results):
         cites = {_url_key(u) for u in res.search_citations}
@@ -1062,11 +1071,22 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
                 if cid not in e["claims"]:
                     e["claims"].append(cid)
                 e["relations"][cid] = src.relation
+                if src.quote and src.material_seen == "page":
+                    e.setdefault("quotes", {})[cid] = src.quote[:400]
                 if k not in claim_ev[cid]:
                     claim_ev[cid].append(k)
                 if src.relation != "contradicts" and returned is not False:
                     supported = True
                     read_page = read_page or src.material_seen == "page"
+            if status == "partially_confirmed":
+                # исходное утверждение не повышается; доказанная часть — новым утверждением A-C1-V1 с теми же источниками
+                if cc.verified_claim_text and supported and (read_page or not (
+                        snippet_rule == "all" or (snippet_rule == "critical" and by_id[cid].get("critical")))):
+                    derived[cid] = {"text": cc.verified_claim_text,
+                                    "keys": [_url_key(s.url) for s in cc.sources if s.url.startswith("http")
+                                             and s.relation != "contradicts"]}
+                    notes[cid].append("подтверждена только часть: " + cc.verified_claim_text[:160])
+                status = "unclear"
             if status == "confirmed" and not supported:
                 status = "unclear"  # «подтверждено» без ссылки из результатов поиска не принимается
                 notes[cid].append("подтверждение без ссылки из результатов поиска — не засчитано")
@@ -1089,6 +1109,11 @@ def build_ledger(selected: list[dict[str, Any]], results: list[EvidenceResult], 
         claims.append(row)
         for dup in c.get("dup_ids") or []:  # копии того же утверждения у других авторов — тот же статус
             claims.append({**row, "id": dup, "duplicate_of": c["id"], "dup_ids": []})
+        if cid in derived:
+            d = derived[cid]
+            claims.append({**c, "id": f"{c['id']}-V1", "text": d["text"], "status": "confirmed", "derived_from": c["id"],
+                           "dup_ids": [], "notes": ["доказанная часть утверждения " + c["id"]],
+                           "evidence": [key_to_id[k] for k in d["keys"] if k in key_to_id]})
     for e in evid.values():
         e["claims"] = [x for x in e["claims"]]
         e.pop("relations", None)
@@ -1100,11 +1125,35 @@ LINK_TEXT = {"ok": "открывается", "dead": "страница не на
              "error": "не удалось открыть", "refused": "адрес внутри сети — не открывался"}
 
 
-def apply_links(ledger: dict[str, Any], results: dict[str, dict[str, Any]]) -> dict[str, Any]:
+QUOTE_MIN_TEXT = 1500  # меньше текста на странице — скорее всего, содержимое рисует JavaScript: цитату не судим
+
+
+def apply_links(ledger: dict[str, Any], results: dict[str, dict[str, Any]], quote_check: bool = True) -> dict[str, Any]:
     """Итог проверки ссылок — в реестр. Утверждение, подтверждённое только мёртвыми ссылками (404/410),
-    больше не «подтверждено»: опереться на него в «известно» нельзя."""
+    больше не «подтверждено». Для важных утверждений (спорных, быстро меняющихся, решающих) — цитата источника:
+    если страница открылась, текста на ней достаточно, а дословной фразы, которую назвал поиск, там нет ни в одном
+    источнике, подтверждение не засчитывается. Нашлась — у источника отметка «цитата найдена на странице»."""
     if not ledger or not results:
         return ledger
+    for e in ledger.get("evidence", []):
+        r = results.get(e.get("url", "")) or {}
+        if r.get("quotes") is not None and e.get("quotes"):
+            hits = r["quotes"]
+            e["quote_hits"] = {cid: hits.get(q) for cid, q in e["quotes"].items()}
+            e["page_text"] = r.get("text_len", 0)
+    if quote_check:
+        ev_by = {e["id"]: e for e in ledger.get("evidence", [])}
+        for c in ledger.get("claims", []):
+            if c.get("status") != "confirmed" or not (c.get("critical") or c.get("decisive")) or c.get("duplicate_of"):
+                continue
+            cid = c.get("derived_from") or c["id"]
+            judged = [ev_by[i] for i in c.get("evidence") or [] if i in ev_by and cid in (ev_by[i].get("quote_hits") or {})
+                      and (ev_by[i].get("page_text") or 0) >= QUOTE_MIN_TEXT]
+            if any(e["quote_hits"][cid] for e in judged):
+                c["quote_found"] = True
+            elif judged and len(judged) == len([i for i in c.get("evidence") or [] if i in ev_by]):
+                c["status"] = "unclear"
+                c.setdefault("notes", []).append("цитата, которую привёл поиск, на странице источника не найдена — не засчитано")
     counts = {"ok": 0, "dead": 0, "blocked": 0, "error": 0}
     by_id = {}
     for e in ledger.get("evidence", []):

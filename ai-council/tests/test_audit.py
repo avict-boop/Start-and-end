@@ -321,3 +321,37 @@ def test_registry_claims_are_not_private_and_critics_mark_decisive_claims():
     by = {c["id"]: c for c in sel}
     assert "A-C1" in by and [d["ids"] for d in deferred] == [["A-C2"]]
     assert by["A-C3"]["decisive"] and by["A-C3"]["critical"]
+
+
+def test_partial_confirmation_becomes_a_separate_verified_claim():
+    sel = [{"id": "A-C1", "label": "A", "text": "X одобрен FDA в 2024 и продаётся в РФ", "basis": "memory",
+            "volatility": "stable", "critical": False, "dup_ids": []}]
+    res = R.EvidenceResult(search_citations=["https://fda.example/x"], checked_claims=[R.CheckedClaim(
+        claim_id="A-C1", status="partially_confirmed", verified_claim_text="X одобрен FDA в 2024",
+        unverified_parts=["продажи в РФ"],
+        sources=[R.ESource(url="https://fda.example/x", material_seen="page", quote="X was approved in 2024")])])
+    led = R.build_ledger(sel, [res], "m", snippet_rule="critical")
+    st = {c["id"]: c for c in led["claims"]}
+    assert st["A-C1"]["status"] == "unclear"  # исходное не повышается
+    assert st["A-C1-V1"]["status"] == "confirmed" and st["A-C1-V1"]["text"] == "X одобрен FDA в 2024"
+    assert st["A-C1-V1"]["evidence"] == ["E1"] and led["evidence"][0]["quotes"] == {"A-C1": "X was approved in 2024"}
+
+
+def test_quote_not_found_on_a_readable_page_does_not_confirm_an_important_claim():
+    from council.links import page_text, plain
+    assert "approved in 2024" in page_text("<p>X was <b>approved</b> in 2024</p><script>var a=1</script>")
+    assert plain("«Одобрен» — в\u00a02024") == "одобрен - в 2024"
+    led = {"evidence": [{"id": "E1", "url": "u1", "quotes": {"A-C1": "approved in 2024"}},
+                        {"id": "E2", "url": "u2", "quotes": {"A-C2": "sold in Russia"}}],
+           "claims": [{"id": "A-C1", "status": "confirmed", "critical": True, "evidence": ["E1"]},
+                      {"id": "A-C2", "status": "confirmed", "critical": True, "evidence": ["E2"]}]}
+    long = 2000
+    R.apply_links(led, {"u1": {"status": "ok", "code": 200, "quotes": {"approved in 2024": True}, "text_len": long},
+                        "u2": {"status": "ok", "code": 200, "quotes": {"sold in Russia": False}, "text_len": long}})
+    st = {c["id"]: c for c in led["claims"]}
+    assert st["A-C1"]["status"] == "confirmed" and st["A-C1"]["quote_found"]
+    assert st["A-C2"]["status"] == "unclear" and "не найдена" in st["A-C2"]["notes"][-1]
+    led2 = {"evidence": [{"id": "E1", "url": "u1", "quotes": {"A-C1": "x y"}}],
+            "claims": [{"id": "A-C1", "status": "confirmed", "critical": True, "evidence": ["E1"]}]}
+    R.apply_links(led2, {"u1": {"status": "ok", "code": 200, "quotes": {"x y": False}, "text_len": 300}})
+    assert led2["claims"][0]["status"] == "confirmed"  # мало текста (страница на JavaScript) — не судим
