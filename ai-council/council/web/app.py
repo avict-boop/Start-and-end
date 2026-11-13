@@ -202,6 +202,12 @@ class SearchTest(BaseModel):
 
 class ResumeRequest(BaseModel):
     budget: float | None = Field(default=None, gt=0, le=1000)
+    # спросить заново тех, кто не ответил (сбои из журнала), и ждать их ответа вдвое дольше
+    retry_failed: bool = False
+
+
+class RetryRequest(BaseModel):
+    on: bool = True
 
 
 class RunState:
@@ -219,6 +225,7 @@ class RunState:
         # «Мысли моделей — вживую»: последние THOUGHT_KEEP знаков рассуждения каждой модели, пока она думает.
         # Только в памяти: не в событиях, не на диске, не в отчётах; модель ответила — её рассуждение удаляется.
         self.thoughts: dict[str, dict[str, Any]] = {}
+        self.retry_planned = False  # «повторить не ответивших» после текущего этапа
 
     THOUGHT_KEEP = 30000  # ≈ 10 тысяч токенов на модель — несколько экранов текста; только в памяти
 
@@ -839,7 +846,12 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 
     def paused_event(cp: Checkpoint) -> dict[str, Any]:
         info = cp.summary()
+        try:
+            failed = len(Journal(cp.journal_path).failures) if cp.journal_path.is_file() else 0
+        except OSError:
+            failed = 0
         return {"type": "paused", "id": cp.id, "reason": info["reason"], "reason_text": info["reason_text"],
+                "failed": failed,
                 "message": info["message"], "spent": info["spent"], "budget": info["budget"], "stage": info["stage"]}
 
     def launch(cp: Checkpoint, client: Any) -> RunState:
@@ -868,6 +880,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         async def execute() -> None:
             nonlocal council
             final = "error"
+            auto_retry = False
             resumed = int(sp.get("resumes") or 0)
             log.info("заседание %s: %s (%s, участников %d)", sid, "продолжение" if resumed else "старт",
                      sp.get("mode"), len(cfg.active_members))
@@ -876,6 +889,11 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     cp.update(status="running", reason="", message="")
                     atts = await asyncio.to_thread(cp.attachments)
                     journal = await asyncio.to_thread(Journal, cp.journal_path)
+                    if sp.get("retry_failed"):  # «повторить не ответивших»: сбои из журнала спрашиваются заново
+                        retried = len(journal.failures)
+                        journal.failures.clear()
+                        cp.update(retry_failed=False)
+                        log.info("заседание %s: сбоев к повтору — %d", sid, retried)
                     pricing = None if sp.get("mock") else parse_pricing(await catalog.get() or [])
                     stage_out = await asyncio.to_thread(learn_lengths, runs_dir(cfg))
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
@@ -946,6 +964,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                               budget_at_pause=(council.budget if council else cp.budget) if reason == "budget" else 0)
                     final = "paused"
                     st.push(paused_event(cp))
+                    if reason == "retry":  # пауза ради повтора — сразу продолжаем (после того как всё сохранено)
+                        auto_retry = True
                     if reason in ("error", "stopped"):
                         import traceback
                         expected = reason == "stopped" or isinstance(e, CouncilError)
@@ -957,6 +977,19 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     await asyncio.to_thread(save_events, runs_dir(cfg), sid, st.events)
                     st.finish(final)  # статус «завершено» — только когда журнал уже на диске
                     await client.aclose()
+            if auto_retry:
+                async def again() -> None:
+                    for _ in range(20):  # блокировка «паспорта» снимается чуть позже — пробуем несколько раз
+                        await asyncio.sleep(0.5)
+                        try:
+                            await resume_session(sid, retry_failed=True)
+                            return
+                        except HTTPException as e:
+                            if e.status_code != 409:
+                                log.warning("заседание %s: повтор не начался: %s", sid, e.detail)
+                                return
+                    log.warning("заседание %s: повтор не начался — заседание занято", sid)
+                asyncio.create_task(again())
 
         finished = [r for r in runs.values() if r.status != "running"]
         for old in sorted(finished, key=lambda r: r.started)[:-KEEP_FINISHED or None]:
@@ -991,9 +1024,23 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     @app.post("/api/sessions/{sid}/resume")
     async def resume(sid: str, body: ResumeRequest | None = None) -> dict[str, Any]:
         """Продолжить приостановленное заседание: уже полученные ответы берутся из журнала, без повторной оплаты."""
-        return await resume_session(sid, body.budget if body and body.budget else None)
+        return await resume_session(sid, body.budget if body and body.budget else None,
+                                    retry_failed=bool(body and body.retry_failed))
 
-    async def resume_session(sid: str, budget_in: float | None = None) -> dict[str, Any]:
+    @app.post("/api/sessions/{sid}/retry_failed")
+    async def retry_failed(sid: str, body: RetryRequest | None = None) -> dict[str, Any]:
+        """«Повторить не ответивших»: заседание дождётся конца текущего этапа (ответы остальных сохранятся), встанет
+        на паузу и сразу продолжится — готовое из сохранённого, не ответившие спрашиваются заново, с запасом времени."""
+        st = runs.get(sid)
+        if st is None or st.status != "running" or st.council is None:
+            raise HTTPException(409, "заседание сейчас не идёт")
+        on = body.on if body else True
+        st.council.pause_at_stage = on
+        st.retry_planned = on
+        log.info("заседание %s: повтор не ответивших %s", sid, "после этапа" if on else "отменён")
+        return {"ok": True, "planned": on}
+
+    async def resume_session(sid: str, budget_in: float | None = None, retry_failed: bool = False) -> dict[str, Any]:
         st = runs.get(sid)
         if st is not None and st.status == "running":
             raise HTTPException(409, "заседание уже идёт")
@@ -1011,7 +1058,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             raise HTTPException(400, f"бюджета ${cp.budget:g} не хватает (потрачено ${spent:.2f}, следующий запрос не "
                                      "помещается) — укажите бюджет больше")
         client = make_client(cp.config(), bool(cp.spec.get("mock")))
-        cp.update(resumes=int(cp.spec.get("resumes") or 0) + 1)
+        if retry_failed:  # не успели ответить — дадим вдвое больше времени (до конца заседания)
+            client.patience = 2.0
+        cp.update(resumes=int(cp.spec.get("resumes") or 0) + 1, retry_failed=bool(retry_failed))
         launch(cp, client)
         return {"id": sid}
 

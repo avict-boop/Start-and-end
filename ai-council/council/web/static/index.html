@@ -316,6 +316,8 @@
             <button id="pResume" type="button" class="primary">▶ Продолжить</button>
             <button id="pDrop" type="button" class="secondary">Удалить</button>
           </div>
+          <label class="switch" id="pRetryRow" hidden><input id="pRetry" type="checkbox" checked><span class="sw" aria-hidden="true"></span>
+            <span><b>Повторить модели, которые не ответили</b><small id="pRetryHint">Их запросы зададут заново, с вдвое большим временем на ответ; готовые ответы остальных берутся из сохранённого.</small></span></label>
         </div>
       </section>
 
@@ -389,6 +391,10 @@
         </div>
         <div class="progress" aria-hidden="true"><i id="stageBar"></i></div>
         <div id="fundsHint" class="alert warn small" role="status" hidden></div>
+        <div id="retryBox" class="alert warn small retry-box" role="status" hidden>
+          <div id="retryText"></div>
+          <button id="retryBtn" type="button" class="btn small">Повторить не ответивших</button>
+        </div>
         <ol id="timeline" class="steps"></ol>
         <details id="thoughtsBox" class="thoughts" hidden>
           <summary><b>Мысли моделей — вживую</b> <span class="muted small">что модель думает прямо сейчас</span></summary>

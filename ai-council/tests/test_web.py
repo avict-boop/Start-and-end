@@ -570,3 +570,51 @@ def test_run_state_keeps_only_tail_of_current_thought():
     assert v["parallel"] == 2 and v["text"].index("пачка один") < v["text"].index("пачка два")
     st.add_thought("s", "arbitration", None, call=0)
     assert st.thought_view("s")["text"] == "пачка два"
+
+
+def test_retry_failed_members_after_stage_keeps_done_answers(client, monkeypatch):
+    """Модель не ответила на «вариантах» → «Повторить не ответивших» → пауза после этапа → само продолжается:
+    готовые ответы — из сохранённого, не ответившая модель спрашивается заново и в этот раз отвечает."""
+    import time as _t
+    from council import mock as M
+    state = {"fail": True, "asked": []}
+    orig = M.MockClient.complete
+
+    async def flaky(self, model, messages, **kw):
+        st = (kw.get("meta") or {}).get("stage")
+        if st == "proposal":
+            state["asked"].append(model)
+            if model == "m/b" and state["fail"]:
+                from council.client import ProviderError
+                raise ProviderError("m/b: ответ идёт слишком долго (более 540 с)")
+        if st == "critique" and state["fail"]:  # «Повторить» нажали, пока шли варианты — ждём начала критики
+            import asyncio as _a
+            await _a.sleep(0.4)
+        return await orig(self, model, messages, **kw)
+
+    monkeypatch.setattr(M.MockClient, "complete", flaky)
+    r = client.post("/api/sessions", json={"question": "Каков рынок кофеен у вузов?", "mode": "debate", "mock": True,
+                                           "members": ["a", "b", "c"], "chair": "a", "rounds": 1,
+                                           "chair_proposes": True})
+    sid = r.json()["id"]
+    for _ in range(100):  # дождаться сбоя b
+        if "m/b" in state["asked"]:
+            break
+        _t.sleep(0.05)
+    rr = client.post(f"/api/sessions/{sid}/retry_failed", json={"on": True})
+    assert rr.status_code == 200 and rr.json()["planned"] is True, rr.text
+    state["fail"] = False  # к повтору модель «починилась»
+    asked_before = len(state["asked"])
+    done = None
+    for _ in range(300):
+        d = client.get("/api/sessions").json()["items"]
+        done = next((x for x in d if x["id"] == sid and x.get("status") == "done"), None)
+        if done:
+            break
+        _t.sleep(0.1)
+    assert done, "заседание не завершилось после повтора"
+    again = state["asked"][asked_before:]
+    assert again == ["m/b"]  # заново спросили только не ответившую модель, остальные варианты — из сохранённого
+    import json as _json
+    res = _json.loads((tmp_runs(client) / f"{sid}.json").read_text(encoding="utf-8"))
+    assert len(res["proposals"]) == 3  # в итоге — варианты всех трёх

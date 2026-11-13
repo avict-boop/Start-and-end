@@ -987,3 +987,6 @@ details[open] > summary .params-edit { visibility: hidden; }
 .thought-chips { margin: .5rem 0; }
 .thought-text { white-space: pre-wrap; overflow-wrap: anywhere; font: .88rem/1.5 var(--font, inherit); height: min(60vh, 36rem); min-height: 10rem; overflow: auto; resize: vertical;
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: .6rem .7rem; margin: 0 0 .4rem; color: var(--text); }
+.retry-box { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-top: .6rem; }
+.retry-box > div { flex: 1 1 18rem; min-width: 0; line-height: 1.45; }
+#pRetryRow { margin-top: .6rem; }

@@ -258,6 +258,7 @@ class OpenRouterClient:
         max_tokens_cap: int = 32000,
         stream: bool = True,
     ) -> None:
+        self.patience = 1.0  # повтор не ответивших — ждать во столько раз дольше (ставит сайт)
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
         self.max_tokens_cap = max_tokens_cap
@@ -354,7 +355,7 @@ class OpenRouterClient:
         call_start = time.monotonic()
         while attempt < self.max_retries + 1:
             attempt += 1
-            total_cap = self.timeout * (10 if payload.get("tools") else 5)  # с поиском — до ~30 минут
+            total_cap = self.timeout * (10 if payload.get("tools") else 5) * self.patience  # с поиском — до ~30 минут
             if attempt > 1 and time.monotonic() - call_start > total_cap:
                 # все попытки вместе — не дольше ~15 минут: медленный провайдер не держит весь совет
                 last_error = f"{last_error}; на все попытки ушло больше {int(total_cap / 60)} мин"
@@ -501,7 +502,7 @@ class OpenRouterClient:
                 # с поиском и чтением страниц модель надолго замолкает: идут поиск и чтение найденного (12.11
                 # gemini с поиском обрывался на всех 4 попытках) — там действуют только общие пределы времени
                 return await self._from_stream(resp, model, report, started, stall=not payload.get("tools"),
-                                               cap=self.timeout * (6 if payload.get("tools") else 3))
+                                               cap=self.timeout * (6 if payload.get("tools") else 3) * self.patience)
         except httpx.TransportError as e:
             raise _Retryable(f"сетевая ошибка: {e.__class__.__name__}") from e
 

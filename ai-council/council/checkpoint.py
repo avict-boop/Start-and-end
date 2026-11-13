@@ -38,6 +38,7 @@ REASON_TEXT = {
     "stopped": "остановлено вручную",
     "error": "сбой",
     "interrupted": "прервано перезапуском программы (например, при обновлении)",
+    "retry": "остановлено после этапа, чтобы повторить модели, которые не ответили",
 }
 
 
@@ -350,6 +351,9 @@ def classify(exc: BaseException) -> tuple[str, str]:
     from .client import KeyLimit, OutOfCredits
     from .session import BudgetExceeded
     import asyncio
+    from .session import StagePause
+    if isinstance(exc, StagePause):
+        return "retry", str(exc)
     if isinstance(exc, BudgetExceeded):
         return "budget", str(exc)
     if isinstance(exc, KeyLimit):

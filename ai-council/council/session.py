@@ -38,6 +38,11 @@ class CouncilError(RuntimeError):
     pass
 
 
+class StagePause(CouncilError):
+    """Пауза на границе этапов: все обращения прошлого этапа закончены (ничего оплаченного не обрывается),
+    следующий ещё не начат. Так заседание останавливают, чтобы повторить не ответивших."""
+
+
 class BudgetExceeded(CouncilError):
     pass
 
@@ -204,7 +209,9 @@ class Council:
         # можно ли председателю разбить большое задание на серию (не у частей серии и не у сводного отчёта)
         self.allow_split = False
         # куда отдавать текст рассуждений, пока модель думает (сайт показывает его вживую; не сохраняется)
-        self.thought_sink: Callable[[str, str, str, bool], None] | None = None
+        self.thought_sink: Callable[..., None] | None = None
+        # остановиться перед следующим этапом (повторить не ответивших) — ставит сайт по кнопке
+        self.pause_at_stage = False
         # объекты, заданные программой (часть серии — только свои, сводка — все); иначе их находит постановка задачи
         self.fixed_objects: list[str] = []  # текст страниц, скачанных программой (ссылки авторов) — по адресу
         self._replaying = False
@@ -276,6 +283,9 @@ class Council:
             log.debug("%s%s: %s", self._tag, event, _short(data))
 
     def _emit(self, event: str, **data: Any) -> None:
+        if event == "stage" and self.pause_at_stage:
+            self.pause_at_stage = False
+            raise StagePause("остановлено после этапа, чтобы повторить не ответивших")
         try:
             self._log_event(event, data)
         except Exception:  # noqa: BLE001 — журнал не должен мешать заседанию

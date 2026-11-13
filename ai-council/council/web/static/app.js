@@ -1491,7 +1491,11 @@ function apply(s, ev) {
       if (ev.phase === "writing" && !s.wrote[key]) { s.wrote[key] = 1; logAdd(s, `${who}: начал писать ответ через ${fmtSec(ev.elapsed || 0)}`); }
       if (ev.phase === "retry") logAdd(s, `${who}: повтор — ${ev.detail || "временная ошибка"}${ev.wait ? `, через ${ev.wait} с` : ""}`, "k-warn");
       if (ev.phase === "done") logAdd(s, `${who}: готово за ${fmtSec(ev.elapsed || 0)}`, "k-ok");
-      if (ev.phase === "failed") logAdd(s, `${who}: сбой — ${ev.detail || ""}`, "k-bad");
+      if (ev.phase === "failed") {
+        logAdd(s, `${who}: сбой — ${ev.detail || ""}`, "k-bad");
+        (s.failedNow = s.failedNow || {})[ev.member] = { stage: ev.stage, detail: ev.detail || "" };
+      }
+      if (ev.phase === "done" && s.failedNow) delete s.failedNow[ev.member];  // повтор удался
       break;
     }
     case "start":
@@ -1514,6 +1518,14 @@ function apply(s, ev) {
       break;
     case "paused":
       s.paused = ev; s.stage = null; s.work = {};
+      if (ev.reason === "retry") {  // остановка ради повтора — сервер сам продолжит через пару секунд
+        s.retryPlanned = false;
+        logAdd(s, "Этап закончен — заседание продолжается: не ответившим задаются запросы заново", "k-ok");
+        if (!s.retryReopen) {
+          s.retryReopen = true;
+          setTimeout(() => { if (current && current.id === s.id) openSession(s.id); }, 2500);
+        }
+      }
       if (ev.budget) s.budget = ev.budget;
       if (ev.spent) s.cost = ev.spent;
       logAdd(s, `Заседание приостановлено: ${ev.reason_text}${ev.message && ev.reason !== "stopped" ? ` (${ev.message})` : ""}`, "k-warn");
@@ -1730,6 +1742,9 @@ function renderPaused(s) {
   $("pReason").innerHTML = `<b>Причина:</b> ${esc(p.reason_text || "")}${p.message && ["error", "credits", "key_limit"].includes(p.reason) ? ` — <span class="muted">${esc(p.message)}</span>` : ""}. ${PAUSE_HELP[p.reason] || ""}`;
   $("pSpent").textContent = `Потрачено ${money(p.spent || s.cost)} из бюджета ${money(p.budget || s.budget)}`
     + `${p.stage ? ` · остановилось на этапе «${p.stage}»` : ""}. Уже полученные ответы моделей сохранены: при продолжении они не оплачиваются повторно.`;
+  $("pRetryRow").hidden = !(p.failed > 0);
+  if (p.failed > 0) $("pRetryHint").textContent = `Запросов, которые не удались раньше: ${p.failed}. Их зададут заново, с вдвое большим временем на ответ; `
+    + "готовые ответы остальных — из сохранённого. Этапы после повторённого пройдут заново, уже с новыми ответами.";
   const inp = $("pBudget");
   if (inp.dataset.for !== s.id + p.reason) {
     inp.dataset.for = s.id + p.reason;
@@ -1742,7 +1757,8 @@ async function resumeSession(id) {
   const budget = Number($("pBudget").value) || null;
   $("pResume").disabled = true;
   try {
-    await api(`/api/sessions/${encodeURIComponent(id)}/resume`, { method: "POST", body: { budget } });
+    const retry_failed = !$("pRetryRow").hidden && $("pRetry").checked;
+    await api(`/api/sessions/${encodeURIComponent(id)}/resume`, { method: "POST", body: { budget, retry_failed } });
     openSession(id);
     loadHistory();
   } catch (e) { toast(e.message); } finally { $("pResume").disabled = false; }
@@ -2035,6 +2051,7 @@ function renderActivity(s) {
   }
 
   renderThoughts(s);
+  renderRetry(s, finished);
 
   // журнал (новые сверху)
   $("logCount").textContent = `${s.log.length} ${plural(s.log.length, "событие", "события", "событий")}${s.done ? ` · ${fmtSec(s.done.duration_s ?? 0)} · ${money(s.cost)}` : ""} ·`;
@@ -2045,6 +2062,39 @@ function renderActivity(s) {
   }
 }
 $("logSec").addEventListener("toggle", () => { if ($("logSec").open && current) { $("log").dataset.n = ""; renderActivity(current); } });
+
+/* ------------------------------------------------------------ повторить не ответивших */
+
+function renderRetry(s, finished) {
+  const failed = Object.entries(s.failedNow || {});
+  const box = $("retryBox");
+  box.hidden = finished || !failed.length;
+  if (box.hidden) return;
+  const who = failed.map(([n, f]) => `<b>${esc(n)}</b> (${esc(STAGE_NAME[f.stage] || f.stage)})`).join(", ");
+  const slow = failed.some(([, f]) => /слишком долго|ничего не присылает|долго/.test(f.detail));
+  const key = failed.map(([n]) => n).join("|") + (s.retryPlanned ? "+" : "");
+  if (box.dataset.key === key) return;
+  box.dataset.key = key;
+  $("retryText").innerHTML = s.retryPlanned
+    ? `<b>Повтор запланирован.</b> Когда текущий этап закончится, заседание на секунду встанет на паузу и сразу продолжится: готовые ответы — из сохранённого, ${who} получат новую попытку${slow ? " и вдвое больше времени на ответ" : ""}.`
+    : `Не ответили: ${who}. Заседание идёт без них. Можно повторить: дождёмся конца текущего этапа (ответы остальных сохранятся), `
+      + `и не ответившим зададут запросы заново${slow ? " — с вдвое большим временем на ответ" : ""}. Чем раньше нажать, тем меньше этапов пройдёт без них: `
+      + `этапы после повторённого пойдут заново, уже с новыми ответами.`;
+  $("retryBtn").textContent = s.retryPlanned ? "Отменить повтор" : "Повторить не ответивших";
+}
+$("retryBtn").addEventListener("click", async () => {
+  const s = current;
+  if (!s) return;
+  const on = !s.retryPlanned;
+  $("retryBtn").disabled = true;
+  try {
+    await api(`/api/sessions/${encodeURIComponent(s.id)}/retry_failed`, { method: "POST", body: { on } });
+    s.retryPlanned = on;
+    $("retryBox").dataset.key = "";
+    toast(on ? "Повтор — после текущего этапа" : "Повтор отменён");
+    renderRetry(s, false);
+  } catch (e) { toast(e.message); } finally { $("retryBtn").disabled = false; }
+});
 
 /* ------------------------------------------------------------ мысли моделей — вживую (не сохраняются) */
 
