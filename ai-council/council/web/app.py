@@ -64,7 +64,8 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
         {"type": "start", "id": session_id, "question": d["question"], "mode": d["mode"],
          "members": list(d.get("stats", {})), "rounds": None,
          "parent": ({"id": d["followup_of"], "title": (d.get("thread") or [{}])[-1].get("title", "")}
-                    if d.get("followup_of") else None)},
+                    if d.get("followup_of") else None),
+         "series": (d.get("request") or {}).get("series") or None},
         {"type": "framing", "refined_question": d.get("refined_question", d["question"]), "criteria": d["criteria"],
          "requirements": d.get("requirements") or [], **{k: (d.get("research") or {}).get(k)
                                                          for k in ("scope", "as_of", "subquestions", "lenses")
@@ -167,7 +168,7 @@ class RunRequest(BaseModel):
 
 class SeriesPart(BaseModel):
     title: str = ""
-    question: str = Field(min_length=3)
+    question: str = ""  # пусто — программа соберёт: полное задание + «в этой части только эти объекты»
     objects: list[str] = Field(default_factory=list)
 
 
@@ -782,6 +783,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 "members": [m.name for m in cfg.active_members], "chair": cfg.chair, "budget": cfg.max_cost_usd,
                 "mock": bool(sp.get("mock")), "fact_check": cfg.fact_check.enabled,
                 "parent": {"id": parent, "title": sp.get("parent_title", "")} if parent else None,
+                "series": (sp.get("request") or {}).get("series") or None,
                 "resumed": int(sp.get("resumes") or 0)}
 
     def paused_event(cp: Checkpoint) -> dict[str, Any]:
@@ -863,7 +865,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                           "catalog": True, "auto_split": False, "facts_per_object": e.plan["facts_per_object"]}
                     req0 = {**req0, "research": rs, "mode": "research", "budget": council.budget if council else None}
                     s = await asyncio.to_thread(
-                        SR.create, runs_dir(cfg), title=e.plan["title"] or sp["question"][:120], task=sp["question"],
+                        SR.create, runs_dir(cfg), title=(sp["question"].strip().splitlines() or [""])[0][:120] or e.plan["title"], task=sp["question"],
                         parts=e.plan["parts"], request={k: v for k, v in req0.items() if v is not None},
                         max_parallel=2, auto_summary=True, origin=f"split:{sid}")
                     kick_series(s["id"])
@@ -1150,9 +1152,15 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     @app.post("/api/series")
     async def series_create(body: SeriesRequest) -> dict[str, Any]:
         req0 = {k: v for k, v in body.request.items() if k not in ("question", "parent")}
-        RunRequest(**{**req0, "question": body.parts[0].question})  # те же проверки настроек, что у заседания
+        parts = [p.model_dump() for p in body.parts]
+        for i, p in enumerate(parts):
+            if not p["question"].strip():
+                if not body.task.strip() or not p["objects"]:
+                    raise HTTPException(400, f"часть {i + 1}: нет ни текста, ни объектов")
+                p["question"] = SR.part_text(body.task, p["objects"], i + 1, len(parts))
+        RunRequest(**{**req0, "question": parts[0]["question"]})  # те же проверки настроек, что у заседания
         s = await asyncio.to_thread(SR.create, runs_dir(base_config()), title=body.title, task=body.task,
-                                    parts=[p.model_dump() for p in body.parts], request=req0,
+                                    parts=parts, request=req0,
                                     max_parallel=body.max_parallel, auto_summary=body.auto_summary, origin="web")
         kick_series(s["id"])
         return {"id": s["id"]}

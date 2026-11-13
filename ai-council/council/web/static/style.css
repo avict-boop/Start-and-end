@@ -934,3 +934,24 @@ details[open] > summary .params-edit { visibility: hidden; }
 .switch-row input { width: 18px; height: 18px; min-height: 0; }
 
 .warn-text { color: var(--warn); }
+
+/* серии */
+.series-list { display: grid; gap: .4rem; margin-bottom: 1rem; }
+.ser-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; padding: .7rem .9rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: inherit; text-decoration: none; }
+.ser-row:hover { border-color: var(--line-strong); }
+.ser-t { font-weight: 650; flex: 1 1 16rem; min-width: 0; overflow-wrap: anywhere; }
+.row-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .6rem; }
+.split-part { border: 1px solid var(--line); border-radius: 12px; padding: .6rem .8rem; margin: .6rem 0; display: grid; gap: .4rem; }
+.split-part legend { font-weight: 650; padding: 0 .3rem; }
+.split-part textarea { width: 100%; font: inherit; font-size: .9rem; }
+.split-opts { display: grid; gap: .6rem; margin: .6rem 0; }
+.ok-text { color: var(--ok); font-weight: 600; }
+.startbar #splitBtn { margin-left: .4rem; }
+.sub-h { margin-bottom: .6rem; }
+.ser-tbl { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.ser-tbl th, .ser-tbl td { text-align: left; padding: .45rem .5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+.ser-tbl th { font-weight: 650; color: var(--muted); font-size: .85rem; }
+#series .card { margin-top: 1rem; }
+.arc-status.done { background: var(--ok-soft); color: var(--ok); }
+.arc-status.paused, .arc-status.stopped, .arc-status.ready { background: var(--warn-soft); color: var(--warn); }
+.arc-status.queued, .arc-status.missing { background: var(--surface-2); color: var(--muted); }

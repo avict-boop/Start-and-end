@@ -318,6 +318,9 @@ Research settings you can tune for THIS question (current values: {json.dumps(re
 - catalog (true/false): when the request GIVES a list of objects to check (companies, products), the app sizes the
   checks as objects × facts_per_object (up to 100) and makes every author cover every object.
 - facts_per_object (1-5): facts to check about each listed object first (catalog / object coverage).
+  If the list is longer than about 10 objects the app does not cram it into one session: the chair splits it into a
+  series of parts with the same settings and the council writes one summary report — so tune settings for ONE part
+  (about 10 objects), not for the whole list.
 - lenses (true/false): a distinct angle for every author (market, technology, economics, sceptic) — off only when the
   question has one narrow angle.
 - section_vote (true/false): vote for the best proposal per subquestion — useful for multi-part questions.

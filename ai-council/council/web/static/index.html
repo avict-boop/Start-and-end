@@ -223,6 +223,7 @@
             <div class="startbar">
               <div id="formError" class="alert bad" role="alert" hidden></div>
               <button id="startBtn" type="submit" class="btn primary big">Начать заседание</button>
+              <button id="splitBtn" type="button" class="btn" hidden title="Советник найдёт объекты задания и разобьёт его на части серии без потерь">Разбить на части…</button>
               <button id="estimateBtn" type="button" class="est-line" aria-expanded="false" aria-controls="estimate"><span id="estLine">Напишите вопрос — оценим стоимость</span></button>
               <div id="estimate" class="estimate" hidden></div>
             </div>
@@ -249,6 +250,17 @@
         </select>
       </div>
       <div id="archiveList" class="archive-list"></div>
+    </section>
+
+    <!-- ============================================================ серия -->
+    <section id="series" class="view" hidden aria-labelledby="serTitle">
+      <header class="page-head">
+        <div class="s-parent"><a href="#/archive">← Архив</a></div>
+        <div class="eyebrow" id="serMeta"></div>
+        <h1 id="serTitle">Серия</h1>
+        <div id="serStatus" class="muted" aria-live="polite"></div>
+      </header>
+      <div id="serBody"></div>
     </section>
 
     <!-- ============================================================ настройки -->

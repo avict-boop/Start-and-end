@@ -86,6 +86,7 @@ function ask({ title, html = "", ok = "OK", cancel = "Отмена", danger = fa
     $("dBody").innerHTML = html;
     $("dOk").textContent = ok;
     $("dOk").className = `btn ${danger ? "danger" : "primary"}`;
+    $("dOk").disabled = false;
     $("dCancel").textContent = cancel;
     $("dCancel").hidden = cancel === null;
     d.hidden = false;
@@ -257,6 +258,7 @@ function setMode(m) {
   $("researchLen").hidden = m !== "research";
   // в исследовании вместо неё — арбитраж доказательств; в «Креативе» проверять нечего
   $("factCheckRow").hidden = m === "research" || m === "creative";
+  if ($("splitBtn")) $("splitBtn").hidden = m !== "research";
   if ($("webField") && config) renderWebMembers();
   $("modeHint").textContent = MODE_HINT[m];
   if ($("chairHint")) updateChairHint();
@@ -283,7 +285,7 @@ const RS_NAME = {
   arbitration_claims: "Утверждений на проверку поиском", missions: "Поисковых заданий (подтвердить / опровергнуть)",
   fresh_scouts: "Авторов с поиском уже в предложениях", max_words: "Длина варианта, слов", shorten_long: "Сокращать слишком длинные варианты",
   max_claims: "Утверждений в варианте", lenses: "Углы зрения авторов", catalog: "Каталог: проверки по числу объектов",
-  object_coverage: "Обязательный охват объектов задания", facts_per_object: "Фактов на объект", section_vote: "Голосование по подвопросам",
+  object_coverage: "Обязательный охват объектов задания", facts_per_object: "Фактов на объект", auto_split: "Председатель разбивает большой список", objects_per_part: "Объектов в части серии", section_vote: "Голосование по подвопросам",
   revision_digest: "Доработка по выжимкам", revision_search: "Поиск и на доработке", long_factor: "«Слишком длинный» — во сколько раз", arbitration: "Арбитраж доказательств",
   link_check: "Проверка ссылок", recheck_unclear: "«Не удалось проверить» — второй поиск, до",
   post_revision_claims: "Новые утверждения после доработки — проверить, до",
@@ -913,9 +915,9 @@ const FORMAT_NAME = { pdf: "PDF", docx: "Word", md: "Markdown" };
 
 function showView(name) {
   view = name;
-  for (const v of ["empty", "session", "archive", "stats", "settings"]) $(v).hidden = name !== v;
+  for (const v of ["empty", "session", "archive", "stats", "settings", "series"]) $(v).hidden = name !== v;
   // в меню подсвечен текущий раздел; заседание открывается из «Нового» или архива — подсвечиваем «Архив»
-  const navOf = { empty: "newBtn", archive: "archiveBtn", stats: "statsBtn", settings: "settingsBtn", session: "archiveBtn" };
+  const navOf = { empty: "newBtn", archive: "archiveBtn", stats: "statsBtn", settings: "settingsBtn", session: "archiveBtn", series: "archiveBtn" };
   for (const b of document.querySelectorAll(".nav-item")) {
     if (b.id === navOf[name]) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   }
@@ -1055,6 +1057,7 @@ let archiveTimer = null;
 async function loadArchive() {
   const q = $("archiveSearch").value.trim();
   const mode = $("archiveMode").value;
+  loadSeriesList(!q && !mode);
   let data;
   try { data = await api(`/api/sessions?q=${encodeURIComponent(q)}&mode=${encodeURIComponent(mode)}`); }
   catch (e) { $("archiveList").innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
@@ -1069,7 +1072,8 @@ async function loadArchive() {
     const done = it.status === "done";
     const meta = [niceDate(it), MODE_NAME[it.mode] || it.mode_name, it.members && it.members.length ? `${it.members.length} ${plural(it.members.length, "модель", "модели", "моделей")}` : "",
       it.attachments ? `${it.attachments} ${plural(it.attachments, "файл", "файла", "файлов")}` : "",
-      it.followup_of ? "уточнение" : "", it.cost != null ? money(it.cost) : ""]
+      it.followup_of ? "уточнение" : "", it.series ? (it.series.summary ? "сводный отчёт серии" : `часть ${it.series.part}/${it.series.total} серии`) : "",
+      it.cost != null ? money(it.cost) : ""]
       .filter(Boolean).map(esc).join(" · ");
     const status = done ? "" : `<span class="arc-status ${esc(it.status)}">${STATUS_TEXT[it.status] || esc(it.status)}</span> `;
     const del = it.status === "running" ? "" : `<button type="button" class="icon-btn" data-arc-del="${esc(it.id)}" aria-label="Удалить" title="Удалить"><svg class="ic"><use href="#i-trash"/></svg></button>`;
@@ -1084,6 +1088,159 @@ async function loadArchive() {
     </article>`;
   }).join("");
 }
+
+const SERIES_STATUS = { running: "идёт", summary: "совет сводит", done: "готова", ready: "части готовы", stopped: "остановлена" };
+const PART_STATUS = { queued: "в очереди", running: "идёт", done: "готова", paused: "на паузе", error: "ошибка", missing: "нет данных" };
+
+async function loadSeriesList(show) {
+  let box = $("seriesList");
+  if (!box) {
+    box = document.createElement("div");
+    box.id = "seriesList";
+    box.className = "series-list";
+    $("archiveList").before(box);
+  }
+  if (!show) { box.hidden = true; return; }
+  let data;
+  try { data = await api("/api/series"); } catch { box.hidden = true; return; }
+  const items = (data && data.items) || [];
+  box.hidden = !items.length;
+  box.innerHTML = items.length ? `<h2 class="sub-h">Серии</h2>` + items.map((x) => `<a class="ser-row" href="#/series/${encodeURIComponent(x.id)}">
+      <span class="ser-t">${esc(shortTitle(x.title, 100))}</span>
+      <span class="arc-status ${x.status === "running" || x.status === "summary" ? "running" : esc(x.status)}">${esc(SERIES_STATUS[x.status] || x.status)}</span>
+      <span class="muted small">частей ${x.done}/${x.total}${x.summary ? " · сводка" : ""} · ${money(x.cost)}</span></a>`).join("") : "";
+}
+
+let seriesTimer = null;
+async function openSeries(id) {
+  closeStream();
+  current = null;
+  const target = `#/series/${encodeURIComponent(id)}`;
+  if (!sameHash(location.hash, target)) go(target);
+  showView("series");
+  markActiveHistory();
+  await renderSeries(id);
+}
+
+async function renderSeries(id) {
+  clearTimeout(seriesTimer);
+  let v;
+  try { v = await api(`/api/series/${encodeURIComponent(id)}`); }
+  catch (e) { $("serBody").innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  if (view !== "series" || !sameHash(location.hash, `#/series/${encodeURIComponent(id)}`)) return;
+  document.title = `${shortTitle(v.title, 60)} — серия`;
+  $("serTitle").textContent = v.title;
+  $("serMeta").textContent = [MODE_NAME[v.mode] || v.mode, `${v.total} ${plural(v.total, "часть", "части", "частей")}`,
+    `одновременно до ${v.max_parallel}`, v.origin && v.origin.startsWith("split:") ? "разбил председатель" : ""].filter(Boolean).join(" · ");
+  $("serStatus").textContent = `${SERIES_STATUS[v.status] || v.status} · готово частей ${v.done} из ${v.total} · потрачено ${money(v.cost)}`;
+  const rows = v.parts.map((p) => `<tr>
+      <td>${p.n}</td>
+      <td>${p.session_id ? `<a href="#/s/${encodeURIComponent(p.session_id)}">${esc(p.title)}</a>` : esc(p.title)}
+        ${p.winner_title ? `<div class="muted small">${esc(shortTitle(p.winner_title, 90))}</div>` : ""}${p.reason ? `<div class="muted small">${esc(p.reason)}</div>` : ""}</td>
+      <td>${p.objects}</td>
+      <td><span class="arc-status ${esc(p.status)}">${esc(PART_STATUS[p.status] || p.status)}</span></td>
+      <td>${money(p.cost)}</td></tr>`).join("");
+  const sm = v.summary;
+  const canSum = v.done > 0 && (!sm || sm.status === "error" || sm.status === "missing");
+  const stopped = v.status === "stopped";
+  $("serBody").innerHTML = `<section class="card">
+      <h2 class="sub-h">Части</h2>
+      <div class="table-wrap"><table class="ser-tbl"><thead><tr><th>№</th><th>Часть</th><th>Объектов</th><th>Состояние</th><th>Стоимость</th></tr></thead><tbody>${rows}</tbody></table></div>
+    </section>
+    <section class="card">
+      <h2 class="sub-h">Сводный отчёт</h2>
+      ${sm ? `<p><a class="btn primary" href="#/s/${encodeURIComponent(sm.session_id)}">Открыть сводный отчёт</a>
+          <span class="arc-status ${esc(sm.status)}">${esc(PART_STATUS[sm.status] || sm.status)}</span> <span class="muted small">${money(sm.cost)}</span></p>`
+        : `<p class="muted">${v.auto_summary ? "Когда все части будут готовы, совет сам сведёт их в один отчёт: проверенное в частях входит в общий реестр с теми же статусами." : "Сводка не запускается сама — нажмите «Свести», когда части будут готовы."}</p>`}
+      <div class="row-actions">
+        ${stopped ? `<button type="button" class="btn" id="serCont">Продолжить серию</button>` : ""}
+        ${canSum ? `<button type="button" class="btn ${v.done === v.total ? "primary" : ""}" id="serSum">${v.done === v.total ? "Свести части советом" : `Свести готовые (${v.done} из ${v.total})`}</button>` : ""}
+      </div>
+    </section>`;
+  const cont = $("serCont");
+  if (cont) cont.onclick = async () => { cont.disabled = true; try { await api(`/api/series/${encodeURIComponent(id)}/continue`, { method: "POST" }); toast("Серия продолжается"); } catch (e) { toast(e.message); } renderSeries(id); };
+  const sum = $("serSum");
+  if (sum) sum.onclick = async () => {
+    if (v.done < v.total && !(await ask({ title: "Свести не все части?", html: `<p>Готово ${v.done} из ${v.total}. Сводка будет только по готовым частям — остальные объекты в неё не войдут.</p>`, ok: "Свести" }))) return;
+    sum.disabled = true;
+    try { const r = await api(`/api/series/${encodeURIComponent(id)}/summary`, { method: "POST" }); toast("Совет сводит части"); if (r && r.id) loadHistory(); }
+    catch (e) { toast(e.message); }
+    renderSeries(id);
+  };
+  if (v.status === "running" || v.status === "summary") seriesTimer = setTimeout(() => renderSeries(id), 5000);
+}
+
+// «Разбить на части…»: советник находит объекты, делит задание без потерь, показывает — и запускает серию
+const _objCheck = (all, groups) => {
+  const seen = new Map();
+  for (const g of groups) for (const o of g) seen.set(o, (seen.get(o) || 0) + 1);
+  return { missing: all.filter((o) => !seen.has(o)), twice: [...seen].filter(([, k]) => k > 1).map(([o]) => o),
+    extra: [...seen.keys()].filter((o) => !all.includes(o)) };
+};
+
+async function splitTask() {
+  showFormError("");
+  const p = payload();
+  if (p.question.length < 3) { showFormError("Напишите задание"); $("question").focus(); return; }
+  if (p.members.length < 2) { showFormError("Выберите хотя бы двух участников в «Параметрах»"); return; }
+  const btn = $("splitBtn");
+  btn.disabled = true; btn.classList.add("busy");
+  let d;
+  try { d = await api("/api/split", { method: "POST", body: { question: p.question, request: p } }); }
+  catch (e) { showFormError(e.message); return; }
+  finally { btn.disabled = false; btn.classList.remove("busy"); }
+  const notes = (d.notes || []).map((x) => `<li>${esc(x)}</li>`).join("");
+  const added = (d.checks.audit_added || []);
+  const head = `<p>${esc(d.reason)}</p>
+    <p class="muted small">Объектов в задании: <b>${d.objects.length}</b> · фактов на объект: ${d.facts_per_object} · разбирал: ${esc(d.model)}</p>
+    ${added.length ? `<p class="warnbox">Вторая проверка нашла пропущенные объекты и добавила их: ${added.map(esc).join(", ")}</p>` : ""}
+    ${notes ? `<ul class="muted small">${notes}</ul>` : ""}`;
+  if (!d.need_split) {
+    await ask({ title: "Делить не нужно", html: head + "<p>Задание помещается в одно заседание — запускайте как обычно.</p>", ok: "Понятно", cancel: null });
+    return;
+  }
+  const parts = d.parts.map((x, i) => `<fieldset class="split-part"><legend>Часть ${i + 1}</legend>
+      <label class="field"><span class="label">Название</span><input type="text" data-sp-title value="${esc(x.title)}"></label>
+      <label class="field"><span class="label">Объекты — по одному в строке</span><textarea data-sp-objs rows="${Math.min(10, x.objects.length + 1)}">${esc(x.objects.join("\n"))}</textarea></label>
+    </fieldset>`).join("");
+  const html = head + `<p>Каждая часть получит <b>полное задание без сокращений</b> и рамку «в этой части — только эти объекты»; части идут с текущими настройками, «Каталог» включается сам (проверок — по числу объектов × фактов). Объекты можно переносить между частями.</p>
+    <div id="spCheck" class="small" aria-live="polite"></div>
+    ${parts}
+    <div class="split-opts">
+      <label class="field"><span class="label">Одновременно идут</span><select id="spPar"><option value="1">1 часть</option><option value="2" selected>2 части</option><option value="3">3 части</option></select></label>
+      <label class="switch"><input id="spSum" type="checkbox" checked><span class="sw" aria-hidden="true"></span><span><b>Сводный отчёт советом</b><small>Когда все части готовы, совет сводит их в один отчёт.</small></span></label>
+    </div>
+    <p class="muted small">Бюджет — на каждую часть (сейчас $${esc(String(p.budget || ""))}); за серию до $${esc(String(Math.round((Number(p.budget) || 0) * (d.parts.length + 1) * 100) / 100))} с учётом сводки.</p>`;
+  const groupsNow = () => [...$("dBody").querySelectorAll("[data-sp-objs]")].map((t) => t.value.split("\n").map((x) => x.trim()).filter(Boolean));
+  const recheck = () => {
+    const c = _objCheck(d.objects, groupsNow());
+    const bad = c.missing.length || c.twice.length;
+    $("spCheck").innerHTML = bad ? `<span class="warn-text">${c.missing.length ? `Не распределены: ${c.missing.map(esc).join(", ")}. ` : ""}${c.twice.length ? `В двух частях: ${c.twice.map(esc).join(", ")}.` : ""}</span>`
+      : `<span class="ok-text">✓ Каждый из ${d.objects.length} объектов — ровно в одной части${c.extra.length ? ` (добавлено вручную: ${c.extra.length})` : ""}</span>`;
+    $("dOk").disabled = !!bad;
+  };
+  const pending = ask({ title: `Разбить на ${d.parts.length} ${plural(d.parts.length, "часть", "части", "частей")}`, html, ok: "Запустить серию", wide: true });
+  recheck();
+  $("dBody").addEventListener("input", recheck);
+  const okGo = await pending;
+  $("dOk").disabled = false;
+  if (!okGo) return;
+  const groups = groupsNow();
+  const titles = [...$("dBody").querySelectorAll("[data-sp-title]")].map((t) => t.value.trim());
+  const body = {
+    title: shortTitle(p.question, 120), task: p.question,
+    parts: groups.map((g, i) => ({ title: titles[i] || `Часть ${i + 1}`, objects: g })).filter((x) => x.objects.length),
+    request: { ...p, research: { ...(p.research || {}), catalog: true, auto_split: false, facts_per_object: d.facts_per_object } },
+    max_parallel: Number($("spPar").value) || 2, auto_summary: $("spSum").checked,
+  };
+  try {
+    const { id } = await api("/api/series", { method: "POST", body });
+    toast("Серия запущена");
+    openSeries(id);
+    loadHistory();
+  } catch (e) { showFormError(e.message); }
+}
+if ($("splitBtn")) $("splitBtn").addEventListener("click", splitTask);
 
 function openArchive() {
   closeStream();
@@ -1190,6 +1347,14 @@ function apply(s, ev) {
     case "objects":
       logAdd(s, `В задании ${ev.count} ${plural(ev.count, "объект", "объекта", "объектов")}: ${ev.coverage ? `у каждого автора должны быть факты о каждом (по ${ev.facts}), ` : ""}на проверку — ${ev.checks} утв., у автора до ${ev.max_claims}`);
       break;
+    case "split":
+      logAdd(s, `Председатель разбил задание: ${ev.objects} ${plural(ev.objects, "объект", "объекта", "объектов")} → ${ev.parts.length} ${plural(ev.parts.length, "часть", "части", "частей")} (${ev.parts.map((x) => x.objects).join(" + ")})`, "k-ok");
+      break;
+    case "split_series":
+      s.splitSeries = ev.series;
+      logAdd(s, `Задание большое — дальше серия из ${ev.parts} ${plural(ev.parts, "части", "частей", "частей")}: части идут по очереди с теми же настройками, потом совет сведёт их в один отчёт`, "k-ok");
+      if (current === s && view === "session") { toast("Задание разбито на части — открываю серию"); setTimeout(() => { if (current === s) openSeries(ev.series); }, 1200); }
+      break;
     case "links_check":
       logAdd(s, `Проверяю ${ev.count} ${plural(ev.count, "ссылку", "ссылки", "ссылок")} и цитаты на страницах — до пары минут, без моделей`);
       break;
@@ -1238,7 +1403,7 @@ function apply(s, ev) {
     case "start":
       if (!s.startSeen) { s.startSeen = true; s.startedAt = s.at; }  // после продолжения — время от первого старта
       Object.assign(s, { question: ev.question, mode: ev.mode, rounds: ev.rounds, members: ev.members || [],
-        chair: ev.chair || null, mock: !!ev.mock, parent: ev.parent || null, factPlanned: !!ev.fact_check,
+        chair: ev.chair || null, mock: !!ev.mock, parent: ev.parent || null, factPlanned: !!ev.fact_check, series: ev.series || null,
         budget: ev.budget || null });
       break;
     case "resumed":
@@ -1388,8 +1553,9 @@ function render(s) {
 
   $("sMeta").textContent = [MODE_NAME[s.mode] || s.mode, s.mode === "debate" && s.rounds > 1 ? `${s.rounds} раунда` : "",
     s.members.length ? `${s.members.length} ${plural(s.members.length, "модель", "модели", "моделей")}` : "", s.mock ? "демо-режим" : ""].filter(Boolean).join(" · ");
-  $("sParent").hidden = !s.parent;
+  $("sParent").hidden = !s.parent && !s.series;
   if (s.parent) $("sParent").innerHTML = `↳ Уточнение к заседанию <a href="#/s/${encodeURIComponent(s.parent.id)}">${esc(s.parent.title || "…")}</a>`;
+  else if (s.series) $("sParent").innerHTML = `↳ ${s.series.summary ? "Сводный отчёт" : `Часть ${s.series.part} из ${s.series.total}`} серии <a href="#/series/${encodeURIComponent(s.series.id)}">${esc(shortTitle(s.series.title || "…", 90))}</a>`;
   $("nextActions").hidden = !s.done;
   if (!s.done) { $("rateRow").hidden = true; $("costSec").hidden = true; $("pilotSec").hidden = true; }
   else if (!s.rateLoaded) { s.rateLoaded = true; loadRating(s.id); loadCosts(s.id); loadPilot(s); }
@@ -2617,6 +2783,9 @@ function route() {
     }
     openSession(id);
     if (m[2]) pendingProposal = m[2];
+  } else if (/^#\/series\/[^/]+$/.test(location.hash)) {
+    const id = decodeURIComponent(location.hash.slice("#/series/".length));
+    if (view !== "series") openSeries(id); else renderSeries(id);
   } else if (location.hash === "#/archive") {
     if (view !== "archive") openArchive();
   } else if (location.hash === "#/stats") {
