@@ -961,3 +961,22 @@ details[open] > summary .params-edit { visibility: hidden; }
 .split-revise-body .field { margin-bottom: 0; }
 .split-revise-body #spN { max-width: 8rem; }
 .arc-status.interrupted { background: var(--warn-soft); color: var(--warn); }
+
+/* окно ожидания: долгий запрос к советнику — интерфейс заблокирован, видно, что идёт работа */
+.modal.busy { z-index: 70; }  /* поверх окна разбиения, когда пересматриваем из него */
+.busy-box { width: min(480px, 100%); }
+.busy-head { display: flex; align-items: center; gap: .7rem; margin-bottom: .6rem; }
+.busy-head h2 { margin: 0; }
+.busy-spin { flex: none; width: 28px; height: 28px; border-radius: 50%; border: 3px solid var(--line-strong);
+  border-top-color: var(--accent); animation: spin .9s linear infinite; }
+.busy-steps { list-style: none; margin: 0 0 .6rem; padding: 0; display: grid; gap: .45rem; }
+.busy-steps li { display: flex; gap: .55rem; align-items: flex-start; color: var(--muted); line-height: 1.4; }
+.busy-steps li::before { content: ""; flex: none; width: 18px; height: 18px; margin-top: .1rem; border-radius: 50%;
+  border: 2px solid var(--line-strong); box-sizing: border-box; }
+.busy-steps li.now { color: var(--text); font-weight: 600; }
+.busy-steps li.now::before { border-color: var(--accent); border-top-color: transparent; animation: spin .9s linear infinite; }
+.busy-steps li.done { color: var(--text); }
+.busy-steps li.done::before { content: "✓"; border: 0; background: var(--ok-soft); color: var(--ok); font-size: .72rem;
+  font-weight: 800; display: grid; place-items: center; }
+.busy-foot { display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin-top: .8rem; flex-wrap: wrap; }
+@media (prefers-reduced-motion: reduce) { .busy-spin, .busy-steps li.now::before { animation: none !important; border-top-color: var(--accent); } }

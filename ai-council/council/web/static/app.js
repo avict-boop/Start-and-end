@@ -109,6 +109,44 @@ function ask({ title, html = "", ok = "OK", cancel = "Отмена", danger = fa
   });
 }
 
+// Окно ожидания долгого запроса: интерфейс заблокирован, видно, что идёт работа и сколько прошло; «Отменить» —
+// обрывает запрос. steps: [[с какой секунды, "что делается"], …] — обычный ход, а не точный прогресс сервера.
+function busy({ title, steps = [], note = "" }) {
+  const ctl = new AbortController();
+  const el = $("busy");
+  const back = document.activeElement;
+  const t0 = Date.now();
+  $("busyTitle").textContent = title;
+  $("busyNote").textContent = note;
+  const render = () => {
+    const sec = (Date.now() - t0) / 1000;
+    let cur = 0;
+    steps.forEach(([at], i) => { if (sec >= at) cur = i; });
+    $("busySteps").innerHTML = steps.map(([, txt], i) => `<li class="${i < cur ? "done" : i === cur ? "now" : ""}">${esc(txt)}</li>`).join("");
+    $("busyTime").textContent = `прошло ${fmtSec(sec)}${sec > 90 ? " — дольше обычного, но запрос ещё идёт" : ""}`;
+  };
+  render();
+  const timer = setInterval(render, 1000);
+  el.hidden = false;
+  document.body.classList.add("modal-open");
+  const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); ctl.abort(); } trapFocus(e, el); };
+  el.addEventListener("keydown", onKey);
+  $("busyCancel").onclick = () => ctl.abort();
+  $("busyCancel").focus();
+  return {
+    signal: ctl.signal,
+    close() {
+      clearInterval(timer);
+      el.hidden = true;
+      el.removeEventListener("keydown", onKey);
+      $("busyCancel").onclick = null;
+      if ($("modal").hidden && $("dialog").hidden) document.body.classList.remove("modal-open");
+      if (back && back.focus && document.contains(back)) back.focus();
+    },
+  };
+}
+const aborted = (e) => e && (e.name === "AbortError" || /abort/i.test(e.message || ""));
+
 // Tab не выходит за пределы открытого окна
 function trapFocus(e, box) {
   if (e.key !== "Tab") return;
@@ -1192,10 +1230,13 @@ async function splitTask() {
   if (p.members.length < 2) { showFormError("Выберите хотя бы двух участников в «Параметрах»"); return; }
   const btn = $("splitBtn");
   btn.disabled = true; btn.classList.add("busy");
+  const wait = busy({ title: "Советник разбирает задание…", steps: p.mock ? [[0, "Нахожу объекты по таблице задания и делю на части"]] : [[0, "Читаю задание и нахожу все объекты — компании, продукты, сайты"], [12, "Группирую объекты по смыслу на части"],
+      [24, "Вторая проверка: не пропущен ли какой-нибудь объект"], [36, "Собираю части: в каждой — полное задание и свои объекты"]],
+    note: p.mock ? "Демо-режим: несколько секунд." : "Обычно 20–60 секунд. Заседание пока не запускается — только анализ задания (около $0,1–0,2). Потом покажу, что получилось, и вы решите, запускать ли серию." });
   let d;
-  try { d = await api("/api/split", { method: "POST", body: { question: p.question, request: p } }); }
-  catch (e) { showFormError(e.message); return; }
-  finally { btn.disabled = false; btn.classList.remove("busy"); }
+  try { d = await api("/api/split", { method: "POST", body: { question: p.question, request: p }, signal: wait.signal }); }
+  catch (e) { if (!aborted(e)) showFormError(e.message); return; }
+  finally { wait.close(); btn.disabled = false; btn.classList.remove("busy"); }
   if (!d.need_split) {
     const notes = (d.notes || []).map((x) => `<li>${esc(x)}</li>`).join("");
     await ask({ title: "Делить не нужно", html: `<p>${esc(d.reason)}</p>${notes ? `<ul class="muted small">${notes}</ul>` : ""}
@@ -1258,16 +1299,20 @@ async function splitTask() {
     const objs = [...new Set([...all, ...groupsNow().flat()])];
     $("spRedo").disabled = true; $("dOk").disabled = true;
     $("spRedoStatus").textContent = "Советник пересматривает разбиение…";
+    const wait = busy({ title: "Пересматриваю разбиение…", steps: [
+      [0, principle ? `Группирую объекты по вашему принципу: «${principle.slice(0, 80)}»` : `Делю объекты на ${n} ${plural(n, "часть", "части", "частей")}`],
+      [10, "Программа проверяет, что каждый объект — ровно в одной части"]],
+      note: p.mock ? "Демо-режим: несколько секунд." : "Обычно 10–30 секунд: объекты уже найдены, советник только группирует их заново." });
     try {
       const x = await api("/api/split", { method: "POST", body: { question: p.question, request: p, objects: objs, parts: n, principle,
-        facts: d.facts_per_object } });
+        facts: d.facts_per_object }, signal: wait.signal }).finally(() => wait.close());
       if ($("dialog").hidden || !$("spParts")) return;  // окно закрыли, пока советник думал
       for (const o of x.objects) if (!all.includes(o)) all.push(o);
       d = x;
       $("spHead").innerHTML = headHtml(x);
       $("spParts").innerHTML = partsHtml(x);
       $("spRedoStatus").textContent = `Готово: ${x.parts.length} ${plural(x.parts.length, "часть", "части", "частей")}`;
-    } catch (e) { if ($("spRedoStatus")) $("spRedoStatus").textContent = `Не получилось: ${e.message}`; }
+    } catch (e) { if ($("spRedoStatus")) $("spRedoStatus").textContent = aborted(e) ? "Пересмотр отменён — разбиение прежнее" : `Не получилось: ${e.message}`; }
     finally { if ($("spRedo") && !$("dialog").hidden) { $("spRedo").disabled = false; recheck(); } }
   };
   const okGo = await pending;

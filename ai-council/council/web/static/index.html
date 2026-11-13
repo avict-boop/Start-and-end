@@ -460,6 +460,15 @@
   </div>
 </div>
 
+<div id="busy" class="modal dialog busy" hidden role="alertdialog" aria-modal="true" aria-labelledby="busyTitle" aria-describedby="busyNote">
+  <div class="modal-box dialog-box busy-box">
+    <div class="busy-head"><span class="busy-spin" aria-hidden="true"></span><h2 id="busyTitle"></h2></div>
+    <ol id="busySteps" class="busy-steps"></ol>
+    <p id="busyNote" class="muted small"></p>
+    <div class="busy-foot"><span id="busyTime" class="muted small" aria-live="off"></span>
+      <button id="busyCancel" type="button" class="btn">Отменить</button></div>
+  </div>
+</div>
 <div id="dialog" class="modal dialog" hidden role="alertdialog" aria-modal="true" aria-labelledby="dTitle" aria-describedby="dBody">
   <div class="modal-box dialog-box">
     <h2 id="dTitle"></h2>
