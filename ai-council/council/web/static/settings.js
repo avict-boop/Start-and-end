@@ -269,7 +269,7 @@ function renderSettings() {
         <label class="field"><span>Новые утверждения после доработки — проверить, до</span><input type="number" data-rn="post_revision_claims" min="0" max="10" value="${d.research.post_revision_claims}" ${ro}></label>
         <label class="field"><span>Фрагмент страницы — не подтверждение</span>
           <select data-rs="snippet_rule" ${ro}>${[["critical", "для спорных и быстро меняющихся"], ["all", "для всех утверждений"], ["off", "не применять"]].map(([v, t]) => `<option value="${v}" ${d.research.snippet_rule === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-        <label class="field"><span>Утверждений в варианте, до</span><input type="number" data-rn="max_claims" min="3" max="15" value="${d.research.max_claims}" ${ro}></label>
+        <label class="field"><span>Утверждений в варианте, до</span><input type="number" data-rn="max_claims" min="3" max="30" value="${d.research.max_claims}" ${ro}></label>
         <label class="field"><span>Строк таблиц в выжимке для доработки</span><input type="number" data-rn="digest_table_rows" min="0" max="40" value="${d.research.digest_table_rows}" ${ro}><small class="hint">таблица чужого варианта идёт в выжимку целиком, до 40 строк; 0 — без таблиц</small></label>
         <label class="field"><span>Предел ответа автора: токенов на слово</span><input type="number" data-rn="author_tokens_per_word" min="0" max="20" step="0.5" value="${d.research.author_tokens_per_word}" ${ro}>
           <div class="muted small">× длина варианта; 0 — общий предел</div></label>

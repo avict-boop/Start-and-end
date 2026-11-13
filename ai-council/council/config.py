@@ -59,7 +59,7 @@ class ResearchConfig(BaseModel):
     arbitration: bool = True       # арбитраж доказательств после критики: поиск по утверждениям всех вариантов
     missions: int = Field(default=2, ge=1, le=2)        # поисковых вызовов: подтверждения и опровержения
     arbitration_claims: int = Field(default=20, ge=3, le=30)  # сколько утверждений проверять (после объединения дублей)
-    max_claims: int = Field(default=8, ge=3, le=15)     # утверждений в варианте
+    max_claims: int = Field(default=8, ge=3, le=30)     # утверждений в варианте (до 30: проверка пакета компаний по 3 факта)
     max_evidence: int = Field(default=20, ge=5, le=40)  # источников в ответе поиска
     revision_digest: bool = True   # доработка по реестру и выжимкам чужих вариантов, а не по их полным текстам
     section_vote: bool = True      # голосование за лучший вариант по каждому подвопросу
