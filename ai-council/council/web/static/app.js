@@ -1241,12 +1241,13 @@ async function splitTask() {
     $("spCheck").innerHTML = bad ? `<span class="warn-text">${c.missing.length ? `Не распределены: ${c.missing.map(esc).join(", ")}. ` : ""}${c.twice.length ? `В двух частях: ${c.twice.map(esc).join(", ")}.` : ""}</span>`
       : `<span class="ok-text">✓ Каждый из ${all.length} объектов — ровно в одной части${c.extra.length ? ` (добавлено вручную: ${c.extra.length})` : ""}</span>`;
     $("dOk").disabled = !!bad || $("spRedo").disabled;
-    $("dTitle").textContent = `Разбить на ${groups.filter((g) => g.length).length} ${plural(groups.length, "часть", "части", "частей")}`;
-    budgetLine(groups.filter((g) => g.length).length);
+    const nOk = groups.filter((g) => g.length).length;
+    $("dTitle").textContent = `Разбить на ${nOk} ${plural(nOk, "часть", "части", "частей")}`;
+    budgetLine(nOk);
   };
   const pending = ask({ title: "", html, ok: "Запустить серию", wide: true });
   recheck();
-  $("dBody").addEventListener("input", (e) => { if (e.target.matches("[data-sp-objs]")) recheck(); });
+  $("dBody").oninput = (e) => { if (e.target.matches("[data-sp-objs]")) recheck(); };
   $("spRedo").onclick = async () => {
     const n = Number($("spN").value) || null;
     const principle = $("spPrinciple").value.trim();
@@ -1256,16 +1257,19 @@ async function splitTask() {
     $("spRedo").disabled = true; $("dOk").disabled = true;
     $("spRedoStatus").textContent = "Советник пересматривает разбиение…";
     try {
-      const x = await api("/api/split", { method: "POST", body: { question: p.question, request: p, objects: objs, parts: n, principle } });
+      const x = await api("/api/split", { method: "POST", body: { question: p.question, request: p, objects: objs, parts: n, principle,
+        facts: d.facts_per_object } });
+      if ($("dialog").hidden || !$("spParts")) return;  // окно закрыли, пока советник думал
       for (const o of x.objects) if (!all.includes(o)) all.push(o);
       d = x;
       $("spHead").innerHTML = headHtml(x);
       $("spParts").innerHTML = partsHtml(x);
       $("spRedoStatus").textContent = `Готово: ${x.parts.length} ${plural(x.parts.length, "часть", "части", "частей")}`;
-    } catch (e) { $("spRedoStatus").textContent = `Не получилось: ${e.message}`; }
-    finally { $("spRedo").disabled = false; recheck(); }
+    } catch (e) { if ($("spRedoStatus")) $("spRedoStatus").textContent = `Не получилось: ${e.message}`; }
+    finally { if ($("spRedo") && !$("dialog").hidden) { $("spRedo").disabled = false; recheck(); } }
   };
   const okGo = await pending;
+  $("dBody").oninput = null;
   $("dOk").disabled = false;
   if (!okGo) return;
   const groups = groupsNow();

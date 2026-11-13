@@ -387,3 +387,32 @@ def test_research_with_listed_objects_runs_and_reports_coverage():
     led = (res.research or {}).get("ledger") or {}
     assert c.retries >= 1  # авторов без фактов об объектах попросили добавить
     assert led.get("objects", {}).get("total") == 2
+
+
+def test_supplement_failure_keeps_the_paid_answer():
+    import json as _json
+    from council.client import OutOfCredits
+    from council.mock import MockClient
+
+    class Broke(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.sup = 0
+
+        async def complete(self, model, messages, **kw):
+            st = (kw.get("meta") or {}).get("stage")
+            if st == "proposal" and any("Your research answer was accepted" in str(m.get("content") or "") for m in messages):
+                self.sup += 1
+                raise OutOfCredits("402: кончились деньги")  # дозаявка не прошла — вариант принимается как есть
+            comp = await super().complete(model, messages, **kw)
+            if st == "framing":
+                d = _json.loads(comp.text)
+                d["objects"] = ["Alphacorp Foods", "Betamax Nutrition"]
+                comp.text = _json.dumps(d, ensure_ascii=False)
+            return comp
+
+    c = Broke()
+    cfg = make_cfg(mode="research", research={"catalog": True})
+    res = run(Council(cfg, c, seed=4).run("Проверь компании Alphacorp Foods и Betamax Nutrition"))
+    assert c.sup >= 1 and res.verdict is not None  # заседание дошло до итога: оплаченные варианты не потеряны
+    assert any("дозаявка не удалась" in f for s in res.stats.values() for f in s.failures)

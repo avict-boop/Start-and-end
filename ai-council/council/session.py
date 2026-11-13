@@ -549,9 +549,7 @@ class Council:
                 attempt += 1
                 continue
             except SupplementNeeded as e:  # ответ годен, не хватает части — короткая дозаявка, не переписывание
-                entry["error"] = f"дозаявка: {e}"
-                entry["finish_reason"] = comp.finish_reason
-                self._log(entry)
+                entry["note"] = f"принят с дозаявкой: {e.what or str(e)[:200]}"
                 log.info("%s%s · %s: ответ принят, дозаявка — %s", self._tag, name, stage, e.what or str(e)[:200])
                 self._call(name, stage, "retry", started, detail=f"ответ принят, прошу дописать {e.what or 'недостающее'}")
                 obj = e.obj
@@ -561,9 +559,9 @@ class Council:
                         list(base_messages) + [{"role": "user", "content": e.supplement_prompt}], meta, None,
                         web_search, call_n, min(max_tokens, 16000), web_fetch)
                     obj = e.merge(addon)
-                except OutOfCredits:
-                    raise
-                except (InvalidResponse, ProviderError) as e2:  # дозаявка не удалась — принимаем ответ как есть
+                except (InvalidResponse, ProviderError, BudgetExceeded) as e2:
+                    # дозаявка не удалась (в том числе кончились деньги или бюджет) — принимаем оплаченный ответ как
+                    # есть; если дело в деньгах, заседание встанет на паузу на следующем запросе, ответ уже сохранён
                     log.warning("%s%s · %s: дозаявка не удалась (%s) — ответ принят без неё", self._tag, name, stage, e2)
                     self.stats[name].failures.append(f"{stage}: дозаявка не удалась: {str(e2)[:200]}")
                 if check:

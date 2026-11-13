@@ -187,7 +187,7 @@ class SplitAsk(BaseModel):
     per_part: int | None = Field(default=None, ge=3, le=40)
     facts: int | None = Field(default=None, ge=1, le=5)
     # пересмотр разбиения: уже найденные объекты + сколько частей и/или по какому принципу
-    objects: list[str] | None = Field(default=None, max_length=200)
+    objects: list[str] | None = Field(default=None, max_length=300)
     parts: int | None = Field(default=None, ge=1, le=20)
     principle: str = Field(default="", max_length=1500)
 
