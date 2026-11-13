@@ -379,7 +379,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                   chair_proposes=req.chair_proposes,
                                   # в «Креативе» проверки фактов нет — не тратить на неё и не показывать её этап
                                   fact_check=False if req.mode == "creative" else req.fact_check,
-                                  compact=False if req.mode in ("research", "creative") else req.compact,
+                                  # «компактные варианты» — только там, где авторы пишут варианты сами
+                                  compact=False if req.mode in ("research", "creative", "evaluate") or req.clean_options
+                                  else req.compact,
                                   research_words=req.research_words if req.mode == "research" else None,
                                   research_shorten=req.research_shorten if req.mode == "research" else None,
                                   # «Свежие данные» на экране вопроса — явный список; «разведчики» по умолчанию

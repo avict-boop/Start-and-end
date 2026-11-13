@@ -685,3 +685,32 @@ def test_research_mode_in_bot(env):
     assert "🔬 известно" in result and "проверено" in result
     data = json.loads(next((tmp / "runs").glob("2*.json")).read_text())
     assert data["mode"] == "research" and data["research"]["ledger"]["claims"]
+
+
+@pytest.mark.parametrize("mode", ["debate", "quick", "creative", "research"])
+def test_every_mode_in_bot_with_fact_check_toggle(env, mode):
+    """Каждый режим в боте доходит до итога; «Проверка фактов» — только где она есть (не в «Креативе» и не в
+    «Исследовании», у которого свой арбитраж), «компактные варианты» не трогают исследование и креатив."""
+    bot, fake, tmp = env
+
+    async def scenario():
+        await bot.handle_update(msg("Как назвать кофейню у университета?"))
+        bot.settings[CHAT].fact_check = True
+        bot.settings[CHAT].compact = True
+        card_id = bot.pending[CHAT].card_id
+        await bot.handle_update(press("view:opts", card_id))
+        await bot.handle_update(press(f"mode:{mode}", card_id))
+        assert bot.settings[CHAT].mode == mode
+        await bot.handle_update(press("go", card_id))
+        await finish(bot)
+
+    asyncio.run(scenario())
+    data = json.loads(next((tmp / "runs").glob("2*.json")).read_text())
+    assert data["mode"] == mode and data["verdict"]["final_answer"]
+    fc_calls = (data["stats"].get("факт-чек") or {}).get("calls", 0)
+    if mode == "creative":
+        assert fc_calls == 0  # в «Креативе» проверки фактов нет, даже если галочка включена
+    if mode in ("debate", "quick"):
+        assert fc_calls > 0  # включена — работает
+    if mode in ("research", "creative"):
+        assert not data["request"].get("compact_proposals")

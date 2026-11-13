@@ -298,3 +298,22 @@ def test_history_is_split_by_mode():
     h = history([sess("research", "A")] * 4 + [sess("creative", "B")] * 3)
     assert h["m/kimi"]["by_mode"]["research"]["wins"] == 4 and h["m/kimi"]["by_mode"]["creative"]["wins"] == 0
     assert h["m/claude"]["by_mode"]["creative"]["win_rate"] == 1.0
+
+
+
+@pytest.mark.parametrize("mode", ["debate", "quick", "evaluate", "research", "creative"])
+def test_advice_for_every_mode_keeps_mode_and_runs(site, mode):
+    """Советник подбирает состав под выбранный режим (режим не меняет), и с этим составом заседание идёт."""
+    opts = ["Вариант один — кофейня", "Вариант два — киоск"] if mode == "evaluate" else None
+    r = site.post("/api/advise", json={"question": "Как назвать кофейню у университета?", "mode": mode, "mock": True,
+                                       **({"options": opts} if opts else {})})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    plan = body["plan"]
+    assert (body["advice"].get("mode") or mode) == mode and plan["chair"] in plan["members"]
+    s = site.post("/api/sessions", json={"question": "Как назвать кофейню у университета?", "mode": mode, "mock": True,
+                                         "members": plan["members"], "chair": plan["chair"], "models": plan["models"],
+                                         **({"options": opts} if opts else {}),
+                                         **({"research": plan["research"]} if mode == "research" and plan.get("research") else {})})
+    assert s.status_code == 200, s.text
+    assert read_events(site, s.json()["id"])[-1]["type"] == "done"

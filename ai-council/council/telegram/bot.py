@@ -354,15 +354,17 @@ class CouncilBot:
         return OpenRouterClient(os.environ["OPENROUTER_API_KEY"], timeout=cfg.timeout_s, max_retries=cfg.max_retries,
                             max_tokens_cap=cfg.max_tokens_cap)
 
-    def build_config(self, s: ChatSettings) -> CouncilConfig:
+    def build_config(self, s: ChatSettings, mode: str | None = None) -> CouncilConfig:
+        """mode — режим этого заседания, если он не из настроек чата (/evaluate с вариантами — «выбор»)."""
         base = self.base_config()
+        mode = mode or s.mode
         members = s.members
         if members is not None:
             known = {m.name for m in base.members}
             members = [m for m in members if m in known]  # участника могли удалить из config.yaml
         return with_overrides(base, members=members, budget=s.budget,
-                              fact_check=False if s.mode == "creative" else s.fact_check,
-                              compact=False if s.mode in ("research", "creative") else s.compact)
+                              fact_check=False if mode == "creative" else s.fact_check,
+                              compact=False if mode in ("research", "creative", "evaluate") else s.compact)
 
     async def send(self, chat_id: int, text: str, **kw: Any) -> dict[str, Any] | None:
         """Отправка длинного HTML с разбиением; при ошибке разметки — простым текстом."""
@@ -772,7 +774,7 @@ class CouncilBot:
             lines += ["", f"📎 <b>Вложения ({len(p.attachments)}):</b> " + ", ".join(esc(a.name) for a in p.attachments)]
         problem = None
         try:
-            cfg = self.build_config(s)
+            cfg = self.build_config(s, mode)
         except OverrideError as e:
             cfg, problem = None, str(e)
         lines.append("")
@@ -1022,7 +1024,7 @@ class CouncilBot:
             return
         s = self.chat_settings(chat_id)
         try:
-            cfg = self.build_config(s)
+            cfg = self.build_config(s, "evaluate" if p.options else s.mode)
         except OverrideError as e:
             await self.send(chat_id, f"⚠️ {esc(e)}")
             return
