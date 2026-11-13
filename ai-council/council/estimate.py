@@ -201,11 +201,17 @@ def estimate(
         sees = vision.get(member.model) is not False
         att = doc_tokens + (images * IMAGE_TOKENS if sees else images * 350)  # «незрячим» — описание текстом
         rounds_seen = 0
+        searched = 0  # поиск у автора: каждый шаг поиска заново отправляет запрос — вход растёт в разы
         for stage, n in plan[member.name]:
             me.calls += 1
             inp, outp = call_tokens(stage, n, att if stage in ATTACHMENT_STAGES else 0, rounds_seen)
             if stage == "critique":
                 rounds_seen += 1
+            if member.web_search and (stage == "proposal" or (stage == "revision" and (
+                    mode != "research" or cfg.research.revision_search))):
+                uses = 10 if cfg.search_unlimited else cfg.search_uses
+                inp = int(inp * (1 + uses / 2) + uses * cfg.search_results * 700)  # ≈700 токенов на результат
+                searched += uses * cfg.search_results
             me.prompt_tokens += inp
             me.completion_tokens += outp  # длинные ответы продолжаются, поэтому лимит длины их не обрезает
         if member.name == describer:
@@ -214,7 +220,8 @@ def estimate(
             me.completion_tokens += 400 * images
         price = pricing.get(member.model)
         me.cost = (
-            me.prompt_tokens * price.prompt + me.completion_tokens * price.completion if price else None
+            me.prompt_tokens * price.prompt + me.completion_tokens * price.completion + searched * 0.004
+            if price else None
         )
         est.members.append(me)
     if FACT_CHECKER in plan:

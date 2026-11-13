@@ -929,3 +929,6 @@ details[open] > summary .params-edit { visibility: hidden; }
 
 .fresh-pick { margin-top: .45rem; display: flex; flex-wrap: wrap; gap: .35rem; }
 .chip-tg:disabled { opacity: .45; cursor: not-allowed; }
+
+.switch-row { display: flex; align-items: center; gap: .5rem; font-size: .9rem; margin: .2rem 0 .4rem; cursor: pointer; }
+.switch-row input { width: 18px; height: 18px; min-height: 0; }

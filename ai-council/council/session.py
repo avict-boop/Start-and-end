@@ -455,6 +455,9 @@ class Council:
                         extra: dict[str, Any] = ({"web_search": True, "web_tools": self.cfg.web_tools,
                                                   "search_engine": self.cfg.search_engine,
                                                   "search_uses": self.cfg.search_uses,
+                                                  # председатель при итоге читает всё заседание — его поиск с пределом
+                                                  "search_unlimited": self.cfg.search_unlimited
+                                                  and stage in ("proposal", "revision"),
                                                   "search_results": self.cfg.search_results} if web_search else {})
                         if web_fetch:
                             extra["web_fetch"] = web_fetch
@@ -649,8 +652,10 @@ class Council:
             out = limit * self.cfg.reserve_output_share
         # с поиском модель получает весь запрос заново на каждом шаге поиска (вход растёт в разы), а сам поиск
         # оплачивается по числу результатов (Exa ≈ $0,004 за результат)
-        steps = 1 + self.cfg.search_uses / 2 if web else 1
-        search = (max(self.SEARCH_RESERVE_USD, 0.004 * self.cfg.search_uses * self.cfg.search_results) if web else 0.0)
+        unlimited = self.cfg.search_unlimited and stage in ("proposal", "revision")  # авторы; не итог и не проверка
+        uses = 10 if unlimited else self.cfg.search_uses  # без ограничения — резерв как на 10 поисков
+        steps = 1 + uses / 2 if web else 1
+        search = (max(self.SEARCH_RESERVE_USD, 0.004 * uses * self.cfg.search_results) if web else 0.0)
         return (chars / self.CHARS_PER_TOKEN * price.prompt * steps + out * price.completion + price.request
                 + search + fetch)
 

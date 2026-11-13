@@ -291,6 +291,7 @@ class OpenRouterClient:
         search_engine: str = "exa",
         search_uses: int = SEARCH_USES,
         search_results: int = 5,
+        search_unlimited: bool = False,
     ) -> Completion:
         """Запрос к модели с потоковой передачей ответа.
 
@@ -326,7 +327,8 @@ class OpenRouterClient:
         if web_search and not model.startswith("perplexity/"):  # у Perplexity поиск встроенный
             if web_tools and model not in _NO_FEATURE["tools"]:
                 uses, per = max(1, int(search_uses)), max(1, int(search_results))
-                params: dict[str, Any] = {"max_results": per, "max_uses": uses, "max_total_results": per * uses}
+                params: dict[str, Any] = ({"max_results": per} if search_unlimited  # сколько сочтёт нужным
+                                          else {"max_results": per, "max_uses": uses, "max_total_results": per * uses})
                 if search_engine and search_engine != "auto":
                     params["engine"] = search_engine
                 tools.append({"type": "openrouter:web_search", "parameters": params})
@@ -352,9 +354,10 @@ class OpenRouterClient:
         call_start = time.monotonic()
         while attempt < self.max_retries + 1:
             attempt += 1
-            if attempt > 1 and time.monotonic() - call_start > self.timeout * 5:
+            total_cap = self.timeout * (10 if payload.get("tools") else 5)  # с поиском — до ~30 минут
+            if attempt > 1 and time.monotonic() - call_start > total_cap:
                 # все попытки вместе — не дольше ~15 минут: медленный провайдер не держит весь совет
-                last_error = f"{last_error}; на все попытки ушло больше {int(self.timeout * 5 / 60)} мин"
+                last_error = f"{last_error}; на все попытки ушло больше {int(total_cap / 60)} мин"
                 break
             if attempt > 1 or credit_waits:  # о каждом повторе сообщаем, даже если ждать не нужно
                 report({"phase": "retry", "attempt": attempt, "wait": round(wait, 1), "detail": last_error})
@@ -497,7 +500,8 @@ class OpenRouterClient:
                     return self._from_json(data, model)
                 # с поиском и чтением страниц модель надолго замолкает: идут поиск и чтение найденного (12.11
                 # gemini с поиском обрывался на всех 4 попытках) — там действуют только общие пределы времени
-                return await self._from_stream(resp, model, report, started, stall=not payload.get("tools"))
+                return await self._from_stream(resp, model, report, started, stall=not payload.get("tools"),
+                                               cap=self.timeout * (6 if payload.get("tools") else 3))
         except httpx.TransportError as e:
             raise _Retryable(f"сетевая ошибка: {e.__class__.__name__}") from e
 
@@ -523,7 +527,7 @@ class OpenRouterClient:
         }
 
     async def _from_stream(self, resp: httpx.Response, model: str, report: ProgressFn,
-                           started: float, stall: bool = True) -> dict[str, Any]:
+                           started: float, stall: bool = True, cap: float = 0) -> dict[str, Any]:
         text: list[str] = []
         chars = reasoning_chars = 0
         finish = None
@@ -538,8 +542,9 @@ class OpenRouterClient:
         seen = 0
         async for line in resp.aiter_lines():
             now = time.monotonic()
-            if now - started > self.timeout * 3:
-                raise _Retryable(f"ответ идёт слишком долго (более {int(self.timeout * 3)} с)")
+            # одна попытка: обычно до 9 минут, с поиском — до 18 (много поисков и чтение страниц)
+            if now - started > (cap or self.timeout * 3):
+                raise _Retryable(f"ответ идёт слишком долго (более {int(cap or self.timeout * 3)} с)")
             if chars + reasoning_chars > seen:
                 seen, moved = chars + reasoning_chars, now
             elif stall and seen and now - moved > STALL_S:

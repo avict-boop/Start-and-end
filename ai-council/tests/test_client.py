@@ -419,3 +419,15 @@ def test_silence_before_first_output_is_not_a_stall(monkeypatch):
     c.stream = True
     comp = asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=10))
     assert comp.text == "ok" and len(calls) == 1
+
+
+def test_unlimited_search_has_no_use_cap():
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=ok_body())
+
+    c = make(handler)
+    asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=10, web_search=True, search_unlimited=True))
+    assert seen[0]["tools"][0]["parameters"] == {"max_results": 5, "engine": "exa"}

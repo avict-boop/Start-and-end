@@ -743,3 +743,30 @@ def test_search_requests_are_not_cut_for_silence(monkeypatch):
     c.stream = True
     comp = aio.run(c.complete("x/y", [], temperature=0, max_tokens=10, web_search=True))
     assert comp.text == "ok"
+
+
+def test_unlimited_search_only_for_authors_and_estimate_grows():
+    from council.estimate import estimate, Price
+    from council.mock import MockClient
+
+    class Spy(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.seen = []
+
+        async def complete(self, model, messages, **kw):
+            self.seen.append(((kw.get("meta") or {}).get("stage"), kw.get("search_unlimited")))
+            return await super().complete(model, messages, **kw)
+
+    members = [{"name": n, "model": f"m/{n}", "web_search": True} for n in "abcd"]
+    cfg = make_cfg(members=members, search_unlimited=True, chair_proposes=False)
+    c = Spy()
+    run(Council(cfg, c, seed=1).run("Вопрос?"))
+    assert any(u for st, u in c.seen if st == "proposal")
+    assert not any(u for st, u in c.seen if st == "verdict")  # председатель — с ограничением
+    pricing = {f"m/{n}": Price(prompt=1e-6, completion=2e-6) for n in "abcd"}
+    lim = estimate(make_cfg(members=members, chair_proposes=False), pricing, mode="debate", rounds=1).low
+    unl = estimate(cfg, pricing, mode="debate", rounds=1).low
+    plain = estimate(make_cfg(chair_proposes=False), {f"m/{n}": Price(prompt=1e-6, completion=2e-6) for n in "abcd"},
+                     mode="debate", rounds=1).low
+    assert plain < lim < unl
