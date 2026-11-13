@@ -431,3 +431,21 @@ def test_unlimited_search_has_no_use_cap():
     c = make(handler)
     asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=10, web_search=True, search_unlimited=True))
     assert seen[0]["tools"][0]["parameters"] == {"max_results": 5, "engine": "exa"}
+
+
+def test_streaming_passes_reasoning_text_for_live_view():
+    events = []
+
+    def handler(req):
+        return sse(
+            {"model": "x/y", "choices": [{"delta": {"reasoning": "хм, "}}]},
+            {"choices": [{"delta": {"reasoning_details": [{"type": "reasoning.summary", "summary": "сравниваю варианты"}]}}]},
+            {"choices": [{"delta": {"reasoning_details": [{"type": "reasoning.encrypted", "data": "xx"}]}}]},
+            {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]},
+        )
+
+    c = OpenRouterClient("k", transport=httpx.MockTransport(handler), retry_base_delay=0)
+    comp = asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100, on_progress=events.append))
+    said = "".join(e.get("thought") or "" for e in events)
+    assert said == "хм, сравниваю варианты" and any(e.get("thought_hidden") for e in events)
+    assert "хм" not in comp.text  # рассуждение — не ответ

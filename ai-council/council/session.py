@@ -203,6 +203,8 @@ class Council:
         self.inherited: list[tuple[int, dict[str, Any]]] = []
         # можно ли председателю разбить большое задание на серию (не у частей серии и не у сводного отчёта)
         self.allow_split = False
+        # куда отдавать текст рассуждений, пока модель думает (сайт показывает его вживую; не сохраняется)
+        self.thought_sink: Callable[[str, str, str, bool], None] | None = None
         # объекты, заданные программой (часть серии — только свои, сводка — все); иначе их находит постановка задачи
         self.fixed_objects: list[str] = []  # текст страниц, скачанных программой (ссылки авторов) — по адресу
         self._replaying = False
@@ -430,6 +432,13 @@ class Council:
 
         def progress(ev: dict[str, Any]) -> None:
             ev = dict(ev)
+            # текст рассуждения — только для показа вживую: в события (их пишут на диск) он не попадает
+            th, th_hidden = ev.pop("thought", ""), ev.pop("thought_hidden", False)
+            if self.thought_sink is not None and (th or th_hidden):
+                try:
+                    self.thought_sink(name, stage, th, bool(th_hidden))
+                except Exception:  # noqa: BLE001 — показ мыслей не должен мешать заседанию
+                    pass
             phase = ev.pop("phase", "")
             if phase == "sent" and ev.get("attempt", 1) > 1:
                 ev["detail"] = f"попытка {ev['attempt']}"

@@ -28,7 +28,11 @@ class MockClient:
         # имитация: модель сначала «думает», потом «пишет» ответ порциями
         think = self.delay * (0.5 + _h(model, str(meta.get("stage"))) % 100 / 100)
         report({"phase": "thinking", "chars": 0})
-        await asyncio.sleep(think)
+        demo = [f"(демо) Читаю задание этапа «{meta.get('stage')}»… ", "Сравниваю с критериями и требованиями. ",
+                "Взвешиваю, что важнее для ответа, и проверяю, ничего ли не упустил. "]
+        for i, t in enumerate(demo):
+            await asyncio.sleep(think / len(demo))
+            report({"phase": "thinking", "chars": 0, "reasoning_chars": sum(len(x) for x in demo[:i + 1]), "thought": t})
         for i in range(1, 4):
             await asyncio.sleep(self.delay / 3)
             report({"phase": "writing", "chars": 180 * i})

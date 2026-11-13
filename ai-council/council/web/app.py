@@ -216,8 +216,23 @@ class RunState:
         self.council: Any = None  # идущее заседание — чтобы поднять бюджет на ходу
         self.checkpoint: Checkpoint | None = None
         self._changed = asyncio.Event()
+        # «Мысли моделей — вживую»: последние THOUGHT_KEEP знаков рассуждения каждой модели, пока она думает.
+        # Только в памяти: не в событиях, не на диске, не в отчётах; модель ответила — её рассуждение удаляется.
+        self.thoughts: dict[str, dict[str, Any]] = {}
+
+    THOUGHT_KEEP = 8000
+
+    def add_thought(self, member: str, stage: str, text: str, hidden: bool) -> None:
+        t = self.thoughts.get(member)
+        if t is None or t["stage"] != stage:
+            t = self.thoughts[member] = {"stage": stage, "text": "", "chars": 0, "hidden": False}
+        t["text"] = (t["text"] + text)[-self.THOUGHT_KEEP:]
+        t["chars"] += len(text)
+        t["hidden"] = t["hidden"] or hidden
 
     def push(self, event: dict[str, Any]) -> None:
+        if event.get("type") == "call" and event.get("phase") in ("done", "failed"):
+            self.thoughts.pop(str(event.get("member")), None)  # ответ готов — рассуждение больше не держим
         self.events.append(stamp(event))
         self._changed.set()
         self._changed = asyncio.Event()
@@ -225,6 +240,7 @@ class RunState:
     def finish(self, status: str) -> None:
         """Отметить заседание завершённым и разбудить тех, кто ждёт событий."""
         self.status = status
+        self.thoughts.clear()
         self._changed.set()
         self._changed = asyncio.Event()
 
@@ -848,6 +864,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                       stage_out=stage_out, session_id=sid, shared_dir=runs_dir(cfg) / "notes",
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     st.council = council
+                    council.thought_sink = st.add_thought
                     council.allow_split = bool(sp.get("allow_split")) and not (sp.get("request") or {}).get("series")
                     # часть серии: свои объекты; сводка: реестры частей (общее с ботом — council/series.apply_spec)
                     await asyncio.to_thread(SR.apply_spec, council, sp, archive())
@@ -1463,6 +1480,16 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 live.append(row)
         return {"items": sorted(live + items, key=lambda x: x["id"], reverse=True),
                 "formats": available_formats(), "total": len(items) + len(live)}
+
+    @app.get("/api/sessions/{sid}/thoughts")
+    async def session_thoughts(sid: str, member: str = "") -> dict[str, Any]:
+        """Рассуждения моделей, которые думают прямо сейчас (последние несколько тысяч знаков). Только вживую:
+        после ответа модели и после заседания здесь пусто — рассуждения нигде не сохраняются."""
+        st = runs.get(sid)
+        if st is None or st.status != "running":
+            return {"running": False, "items": {}}
+        items = {m: dict(t) for m, t in st.thoughts.items() if not member or m == member}
+        return {"running": True, "items": items}
 
     @app.get("/api/sessions/{sid}/events")
     async def stream(sid: str, request: Request) -> StreamingResponse:

@@ -390,6 +390,14 @@
         <div class="progress" aria-hidden="true"><i id="stageBar"></i></div>
         <div id="fundsHint" class="alert warn small" role="status" hidden></div>
         <ol id="timeline" class="steps"></ol>
+        <details id="thoughtsBox" class="thoughts" hidden>
+          <summary><b>Мысли моделей — вживую</b> <span class="muted small">что модель думает прямо сейчас</span></summary>
+          <div id="thoughtChips" class="chips thought-chips" role="group" aria-label="Чьи мысли показать"></div>
+          <pre id="thoughtText" class="thought-text" tabindex="0" aria-live="off"></pre>
+          <p class="muted small">Видно только пока модель думает — после её ответа и после заседания рассуждения не хранятся
+            (ни в архиве, ни в отчётах). Не все модели их показывают: часть провайдеров отдаёт только пересказ или скрывает
+            их совсем. Это черновик модели, а не её ответ.</p>
+        </details>
         <div id="activity" class="activity" hidden>
           <ul id="workers" class="workers" hidden></ul>
           <div id="stallHint" class="alert warn small" hidden></div>

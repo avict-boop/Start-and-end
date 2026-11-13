@@ -534,3 +534,30 @@ def test_series_summary_is_never_duplicated(client):
     client.post(f"/api/series/{v['id']}/continue")
     v2 = _wait_series(client, v["id"])
     assert v2["summary"]["session_id"] == sid and v2["status"] == "done"
+
+
+def test_live_thoughts_are_shown_but_never_saved(client, tmp_path):
+    import json as _json
+    import time as _t
+    r = client.post("/api/sessions", json={"question": "Каков рынок кофеен у вузов?", "mode": "quick", "mock": True,
+                                           "members": ["a", "b", "c"], "chair": "a"})
+    sid = r.json()["id"]
+    ev = read_events(client, sid)
+    assert any(e["type"] == "done" for e in ev)
+    # в событиях заседания (они сохраняются) текста рассуждений нет — только объём
+    assert not any("thought" in e for e in ev) and not any("(демо) Читаю" in _json.dumps(e, ensure_ascii=False) for e in ev)
+    assert client.get(f"/api/sessions/{sid}/thoughts").json() == {"running": False, "items": {}}
+    for p in tmp_runs(client).rglob("*"):
+        if p.is_file() and p.suffix in (".json", ".jsonl", ".md", ".txt"):
+            assert "(демо) Читаю" not in p.read_text(encoding="utf-8", errors="ignore"), p
+
+
+def test_run_state_keeps_only_tail_of_current_thought():
+    from council.web.app import RunState
+    st = RunState("x", "q")
+    st.add_thought("a", "proposal", "я" * 9000, False)
+    assert len(st.thoughts["a"]["text"]) == RunState.THOUGHT_KEEP and st.thoughts["a"]["chars"] == 9000
+    st.add_thought("a", "critique", "новый этап", False)  # новый этап — новое рассуждение
+    assert st.thoughts["a"]["text"] == "новый этап"
+    st.push({"type": "call", "member": "a", "stage": "critique", "phase": "done"})
+    assert "a" not in st.thoughts  # модель ответила — рассуждение удалено

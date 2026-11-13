@@ -526,6 +526,21 @@ class OpenRouterClient:
             "id": str(data.get("id") or ""),
         }
 
+    @staticmethod
+    def _thought(delta: dict[str, Any]) -> tuple[str, bool]:
+        """Кусок рассуждения из потока: текст (или пересказ) и признак «рассуждения скрыты» (зашифрованы)."""
+        text = delta.get("reasoning") or ""
+        hidden = False
+        for d in delta.get("reasoning_details") or []:
+            if not isinstance(d, dict):
+                continue
+            kind = str(d.get("type") or "")
+            if "encrypted" in kind:
+                hidden = True
+            elif not text:
+                text += str(d.get("text") or d.get("summary") or "")
+        return (text if isinstance(text, str) else ""), hidden
+
     async def _from_stream(self, resp: httpx.Response, model: str, report: ProgressFn,
                            started: float, stall: bool = True, cap: float = 0) -> dict[str, Any]:
         text: list[str] = []
@@ -537,6 +552,8 @@ class OpenRouterClient:
         cites: list[str] = []
         last_report = 0.0
         phase = "thinking"
+        thought: list[str] = []  # рассуждение с прошлого отчёта — только для показа вживую, не сохраняется
+        hidden = False
         report({"phase": "thinking", "chars": 0})
         moved = time.monotonic()  # когда в последний раз пришёл новый текст или рассуждения
         seen = 0
@@ -575,18 +592,24 @@ class OpenRouterClient:
                 delta = choice.get("delta") or {}
                 cites += _citations({}, delta)
                 piece = _as_text(delta.get("content"))
-                thought = delta.get("reasoning") or ""
+                th, enc = self._thought(delta)
+                hidden = hidden or enc
                 if piece:
                     text.append(piece)
                     chars += len(piece)
-                reasoning_chars += len(thought)
+                if th:
+                    thought.append(th)
+                reasoning_chars += len(th)
                 finish = choice.get("finish_reason") or choice.get("native_finish_reason") or finish
             now = time.monotonic()
             new_phase = "writing" if chars else "thinking"
             if new_phase != phase or now - last_report >= 0.5:
                 phase, last_report = new_phase, now
-                report({"phase": phase, "chars": chars, "reasoning_chars": reasoning_chars})
-        report({"phase": phase, "chars": chars, "reasoning_chars": reasoning_chars})  # итог потока
+                report({"phase": phase, "chars": chars, "reasoning_chars": reasoning_chars,
+                        "thought": "".join(thought), "thought_hidden": hidden})
+                thought = []
+        report({"phase": phase, "chars": chars, "reasoning_chars": reasoning_chars,  # итог потока
+                "thought": "".join(thought), "thought_hidden": hidden})
         return {
             "citations": list(dict.fromkeys(cites)),
             "text": "".join(text),

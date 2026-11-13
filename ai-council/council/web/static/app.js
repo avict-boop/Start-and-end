@@ -2034,6 +2034,8 @@ function renderActivity(s) {
     conn.textContent = connOk ? "связь есть" : `нет связи ${age} с — переподключаюсь…`;
   }
 
+  renderThoughts(s);
+
   // журнал (новые сверху)
   $("logCount").textContent = `${s.log.length} ${plural(s.log.length, "событие", "события", "событий")}${s.done ? ` · ${fmtSec(s.done.duration_s ?? 0)} · ${money(s.cost)}` : ""} ·`;
   if ($("logSec").open && $("log").dataset.n !== String(s.log.length)) {
@@ -2043,6 +2045,62 @@ function renderActivity(s) {
   }
 }
 $("logSec").addEventListener("toggle", () => { if ($("logSec").open && current) { $("log").dataset.n = ""; renderActivity(current); } });
+
+/* ------------------------------------------------------------ мысли моделей — вживую (не сохраняются) */
+
+let thoughtTimer = null;
+function thinkingNow(s) {
+  // кто сейчас в работе на текущем этапе: отправлен запрос, думает, пишет
+  return Object.entries(s.calls || {}).filter(([, c]) => c.stage === s.stage && ["sent", "thinking", "writing", "checking"].includes(c.phase))
+    .map(([n]) => n);
+}
+function renderThoughts(s) {
+  const box = $("thoughtsBox");
+  const finished = !!(s.done || s.error || s.paused);
+  const who = finished ? [] : thinkingNow(s);
+  box.hidden = finished || (!who.length && !box.open);
+  if (box.hidden) { stopThoughts(); return; }
+  if (!who.includes(s.thoughtSel)) s.thoughtSel = who[0] || s.thoughtSel || "";
+  const key = who.join("|") + "#" + s.thoughtSel;
+  if ($("thoughtChips").dataset.key !== key) {
+    $("thoughtChips").dataset.key = key;
+    $("thoughtChips").innerHTML = who.length ? who.map((n) => `<button type="button" class="chip-tg${n === s.thoughtSel ? " on" : ""}" data-thought="${esc(n)}" aria-pressed="${n === s.thoughtSel}">${esc(n)}</button>`).join("")
+      : `<span class="muted small">Сейчас никто не думает — следующий этап начнётся сам.</span>`;
+  }
+  if (box.open && !thoughtTimer) { pollThoughts(); thoughtTimer = setInterval(pollThoughts, 1500); }
+  if (!box.open) stopThoughts();
+}
+function stopThoughts() { if (thoughtTimer) { clearInterval(thoughtTimer); thoughtTimer = null; } }
+async function pollThoughts() {
+  const s = current;
+  if (!s || view !== "session" || !$("thoughtsBox").open) { stopThoughts(); return; }
+  const sel = s.thoughtSel;
+  let d;
+  try { d = await api(`/api/sessions/${encodeURIComponent(s.id)}/thoughts?member=${encodeURIComponent(sel || "")}`); } catch { return; }
+  if (current !== s || s.thoughtSel !== sel) return;
+  const pre = $("thoughtText");
+  const t = (d.items || {})[sel];
+  const c = (s.calls || {})[sel] || {};
+  let text;
+  if (!d.running) text = "Заседание не идёт — рассуждения показываются только вживую.";
+  else if (!sel) text = "Сейчас никто не думает.";
+  else if (t && t.text) text = (t.chars > t.text.length ? "…" : "") + t.text;
+  else if (t && t.hidden) text = `${sel} не показывает свои рассуждения — провайдер их скрывает. Видно только объём: ≈${approxTokens(c.rchars || 0)} ток.`;
+  else if (c.phase === "writing") text = `${sel} уже пишет ответ${c.rchars ? "" : " — рассуждений модель не прислала"}.`;
+  else if (c.rchars) text = `${sel} рассуждает (≈${approxTokens(c.rchars)} ток.), но текст рассуждения провайдер не отдаёт.`;
+  else text = `${sel} ещё ничего не прислал(а). Некоторые модели (часто GPT и Grok) рассуждения не показывают — тогда здесь будет пусто до ответа.`;
+  const atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 40;  // читает сверху — не дёргаем прокрутку
+  if (pre.textContent !== text) { pre.textContent = text; if (atEnd) pre.scrollTop = pre.scrollHeight; }
+}
+$("thoughtsBox").addEventListener("toggle", () => { if (current) renderThoughts(current); });
+$("thoughtChips").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-thought]");
+  if (!b || !current) return;
+  current.thoughtSel = b.dataset.thought;
+  $("thoughtText").textContent = "";
+  renderThoughts(current);
+  pollThoughts();
+});
 
 const IDEA_BADGE = { included: ["ok", "Включена"], rejected: ["bad", "Отклонена"], not_addressed: ["plain", "Не рассмотрена"] };
 // согласие моделей — не подтверждение фактов: нейтральная метка, основания вывода — отдельной

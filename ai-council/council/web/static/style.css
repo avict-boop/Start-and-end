@@ -980,3 +980,10 @@ details[open] > summary .params-edit { visibility: hidden; }
   font-weight: 800; display: grid; place-items: center; }
 .busy-foot { display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin-top: .8rem; flex-wrap: wrap; }
 @media (prefers-reduced-motion: reduce) { .busy-spin, .busy-steps li.now::before { animation: none !important; border-top-color: var(--accent); } }
+
+/* мысли моделей — вживую */
+.thoughts { margin-top: .8rem; border: 1px solid var(--line); border-radius: 12px; padding: .5rem .8rem; background: var(--surface-2); }
+.thoughts summary { cursor: pointer; min-height: 36px; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.thought-chips { margin: .5rem 0; }
+.thought-text { white-space: pre-wrap; overflow-wrap: anywhere; font: .88rem/1.5 var(--font, inherit); max-height: 18rem; overflow: auto;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: .6rem .7rem; margin: 0 0 .4rem; color: var(--text); }
