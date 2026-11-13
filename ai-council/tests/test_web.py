@@ -366,3 +366,32 @@ def test_page_can_reopen_stream_after_last_event(client):
     with client.stream("GET", f"/api/sessions/{sid}/events?after=0:{len(events) - 2}") as r2:
         tail = [json.loads(l[6:]) for l in r2.iter_lines() if l.startswith("data: ")]
     assert [e["type"] for e in tail] == ["done"]
+
+
+def test_series_runs_parts_in_parallel_then_council_summary(client):
+    import time as _t
+    task = "Проверь компании: Alphacorp Foods, Betamax Nutrition, Gammaline Labs, Deltaform Pharma"
+    parts = [{"title": "Пакет A", "question": task + "\n\nЧасть 1: Alphacorp Foods, Betamax Nutrition",
+              "objects": ["Alphacorp Foods", "Betamax Nutrition"]},
+             {"title": "Пакет B", "question": task + "\n\nЧасть 2: Gammaline Labs", "objects": ["Gammaline Labs"]},
+             {"title": "Пакет C", "question": task + "\n\nЧасть 3: Deltaform Pharma", "objects": ["Deltaform Pharma"]}]
+    r = client.post("/api/series", json={"title": "Проверка компаний", "task": task, "parts": parts,
+                                          "request": {"mode": "research", "mock": True, "members": ["a", "b", "c"],
+                                                      "chair": "a"}, "max_parallel": 2, "auto_summary": True})
+    assert r.status_code == 200, r.text
+    sid = r.json()["id"]
+    v = None
+    for _ in range(240):
+        v = client.get(f"/api/series/{sid}").json()
+        if v["status"] == "done":
+            break
+        _t.sleep(0.25)
+    assert v["status"] == "done", v
+    assert v["done"] == 3 and len({p["session_id"] for p in v["parts"]}) == 3  # номера частей не совпали
+    import json as _json
+    summ = _json.loads((tmp_runs(client) / f"{v['summary']['session_id']}.json").read_text(encoding="utf-8"))
+    assert summ["mode"] == "research" and summ["request"]["series"]["summary"] is True
+    led = (summ.get("research") or {}).get("ledger") or {}
+    assert led.get("inherited_parts") == [1, 2, 3] and any(c["id"].startswith("P2-") for c in led["claims"])
+    assert client.get("/api/sessions").json()["items"][0].get("series")  # части и сводка помечены серией
+    assert any(x["id"] == sid for x in client.get("/api/series").json()["items"])

@@ -1424,6 +1424,36 @@ def ledger_digest(ledger: dict[str, Any] | None) -> str:
     return "\n".join(out)
 
 
+def merge_inherited(ledger: dict[str, Any] | None, parts: list[tuple[int, dict[str, Any]]]) -> dict[str, Any]:
+    """Сводное заседание серии: реестры частей — в общий реестр со своими статусами и ссылками. Номера получают
+    приставку части (P2-A-C1, P2-E5), чтобы не совпасть; статусы не меняются — неподтверждённое в части не становится
+    подтверждённым в сводке. Повторный вызов ничего не добавляет."""
+    out = dict(ledger or {})
+    out.setdefault("claims", [])
+    out.setdefault("evidence", [])
+    out["claims"] = list(out["claims"])
+    out["evidence"] = list(out["evidence"])
+    done = set(out.get("inherited_parts") or [])
+    for n, part in parts:
+        if n in done or not part:
+            continue
+        pre = f"P{n}-"
+        for e in part.get("evidence") or []:
+            out["evidence"].append({**e, "id": pre + str(e.get("id", "")), "part": n,
+                                    "claims": [pre + str(x) for x in e.get("claims") or []]})
+        for c in part.get("claims") or []:
+            row = {**c, "id": pre + str(c.get("id", "")), "part": n, "inherited": True,
+                   "evidence": [pre + str(x) for x in c.get("evidence") or []]}
+            if c.get("duplicate_of"):
+                row["duplicate_of"] = pre + str(c["duplicate_of"])
+            if c.get("derived_from"):
+                row["derived_from"] = pre + str(c["derived_from"])
+            out["claims"].append(row)
+        done.add(n)
+    out["inherited_parts"] = sorted(done)
+    return out
+
+
 def confirmed_ids(ledger: dict[str, Any] | None) -> set[str]:
     """Id источников, на которые можно опереться в «известно»: из подтверждённых утверждений."""
     out: set[str] = set()

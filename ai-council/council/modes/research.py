@@ -188,6 +188,9 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
         elif deferred:
             ledger = make_ledger(sess, R, [], [], rc, deferred)
     await check_links(sess, R, ledger, rc)
+    if sess.inherited:  # сводное заседание серии: проверенное в частях — в общий реестр (ссылки уже проверены там)
+        ledger = R.merge_inherited(ledger, sess.inherited)
+        sess._emit("ledger", ledger=ledger)
     ledger_txt = R.ledger_text(ledger)
 
     # 4. Доработка по реестру и выжимкам чужих вариантов
@@ -234,6 +237,8 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
             deferred = deferred + new_def
             ledger = make_ledger(sess, R, selected, results, rc, deferred)
             await check_links(sess, R, ledger, rc)
+            if sess.inherited:
+                ledger = R.merge_inherited(ledger, sess.inherited)
             sess._emit("ledger", ledger=ledger)
             ledger_txt = R.ledger_text(ledger)
 

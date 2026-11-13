@@ -195,7 +195,9 @@ class Council:
         self._requests_done = 0
         self._fresh_stage = ""   # первый этап, где ответ пришлось получать от модели (не из журнала)
         self.link_checker = link_checker  # проверка ссылок реестра (в демо и тестах — нет)
-        self.page_cache: dict[str, str] = {}  # текст страниц, скачанных программой (ссылки авторов) — по адресу
+        self.page_cache: dict[str, str] = {}
+        # сводное заседание серии: реестры частей [(номер части, реестр)] — входят в общий реестр как проверенные
+        self.inherited: list[tuple[int, dict[str, Any]]] = []  # текст страниц, скачанных программой (ссылки авторов) — по адресу
         self._replaying = False
         self.forced_labels = dict(labels or {})
         self._seen: dict[tuple[str, str], int] = {}  # (этап, участник) -> сколько обращений уже было

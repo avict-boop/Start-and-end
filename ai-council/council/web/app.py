@@ -164,6 +164,21 @@ class RunRequest(BaseModel):
         return c or None
 
 
+class SeriesPart(BaseModel):
+    title: str = ""
+    question: str = Field(min_length=3)
+    objects: list[str] = Field(default_factory=list)
+
+
+class SeriesRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    task: str = ""
+    parts: list[SeriesPart] = Field(min_length=1, max_length=20)
+    request: dict[str, Any] = Field(default_factory=dict)  # настройки запуска, как у одного заседания
+    max_parallel: int = Field(default=2, ge=1, le=5)
+    auto_summary: bool = True
+
+
 class BudgetRequest(BaseModel):
     budget: float = Field(gt=0, le=1000)
 
@@ -677,13 +692,22 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             "warning": warning,
         }
 
+    create_lock = asyncio.Lock()  # части серии создаются одновременно с похожими вопросами — номера не должны совпасть
+
     @app.post("/api/sessions")
     async def start_session(req: RunRequest) -> dict[str, Any]:
+        return {"id": await create_session(req)}
+
+    async def create_session(req: RunRequest, *, extra_atts: list | None = None,
+                             request_extra: dict[str, Any] | None = None,
+                             spec_extra: dict[str, Any] | None = None) -> str:
+        """Новое заседание по запросу страницы, серии или сводного отчёта; возвращает его номер."""
         cfg = build_config(req)
         opts = req.clean_options
         if req.mode == "evaluate" and (not opts or len(opts) < 2):
             raise HTTPException(400, "для оценки нужно минимум 2 варианта")
         atts = await asyncio.to_thread(load_uploads, req.attachments) if req.attachments else []
+        atts += list(extra_atts or [])
         history: list[dict[str, Any]] = []
         parent_title = ""
         if req.parent:
@@ -696,6 +720,13 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         att_warnings = limit_total(atts)
         vision = vision_map(cfg, None if req.mock else await catalog.get())
         client = make_client(cfg, req.mock)
+        async with create_lock:
+            return await _create_locked(req, cfg, opts, atts, history, parent_title, vision, client,
+                                        request_extra or {}, spec_extra or {}, att_warnings)
+
+    async def _create_locked(req: RunRequest, cfg: CouncilConfig, opts: list[str] | None, atts: list,
+                             history: list[dict[str, Any]], parent_title: str, vision: dict[str, Any], client: Any,
+                             request_extra: dict[str, Any], spec_extra: dict[str, Any], att_warnings: list[str]) -> str:
         sid = make_stem(req.question)
         while sid in runs or (runs_dir(cfg) / f"{sid}.json").exists() or Checkpoint.load(runs_dir(cfg), sid):
             sid += "-1"
@@ -711,16 +742,16 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                        "research_overrides": req.research or {}} if mode == "research" else {}),
                    "models": {m.name: m.model for m in cfg.active_members},
                    "extra_members": req.extra_members or [],
-                   "web_search": [m.name for m in cfg.active_members if m.web_search]}
+                   "web_search": [m.name for m in cfg.active_members if m.web_search], **request_extra}
         # «паспорт» заседания на диске: если оно прервётся, его можно будет продолжить без потери оплаченного
         cp = await asyncio.to_thread(
             Checkpoint.create, runs_dir(cfg), sid, cfg=cfg, question=req.question, mode=req.mode, rounds=rounds,
             criteria=req.clean_criteria, options=opts, context=req.context or None, attachments=atts,
             history=history, followup_of=req.parent or "", vision=vision, request=request, origin="web",
             mock=req.mock, extra={"uploads": req.attachments, "parent_title": parent_title,
-                                  "att_warnings": att_warnings})
+                                  "att_warnings": att_warnings, **spec_extra})
         launch(cp, client)
-        return {"id": sid}
+        return sid
 
     os.environ.setdefault("COUNCIL_REPORTS_MEM_MB", str(base_config().reports_memory_mb))
 
@@ -792,6 +823,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                       stage_out=stage_out, session_id=sid, shared_dir=runs_dir(cfg) / "notes",
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     st.council = council
+                    if sp.get("inherit"):  # сводный отчёт серии: проверенное в частях
+                        council.inherited = await asyncio.to_thread(load_inherited, sp["inherit"])
                     if journal.replayable or journal.loose:
                         st.push({"type": "resumed", "replayable": journal.replayable or len(journal.loose),
                                  "spent": round(journal.spent, 4)})
@@ -873,6 +906,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     @app.post("/api/sessions/{sid}/resume")
     async def resume(sid: str, body: ResumeRequest | None = None) -> dict[str, Any]:
         """Продолжить приостановленное заседание: уже полученные ответы берутся из журнала, без повторной оплаты."""
+        return await resume_session(sid, body.budget if body and body.budget else None)
+
+    async def resume_session(sid: str, budget_in: float | None = None) -> dict[str, Any]:
         st = runs.get(sid)
         if st is not None and st.status == "running":
             raise HTTPException(409, "заседание уже идёт")
@@ -882,7 +918,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             raise HTTPException(404, "заседание не найдено или уже завершено")
         if await asyncio.to_thread(cp.is_live):
             raise HTTPException(409, "это заседание сейчас идёт в другом процессе (например, в Telegram-боте)")
-        budget = body.budget if body and body.budget else None
+        budget = budget_in
         spent = float(cp.spec.get("spent") or 0) or await asyncio.to_thread(lambda: Journal(cp.journal_path).spent)
         if budget:
             cp.set_budget(budget)
@@ -893,6 +929,215 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         cp.update(resumes=int(cp.spec.get("resumes") or 0) + 1)
         launch(cp, client)
         return {"id": sid}
+
+    # ------------------------------------------------------------ серия заседаний (council/series.py)
+    from .. import series as SR
+    series_tasks: dict[str, asyncio.Task] = {}
+
+    def load_inherited(items: list[Any]) -> list[tuple[int, dict[str, Any]]]:
+        out = []
+        for n, sid in items:
+            try:
+                d = archive().load(sid)
+            except (KeyError, OSError, ValueError):
+                continue
+            led = (d.get("research") or {}).get("ledger") or {}
+            if led:
+                out.append((int(n), led))
+        return out
+
+    def part_state(sid: str) -> dict[str, Any]:
+        """Что с заседанием части сейчас: ждёт / идёт / готово / на паузе — по самому заседанию."""
+        if not sid:
+            return {"status": "queued", "cost": 0.0}
+        st = runs.get(sid)
+        if st is not None and st.status == "running":
+            c = st.council.total_cost if getattr(st, "council", None) else 0.0
+            return {"status": "running", "cost": round(c, 4)}
+        s = archive().summary(sid) if archive().exists(sid) else None
+        if s:
+            return {"status": "done", "cost": s.get("cost") or 0.0, "winner_title": s.get("winner_title", "")}
+        cp = Checkpoint.load(runs_dir(base_config()), sid)
+        if cp is not None:
+            info = cp.summary()
+            return {"status": info["status"], "reason": info.get("reason_text", ""), "cost": info.get("spent") or 0.0}
+        return {"status": "missing", "cost": 0.0}
+
+    def series_view(s: dict[str, Any]) -> dict[str, Any]:
+        parts = [{**{k: p[k] for k in ("n", "title", "session_id")}, "objects": len(p.get("objects") or []),
+                  **part_state(p["session_id"])} for p in s["parts"]]
+        summ = {"session_id": s.get("summary_id", ""), **part_state(s.get("summary_id", ""))} if s.get("summary_id") else None
+        done = sum(1 for p in parts if p["status"] == "done")
+        status = ("summary" if summ and summ["status"] != "done" else "done" if summ and summ["status"] == "done"
+                  else "running" if s["id"] in series_tasks and not series_tasks[s["id"]].done()
+                  else "ready" if done == len(parts) else "stopped")
+        return {"id": s["id"], "title": s["title"], "created": s["created"], "max_parallel": s["max_parallel"],
+                "auto_summary": s["auto_summary"], "origin": s.get("origin", ""), "parts": parts, "summary": summ,
+                "done": done, "total": len(parts), "status": status,
+                "cost": round(sum(p["cost"] or 0 for p in parts) + ((summ or {}).get("cost") or 0), 4),
+                "mode": (s.get("request") or {}).get("mode", "research")}
+
+    async def run_series(series_id: str) -> None:
+        """Части — не больше max_parallel одновременно; готовые пропускаются, приостановленные продолжаются.
+        Все готовы и включена сводка — совет сводит их в один отчёт."""
+        rd = runs_dir(base_config())
+        s = SR.load(rd, series_id)
+        if not s:
+            return
+        sem = asyncio.Semaphore(s["max_parallel"])
+        log.info("серия %s: старт (%d частей, одновременно до %d)", series_id, len(s["parts"]), s["max_parallel"])
+
+        async def one(n: int) -> None:
+            async with sem:
+                cur = SR.load(rd, series_id) or s
+                p = next(x for x in cur["parts"] if x["n"] == n)
+                sid = p["session_id"]
+                if sid and archive().exists(sid):
+                    return
+                if sid and sid in runs and runs[sid].status == "running":
+                    pass
+                elif sid and Checkpoint.load(rd, sid):
+                    try:
+                        await resume_session(sid)
+                    except HTTPException as e:
+                        log.warning("серия %s, часть %d: не продолжилась: %s", series_id, n, e.detail)
+                        return
+                else:
+                    req = RunRequest(**{**cur["request"], "question": p["question"]})
+                    sid = await create_session(req, request_extra={"series": {
+                        "id": series_id, "part": n, "total": len(cur["parts"]), "title": cur["title"]}})
+                    fresh = SR.load(rd, series_id) or cur
+                    for x in fresh["parts"]:
+                        if x["n"] == n:
+                            x["session_id"] = sid
+                    SR.save(rd, fresh)
+                st = runs.get(sid)
+                if st is not None and st.task is not None:
+                    try:
+                        await asyncio.shield(st.task)
+                    except BaseException:  # noqa: BLE001 — пауза или сбой части не останавливает остальные
+                        pass
+
+        await asyncio.gather(*(one(p["n"]) for p in s["parts"]), return_exceptions=True)
+        s = SR.load(rd, series_id) or s
+        v = series_view(s)
+        log.info("серия %s: части готовы %d из %d", series_id, v["done"], v["total"])
+        if s["auto_summary"] and not s.get("summary_id") and v["done"] == v["total"]:
+            try:
+                await start_summary(series_id)
+            except HTTPException as e:
+                log.warning("серия %s: сводный отчёт не запустился: %s", series_id, e.detail)
+
+    def kick_series(series_id: str) -> None:
+        t = series_tasks.get(series_id)
+        if t is None or t.done():
+            series_tasks[series_id] = asyncio.create_task(run_series(series_id))
+
+    SUMMARY_TASK = """Сводный отчёт серии «{title}». Задание ниже проверялось по частям ({n} заседаний с одинаковыми
+настройками); итоги частей и их реестры проверенных утверждений приложены (файлы «chast-N.md»), а проверенные в
+частях утверждения уже стоят в общем реестре с номерами P1-…, P2-… и своими статусами.
+
+Собери ОДИН отчёт по всему заданию в его формате:
+- охвати все объекты всех частей — ни один не пропусти;
+- общий ранг и приоритеты выстрой заново по всем объектам сразу: ранги частей считались внутри своей части и
+  напрямую не сравнимы;
+- статусы фактов переноси как есть: что не подтверждено в части, не становится подтверждённым в сводке;
+- отметь противоречия между частями (одна компания — разные цифры) и не выбирай число произвольно;
+- новых объектов не добавляй.
+
+Объекты всех частей ({count}):
+{objects}
+
+## Исходное задание
+{task}"""
+
+    def part_doc(n: int, title: str, objects: list[str], d: dict[str, Any]) -> str:
+        v = d.get("verdict") or {}
+        led = (d.get("research") or {}).get("ledger") or {}
+        ev = {e.get("id"): e.get("url", "") for e in led.get("evidence") or []}
+        rows = []
+        for c in led.get("claims") or []:
+            if c.get("duplicate_of"):
+                continue
+            urls = " ".join(ev.get(e, "") for e in c.get("evidence") or [] if ev.get(e))
+            rows.append(f"| P{n}-{c.get('id')} | {c.get('status')} | {str(c.get('text', '')).replace('|', '/')} | {urls} |")
+        oc = led.get("objects") or {}
+        return (f"# Часть {n} серии: {title}\n\nОбъекты части ({len(objects)}): " + "; ".join(objects)
+                + (f"\n\nОхват части: проверены {oc.get('checked')} из {oc.get('total')}; не проверены: "
+                   + ", ".join(oc.get("missing") or []) if oc.get("total") else "")
+                + "\n\n## Итог части\n\n" + str(v.get("final_answer") or "")
+                + "\n\n## Реестр проверенных утверждений части\n\n| № | статус | утверждение | источники |\n|---|---|---|---|\n"
+                + "\n".join(rows) + "\n")
+
+    async def start_summary(series_id: str) -> str:
+        """Сводный отчёт серии: совет (обычное исследование) по итогам частей и общему реестру."""
+        from ..attachments import load_attachment
+        rd = runs_dir(base_config())
+        s = SR.load(rd, series_id)
+        if not s:
+            raise HTTPException(404, "серия не найдена")
+        done = [(p, p["session_id"]) for p in s["parts"] if p["session_id"] and archive().exists(p["session_id"])]
+        if not done:
+            raise HTTPException(400, "нет ни одной готовой части")
+        atts, objects = [], []
+        for p, sid in done:
+            d = await asyncio.to_thread(archive().load, sid)
+            objects += [o for o in p.get("objects") or [] if o not in objects]
+            atts.append(load_attachment(part_doc(p["n"], p["title"], p.get("objects") or [], d).encode("utf-8"),
+                                        f"chast-{p['n']}.md"))
+        question = SUMMARY_TASK.format(title=s["title"], n=len(done), count=len(objects),
+                                       objects="\n".join(f"- {o}" for o in objects) or "—", task=s.get("task") or "")
+        base_rs = dict((s["request"] or {}).get("research") or {})
+        rs = {**base_rs, "catalog": False, "facts_per_object": 1, "arbitration_claims": 10,
+              "max_claims": max(int(base_rs.get("max_claims") or 8), min(80, len(objects) + 3))}
+        req = RunRequest(**{**s["request"], "question": question, "mode": "research", "research": rs,
+                            "research_words": 0, "web_search": []})
+        sid = await create_session(req, extra_atts=atts, spec_extra={"inherit": [[p["n"], x] for p, x in done]},
+                                   request_extra={"series": {"id": series_id, "summary": True, "title": s["title"],
+                                                             "total": len(s["parts"])}})
+        s = SR.load(rd, series_id) or s
+        s["summary_id"] = sid
+        SR.save(rd, s)
+        log.info("серия %s: сводный отчёт %s (частей %d, объектов %d)", series_id, sid, len(done), len(objects))
+        return sid
+
+    @app.post("/api/series")
+    async def series_create(body: SeriesRequest) -> dict[str, Any]:
+        req0 = {k: v for k, v in body.request.items() if k not in ("question", "parent")}
+        RunRequest(**{**req0, "question": body.parts[0].question})  # те же проверки настроек, что у заседания
+        s = await asyncio.to_thread(SR.create, runs_dir(base_config()), title=body.title, task=body.task,
+                                    parts=[p.model_dump() for p in body.parts], request=req0,
+                                    max_parallel=body.max_parallel, auto_summary=body.auto_summary, origin="web")
+        kick_series(s["id"])
+        return {"id": s["id"]}
+
+    @app.get("/api/series")
+    async def series_list() -> dict[str, Any]:
+        items = await asyncio.to_thread(SR.all_series, runs_dir(base_config()))
+        return {"items": [series_view(s) for s in items]}
+
+    @app.get("/api/series/{series_id}")
+    async def series_get(series_id: str) -> dict[str, Any]:
+        s = await asyncio.to_thread(SR.load, runs_dir(base_config()), series_id)
+        if not s:
+            raise HTTPException(404, "серия не найдена")
+        return series_view(s)
+
+    @app.post("/api/series/{series_id}/continue")
+    async def series_continue(series_id: str) -> dict[str, Any]:
+        if not SR.load(runs_dir(base_config()), series_id):
+            raise HTTPException(404, "серия не найдена")
+        kick_series(series_id)
+        return {"ok": True}
+
+    @app.post("/api/series/{series_id}/summary")
+    async def series_summary(series_id: str) -> dict[str, Any]:
+        s = SR.load(runs_dir(base_config()), series_id)
+        if not s:
+            raise HTTPException(404, "серия не найдена")
+        if s.get("summary_id") and part_state(s["summary_id"])["status"] in ("running", "done"):
+            raise HTTPException(409, "сводный отчёт уже есть")
+        return {"id": await start_summary(series_id)}
 
     @app.post("/api/search-test")
     async def search_test(body: SearchTest | None = None) -> dict[str, Any]:

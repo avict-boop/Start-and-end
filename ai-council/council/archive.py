@@ -141,6 +141,7 @@ class Archive:
                 "members": v.members, "proposals": len(v.proposals), "status": "done",
                 "attachments": len(v.attachments),
                 "followup_of": v.d.get("followup_of", ""),
+                "series": (v.d.get("request") or {}).get("series") or None,
             }
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
             log.warning("не удалось прочитать %s: %s", p.name, e)
