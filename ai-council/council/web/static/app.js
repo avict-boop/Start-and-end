@@ -1136,7 +1136,8 @@ async function renderSeries(id) {
   $("serTitle").textContent = v.title;
   $("serMeta").textContent = [MODE_NAME[v.mode] || v.mode, `${v.total} ${plural(v.total, "часть", "части", "частей")}`,
     `одновременно до ${v.max_parallel}`, v.origin && v.origin.startsWith("split:") ? "разбил председатель" : ""].filter(Boolean).join(" · ");
-  $("serStatus").textContent = `${SERIES_STATUS[v.status] || v.status} · готово частей ${v.done} из ${v.total} · потрачено ${money(v.cost)}`;
+  $("serStatus").textContent = `${SERIES_STATUS[v.status] || v.status} · готово частей ${v.done} из ${v.total} · потрачено ${money(v.cost)}`
+    + (v.waiting ? ` · ${v.waiting}` : "");
   const rows = v.parts.map((p) => `<tr>
       <td>${p.n}</td>
       <td>${p.session_id ? `<a href="#/s/${encodeURIComponent(p.session_id)}">${esc(p.title)}</a>` : esc(p.title)}
@@ -1193,39 +1194,77 @@ async function splitTask() {
   try { d = await api("/api/split", { method: "POST", body: { question: p.question, request: p } }); }
   catch (e) { showFormError(e.message); return; }
   finally { btn.disabled = false; btn.classList.remove("busy"); }
-  const notes = (d.notes || []).map((x) => `<li>${esc(x)}</li>`).join("");
-  const added = (d.checks.audit_added || []);
-  const head = `<p>${esc(d.reason)}</p>
-    <p class="muted small">Объектов в задании: <b>${d.objects.length}</b> · фактов на объект: ${d.facts_per_object} · разбирал: ${esc(d.model)}</p>
-    ${added.length ? `<p class="warnbox">Вторая проверка нашла пропущенные объекты и добавила их: ${added.map(esc).join(", ")}</p>` : ""}
-    ${notes ? `<ul class="muted small">${notes}</ul>` : ""}`;
   if (!d.need_split) {
-    await ask({ title: "Делить не нужно", html: head + "<p>Задание помещается в одно заседание — запускайте как обычно.</p>", ok: "Понятно", cancel: null });
+    const notes = (d.notes || []).map((x) => `<li>${esc(x)}</li>`).join("");
+    await ask({ title: "Делить не нужно", html: `<p>${esc(d.reason)}</p>${notes ? `<ul class="muted small">${notes}</ul>` : ""}
+      <p>Задание помещается в одно заседание — запускайте как обычно.</p>`, ok: "Понятно", cancel: null });
     return;
   }
-  const parts = d.parts.map((x, i) => `<fieldset class="split-part"><legend>Часть ${i + 1}</legend>
-      <label class="field"><span class="label">Название</span><input type="text" data-sp-title value="${esc(x.title)}"></label>
-      <label class="field"><span class="label">Объекты — по одному в строке</span><textarea data-sp-objs rows="${Math.min(10, x.objects.length + 1)}">${esc(x.objects.join("\n"))}</textarea></label>
+  const all = [...d.objects];  // объекты задания — эталон для проверки «каждый ровно в одной части»
+  const added = d.checks.audit_added || [];
+  const headHtml = (x) => `<p>${esc(x.reason)}</p>
+    <p class="muted small">Объектов в задании: <b>${all.length}</b> · фактов на объект: ${x.facts_per_object} · разбирал: ${esc(x.model)}</p>
+    ${added.length ? `<p class="warnbox">Вторая проверка нашла пропущенные объекты и добавила их: ${added.map(esc).join(", ")}</p>` : ""}
+    ${(x.notes || []).length ? `<ul class="muted small">${x.notes.map((n) => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}`;
+  const partsHtml = (x) => x.parts.map((pt, i) => `<fieldset class="split-part"><legend>Часть ${i + 1}</legend>
+      <label class="field"><span class="label">Название</span><input type="text" data-sp-title value="${esc(pt.title)}"></label>
+      <label class="field"><span class="label">Объекты — по одному в строке (${pt.objects.length})</span><textarea data-sp-objs rows="${Math.min(10, pt.objects.length + 1)}">${esc(pt.objects.join("\n"))}</textarea></label>
     </fieldset>`).join("");
-  const html = head + `<p>Каждая часть получит <b>полное задание без сокращений</b> и рамку «в этой части — только эти объекты»; части идут с текущими настройками, «Каталог» включается сам (проверок — по числу объектов × фактов). Объекты можно переносить между частями.</p>
+  const html = `<div id="spHead">${headHtml(d)}</div>
+    <p>Каждая часть получит <b>полное задание без сокращений</b> и рамку «в этой части — только эти объекты»; части идут с текущими настройками, «Каталог» включается сам (проверок — по числу объектов × фактов). Объекты можно переносить между частями.</p>
+    <details class="split-revise" id="spRevise">
+      <summary><b>Пересмотреть разбиение</b> — другое число частей или свой принцип</summary>
+      <div class="split-revise-body">
+        <label class="field"><span class="label">Частей</span>
+          <input id="spN" type="number" min="2" max="${Math.min(20, all.length)}" value="${d.parts.length}" inputmode="numeric">
+          <small class="hint">больше частей — меньше объектов в каждой: глубже проверка, но дороже (каждая часть — своё заседание)</small></label>
+        <label class="field"><span class="label">Принцип разбиения <em>(необязательно)</em></span>
+          <textarea id="spPrinciple" rows="2" maxlength="1500" placeholder="Например: по провинциям; производители отдельно от дистрибьюторов; сначала крупные компании; по формам выпуска"></textarea></label>
+        <button type="button" class="btn" id="spRedo">Разбить заново</button>
+        <span id="spRedoStatus" class="muted small" aria-live="polite"></span>
+      </div>
+    </details>
     <div id="spCheck" class="small" aria-live="polite"></div>
-    ${parts}
+    <div id="spParts">${partsHtml(d)}</div>
     <div class="split-opts">
-      <label class="field"><span class="label">Одновременно идут</span><select id="spPar"><option value="1">1 часть</option><option value="2" selected>2 части</option><option value="3">3 части</option></select></label>
+      <label class="field"><span class="label">Одновременно идут</span><select id="spPar"><option value="1">1 часть</option><option value="2" selected>2 части</option><option value="3">3 части</option></select>
+        <small class="hint">при небольшом балансе программа сама пустит части по одной</small></label>
       <label class="switch"><input id="spSum" type="checkbox" checked><span class="sw" aria-hidden="true"></span><span><b>Сводный отчёт советом</b><small>Когда все части готовы, совет сводит их в один отчёт.</small></span></label>
     </div>
-    <p class="muted small">Бюджет — на каждую часть (сейчас $${esc(String(p.budget || ""))}); за серию до $${esc(String(Math.round((Number(p.budget) || 0) * (d.parts.length + 1) * 100) / 100))} с учётом сводки.</p>`;
+    <p class="muted small" id="spBudget"></p>`;
   const groupsNow = () => [...$("dBody").querySelectorAll("[data-sp-objs]")].map((t) => t.value.split("\n").map((x) => x.trim()).filter(Boolean));
+  const budgetLine = (n) => { $("spBudget").textContent = `Бюджет — на каждую часть ($${p.budget || "—"}); за серию из ${n} ${plural(n, "части", "частей", "частей")} со сводкой — до $${Math.round((Number(p.budget) || 0) * (n + 1) * 100) / 100}.`; };
   const recheck = () => {
-    const c = _objCheck(d.objects, groupsNow());
+    const groups = groupsNow();
+    const c = _objCheck(all, groups);
     const bad = c.missing.length || c.twice.length;
     $("spCheck").innerHTML = bad ? `<span class="warn-text">${c.missing.length ? `Не распределены: ${c.missing.map(esc).join(", ")}. ` : ""}${c.twice.length ? `В двух частях: ${c.twice.map(esc).join(", ")}.` : ""}</span>`
-      : `<span class="ok-text">✓ Каждый из ${d.objects.length} объектов — ровно в одной части${c.extra.length ? ` (добавлено вручную: ${c.extra.length})` : ""}</span>`;
-    $("dOk").disabled = !!bad;
+      : `<span class="ok-text">✓ Каждый из ${all.length} объектов — ровно в одной части${c.extra.length ? ` (добавлено вручную: ${c.extra.length})` : ""}</span>`;
+    $("dOk").disabled = !!bad || $("spRedo").disabled;
+    $("dTitle").textContent = `Разбить на ${groups.filter((g) => g.length).length} ${plural(groups.length, "часть", "части", "частей")}`;
+    budgetLine(groups.filter((g) => g.length).length);
   };
-  const pending = ask({ title: `Разбить на ${d.parts.length} ${plural(d.parts.length, "часть", "части", "частей")}`, html, ok: "Запустить серию", wide: true });
+  const pending = ask({ title: "", html, ok: "Запустить серию", wide: true });
   recheck();
-  $("dBody").addEventListener("input", recheck);
+  $("dBody").addEventListener("input", (e) => { if (e.target.matches("[data-sp-objs]")) recheck(); });
+  $("spRedo").onclick = async () => {
+    const n = Number($("spN").value) || null;
+    const principle = $("spPrinciple").value.trim();
+    if (!principle && n === d.parts.length) { $("spRedoStatus").textContent = "Укажите другое число частей или принцип"; return; }
+    // объекты задания и добавленные вручную — модель только группирует их заново, ничего не теряя
+    const objs = [...new Set([...all, ...groupsNow().flat()])];
+    $("spRedo").disabled = true; $("dOk").disabled = true;
+    $("spRedoStatus").textContent = "Советник пересматривает разбиение…";
+    try {
+      const x = await api("/api/split", { method: "POST", body: { question: p.question, request: p, objects: objs, parts: n, principle } });
+      for (const o of x.objects) if (!all.includes(o)) all.push(o);
+      d = x;
+      $("spHead").innerHTML = headHtml(x);
+      $("spParts").innerHTML = partsHtml(x);
+      $("spRedoStatus").textContent = `Готово: ${x.parts.length} ${plural(x.parts.length, "часть", "части", "частей")}`;
+    } catch (e) { $("spRedoStatus").textContent = `Не получилось: ${e.message}`; }
+    finally { $("spRedo").disabled = false; recheck(); }
+  };
   const okGo = await pending;
   $("dOk").disabled = false;
   if (!okGo) return;
@@ -1912,6 +1951,17 @@ function renderActivity(s) {
     return `<li class="${cls}"${active ? ' aria-current="step"' : ""}><span class="num">${num}</span><div><div class="st-name">${esc(name)}</div>`
       + `${sub ? `<div class="st-sub">${esc(sub)}</div>` : ""}${active && rows.length ? `<ul class="workers">${rows.join("")}</ul>` : ""}</div></li>`;
   }).join("");
+
+  // OpenRouter держит баланс под идущие запросы: заседание не зависло — ждёт и повторяет само
+  const held = finished ? [] : Object.entries(s.calls).filter(([, c]) => c.phase === "retry" && /зарезервировал баланс/.test(c.detail || "")
+    && now - c.updated < ((c.wait || 30) + 60) * 1000).map(([n]) => n);
+  $("fundsHint").hidden = !held.length;
+  if (held.length) {
+    $("fundsHint").innerHTML = `<b>Ждём баланс OpenRouter — заседание не зависло.</b> На время каждого запроса OpenRouter откладывает
+      деньги под самый длинный ответ; сейчас отложено почти всё, поэтому ${esc(held.join(", "))} ${held.length > 1 ? "ждут" : "ждёт"} и
+      ${held.length > 1 ? "повторят" : "повторит"} сами, как только идущие запросы закончатся. Останавливать не нужно — ответы, которые
+      ещё в работе, при паузе пришлось бы запрашивать заново. Ускорить: пополнить баланс или запускать части серии по одной.`;
+  }
 
   // подсказка, если модель долго молчит
   const slow = finished ? [] : Object.entries(s.calls).filter(([n, c]) => c.stage === s.stage && ["sent", "thinking"].includes(c.phase)

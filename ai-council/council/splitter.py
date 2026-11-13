@@ -73,6 +73,48 @@ Reply with ONE JSON object:
   "groups": [{{"title": "...", "objects": ["..."]}}]}}"""
 
 
+def regroup_prompt(task: str, objects: list[str], n_parts: int | None, per_part: int, principle: str) -> str:
+    """Пересмотр разбиения по просьбе пользователя: объекты уже найдены — только сгруппировать заново."""
+    listed = "\n".join(f"- {o}" for o in objects)
+    size = (f"into EXACTLY {n_parts} parts (about {-(-len(objects) // n_parts)} objects each)" if n_parts
+            else f"into parts of about {per_part} objects")
+    rule = (f"\nThe user's grouping principle (follow it first, then balance the sizes):\n<<<\n{principle.strip()}\n>>>\n"
+            if principle.strip() else "\nGroup by meaning (category, product type, role in the task) so that each part "
+                                      "can be compared inside itself.\n")
+    return f"""You re-split a large research task into parts for an "AI council" app. Each part becomes a separate
+session that gets the whole task plus its own objects.
+
+Task (for context):
+<<<
+{task}
+>>>
+
+Objects (use EXACTLY these strings, every object in exactly one part, no new objects):
+{listed}
+
+Split them {size}.{rule}
+Give each part a short "title" in the task's language that names its principle (e.g. a province or a category).
+Reply with ONE JSON object: {{"reason": "one sentence: how you grouped", "groups": [{{"title": "...", "objects": ["..."]}}]}}"""
+
+
+def _parts_word(n: int) -> str:
+    return "часть" if n % 10 == 1 and n % 100 != 11 else "части" if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14) else "частей"
+
+
+def rebalance(groups: list[list[str]], n_parts: int) -> list[list[str]]:
+    """Модель сделала не столько частей, сколько просили: те же объекты в том же порядке (соседи по смыслу остаются
+    рядом) — ровно на n_parts частей."""
+    flat = [o for g in groups for o in g]
+    n = max(1, min(n_parts, len(flat)))
+    size, extra = divmod(len(flat), n)
+    out, i = [], 0
+    for k in range(n):
+        step = size + (1 if k < extra else 0)
+        out.append(flat[i:i + step])
+        i += step
+    return [g for g in out if g]
+
+
 def audit_prompt(task: str, objects: list[str]) -> str:
     listed = "\n".join(f"- {o}" for o in objects)
     return f"""Here is a task and the list of objects extracted from it. Which specific objects that the task GIVES to
@@ -141,6 +183,44 @@ def parse_json(text: str) -> dict[str, Any]:
         return extract_json(text)
     except ValueError:
         return {}
+
+
+async def replan(task: str, client: Any, model: str | None, objects: list[str], *, n_parts: int | None = None,
+                 principle: str = "", per_part: int = 8, facts: int = 3, base_checks: int = 20,
+                 base_claims: int = 8) -> dict[str, Any]:
+    """Пересмотр: объекты уже найдены (и проверены второй моделью) — заново только группировка: столько частей,
+    сколько попросил пользователь, и/или по его принципу. Полноту по-прежнему проверяет программа."""
+    notes: list[str] = []
+    objects = list(dict.fromkeys(o.strip() for o in objects if o and o.strip()))
+    if n_parts:
+        n_parts = max(1, min(n_parts, len(objects), 20))
+        per_part = -(-len(objects) // n_parts)
+    reason, raw, titles = "", [], []
+    if model and client is not None:
+        try:
+            comp = await client.complete(model, [{"role": "user", "content": regroup_prompt(task, objects, n_parts, per_part,
+                                                                                            principle)}],
+                                         temperature=0.2, max_tokens=12000, json_mode=True)
+            p = SplitPlan.model_validate(parse_json(comp.text))
+            raw, titles, reason = [g.objects for g in p.groups], [g.title for g in p.groups], p.reason
+        except Exception as e:  # noqa: BLE001
+            notes.append(f"модель не ответила ({type(e).__name__}) — части ровные по порядку")
+    elif principle.strip():
+        notes.append("демо-режим: принцип разбиения учитывает только настоящая модель — части ровные по порядку")
+    groups, fixes = fix_groups(objects, raw or SR.chunk(objects, per_part), per_part)
+    notes += fixes
+    if fixes:
+        titles = []
+    if n_parts and len(groups) != n_parts:
+        notes.append(f"модель сделала {len(groups)} частей вместо {n_parts} — части выровнены до {n_parts}, порядок "
+                     "объектов сохранён")
+        groups, titles = rebalance(groups, n_parts), []
+    parts = build_parts(task, groups, titles, facts, base_checks, base_claims)
+    return {"objects": objects, "facts_per_object": facts, "need_split": len(groups) > 1,
+            "reason": reason or (f"по просьбе: {len(groups)} {_parts_word(len(groups))}" + (f", принцип — {principle.strip()[:120]}"
+                                                                      if principle.strip() else "")),
+            "parts": parts, "notes": notes,
+            "checks": {**SR.check_split(objects, groups), "audit_added": []}, "revised": True}
 
 
 async def plan(task: str, client: Any, model: str | None, *, per_part: int = 8, facts: int = 3,

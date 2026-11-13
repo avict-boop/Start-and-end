@@ -186,6 +186,10 @@ class SplitAsk(BaseModel):
     request: dict[str, Any] = Field(default_factory=dict)
     per_part: int | None = Field(default=None, ge=3, le=40)
     facts: int | None = Field(default=None, ge=1, le=5)
+    # пересмотр разбиения: уже найденные объекты + сколько частей и/или по какому принципу
+    objects: list[str] | None = Field(default=None, max_length=200)
+    parts: int | None = Field(default=None, ge=1, le=20)
+    principle: str = Field(default="", max_length=1500)
 
 
 class BudgetRequest(BaseModel):
@@ -1060,7 +1064,24 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 "auto_summary": s["auto_summary"], "origin": s.get("origin", ""), "parts": parts, "summary": summ,
                 "done": done, "total": len(parts), "status": status,
                 "cost": round(sum(p["cost"] or 0 for p in parts) + ((summ or {}).get("cost") or 0), 4),
-                "mode": (s.get("request") or {}).get("mode", "research")}
+                "mode": (s.get("request") or {}).get("mode", "research"), "waiting": series_wait.get(s["id"], "")}
+
+    series_wait: dict[str, str] = {}  # серия → почему следующая часть ждёт (показывается на странице серии)
+
+    async def funds_left(mock: bool = False) -> float | None:
+        """Сколько можно потратить сейчас: меньшее из баланса и остатка недельного лимита ключа (None — неизвестно)."""
+        probe = getattr(app.state, "funds_probe", None)  # тесты подставляют свой «баланс»
+        if probe is not None:
+            return await probe()
+        if mock or not os.environ.get("OPENROUTER_API_KEY"):
+            return None
+        try:
+            b = await get_balance()
+        except Exception:  # noqa: BLE001 — не узнали баланс: части не держим
+            return None
+        vals = [b.get("balance")] + [((b.get("key_limit") or {}).get("remaining"))]
+        vals = [float(v) for v in vals if v is not None]
+        return min(vals) if vals else None
 
     async def run_series(series_id: str) -> None:
         """Части — не больше max_parallel одновременно; готовые пропускаются, приостановленные продолжаются.
@@ -1071,9 +1092,37 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             return
         sem = asyncio.Semaphore(s["max_parallel"])
         log.info("серия %s: старт (%d частей, одновременно до %d)", series_id, len(s["parts"]), s["max_parallel"])
+        active: set[int] = set()
+        part_budget = float((s.get("request") or {}).get("budget") or base_config().max_cost_usd)
+
+        mock = bool((s.get("request") or {}).get("mock"))
+
+        async def wait_funds(n: int) -> None:
+            """Денег меньше, чем лимиты идущих частей + этой, — ждём, пока идущие закончат (части по одной)."""
+            told = False
+            while active:
+                left = await funds_left(mock)
+                if left is None or left >= part_budget * (len(active) + 1):
+                    break
+                if not told:
+                    told = True
+                    series_wait[series_id] = (f"на балансе ${left:.2f} — меньше лимитов двух частей "
+                                              f"(${part_budget:g} каждая): части идут по одной")
+                    log.info("серия %s, часть %d: ждёт — %s", series_id, n, series_wait[series_id])
+                await asyncio.sleep(getattr(app.state, "funds_poll", 30))
+            series_wait.pop(series_id, None)
 
         async def one(n: int) -> None:
             async with sem:
+                await wait_funds(n)
+                active.add(n)
+                try:
+                    await one_part(n)
+                finally:
+                    active.discard(n)
+
+        async def one_part(n: int) -> None:
+            if True:  # тело — прежнее «async with sem:» (отступ сохранён)
                 cur = SR.load(rd, series_id) or s
                 p = next(x for x in cur["parts"] if x["n"] == n)
                 sid = p["session_id"]
@@ -1209,9 +1258,15 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         model = None if req.mock else (cfg.advisor.model or cfg.member(cfg.chair).model)
         rc = cfg.research
         try:
-            out = await SP.plan(body.question, client, model, per_part=body.per_part or rc.objects_per_part,
-                                facts=body.facts or rc.facts_per_object, base_checks=rc.arbitration_claims,
-                                base_claims=rc.max_claims)
+            if body.objects:  # пересмотр: объекты те же, группировка — по просьбе пользователя
+                out = await SP.replan(body.question, client, model, body.objects, n_parts=body.parts,
+                                      principle=body.principle, per_part=body.per_part or rc.objects_per_part,
+                                      facts=body.facts or rc.facts_per_object, base_checks=rc.arbitration_claims,
+                                      base_claims=rc.max_claims)
+            else:
+                out = await SP.plan(body.question, client, model, per_part=body.per_part or rc.objects_per_part,
+                                    facts=body.facts or rc.facts_per_object, base_checks=rc.arbitration_claims,
+                                    base_claims=rc.max_claims)
         finally:
             close = getattr(client, "aclose", None)
             if close:

@@ -955,3 +955,8 @@ details[open] > summary .params-edit { visibility: hidden; }
 .arc-status.done { background: var(--ok-soft); color: var(--ok); }
 .arc-status.paused, .arc-status.stopped, .arc-status.ready { background: var(--warn-soft); color: var(--warn); }
 .arc-status.queued, .arc-status.missing { background: var(--surface-2); color: var(--muted); }
+.split-revise { border: 1px dashed var(--line-strong); border-radius: 12px; padding: .5rem .8rem; margin: .6rem 0; }
+.split-revise summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; gap: .3rem; flex-wrap: wrap; }
+.split-revise-body { display: grid; gap: .5rem; margin-top: .5rem; }
+.split-revise-body .field { margin-bottom: 0; }
+.split-revise-body #spN { max-width: 8rem; }

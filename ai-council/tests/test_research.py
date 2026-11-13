@@ -341,8 +341,13 @@ def test_objects_of_the_request_are_matched_covered_and_checked_first():
 
     p = prop("Yuwang выпускает softgel для сторонних брендов", "威海百合 работает по OEM")
     assert R.missing_objects(p, objs) == [objs[2]]
-    with pytest.raises(ValueError, match="Qingyunshan"):
+    with pytest.raises(ValueError, match="Qingyunshan") as ei:
         R.check_objects(p, objs, 1, 10)
+    sup = ei.value  # дозаявка: ответ принят, просим только недостающие утверждения
+    assert "Qingyunshan" in sup.supplement_prompt and sup.obj is p
+    merged = sup.merge(R.ClaimsAddon(claims=[R.RClaim(text="Qingyunshan выпускает капсулы"),
+                                             R.RClaim(text="Yuwang выпускает softgel для сторонних брендов")]))
+    assert len(merged.claims) == 3 and R.missing_objects(merged, objs) == []  # повтор не задвоен
     assert R.check_objects(p, objs, 1, 1) is p  # объектов больше, чем утверждений — не требуем невозможного
     # на проверку сначала идут факты о каждом объекте, даже если их «важность» ниже
     a = R.number_claims("A", prop("Общий факт о рынке БАД 1", "Общий факт о рынке БАД 2", "Общий факт о рынке БАД 3",
@@ -365,8 +370,10 @@ def test_research_with_listed_objects_runs_and_reports_coverage():
 
         async def complete(self, model, messages, **kw):
             st = (kw.get("meta") or {}).get("stage")
-            if st == "proposal" and any("objects the request requires" in (m.get("content") or "") for m in messages):
+            if st == "proposal" and any("Your research answer was accepted" in str(m.get("content") or "") for m in messages):
                 self.retries += 1
+                # дозаявка: модели не пересылают её длинный ответ (нет сообщения assistant) — только список пропущенных
+                assert not any(m.get("role") == "assistant" for m in messages)
             comp = await super().complete(model, messages, **kw)
             if st == "framing":
                 d = _json.loads(comp.text)

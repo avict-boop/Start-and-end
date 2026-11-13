@@ -23,7 +23,7 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .prompts import FORMAT_RULE, KEEP_RULE, REQ_CHECK, REQ_VOTE, SCALE, _context, _criteria, _ideas_block, head
-from .schemas import Ballot, Framing, Proposal, Verdict, _pick, to_list, to_text
+from .schemas import Ballot, Framing, Proposal, SupplementNeeded, Verdict, _pick, to_list, to_text
 
 BASIS = ("user_doc", "calc", "memory", "search_reported")
 VOLATILITY = ("stable", "changes_fast", "unknown")
@@ -197,6 +197,17 @@ class ResearchProposal(Proposal):
             elif to_text(x).strip():
                 out.append(to_text(x))
         return out
+
+    @field_validator("claims", mode="before")
+    @classmethod
+    def _claims(cls, v: Any) -> Any:
+        return v if isinstance(v, list) else ([v] if v else [])
+
+
+class ClaimsAddon(BaseModel):
+    """Дозаявка: только новые утверждения (о пропущенных объектах задания)."""
+
+    claims: list[RClaim] = Field(default_factory=list)
 
     @field_validator("claims", mode="before")
     @classmethod
@@ -1030,12 +1041,25 @@ def check_objects(p: Any, objects: list[str], facts: int, max_claims: int) -> An
         return p
     miss = missing_objects(p, objects)
     if miss:
-        raise ValueError(
-            f'"claims" contain no facts about {len(miss)} of the {len(objects)} objects the request requires: '
-            + "; ".join(miss[:40]) + (" …" if len(miss) > 40 else "")
-            + f". Add {need} checkable claim(s) about EACH of them (one fact about one object per claim, with a direct "
-            f"link in source_leads), within the limit of {max_claims} claims — shorten other claims if needed. If "
-            "nothing could be found about an object, say so in the text. Reply with the full JSON again")
+        listed = "\n".join(f"- {o}" for o in miss)
+        msg = (f'"claims" contain no facts about {len(miss)} of the {len(objects)} objects the request requires: '
+               + "; ".join(miss[:40]) + (" …" if len(miss) > 40 else ""))
+        # дешевле, чем «перепиши весь вариант»: модель не получает назад свой длинный ответ и не пишет его заново —
+        # только недостающие утверждения; программа добавляет их к принятому варианту
+        prompt = (f"Your research answer was accepted, but its \"claims\" have no facts about these {len(miss)} objects "
+                  f"that the request requires:\n{listed}\n\nAdd {need} checkable claim(s) about EACH of them — one fact "
+                  "about one object per claim, the object's name in the claim text, a direct link in \"source_leads\", "
+                  "the same fields as your other claims (text, basis, scope, volatility, source_leads, why_it_matters, "
+                  "subquestions, checkability, check_path). If nothing could be found about an object, add one claim "
+                  "saying so (what was searched) with basis \"memory\". Reply with ONE JSON object containing ONLY the "
+                  'new claims: {"claims": [...]}')
+
+        def merge(addon: Any, p: Any = p) -> Any:
+            have = {c.text.strip() for c in p.claims}
+            new = [c for c in addon.claims if c.text.strip() and c.text.strip() not in have]
+            return p.model_copy(update={"claims": list(p.claims) + new})
+
+        raise SupplementNeeded(msg, p, prompt, ClaimsAddon, merge, what=f"факты о {len(miss)} пропущенных объектах")
     return p
 
 

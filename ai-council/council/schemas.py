@@ -446,3 +446,18 @@ class Verdict(BaseModel):
     @classmethod
     def _list(cls, v: Any) -> list[str]:
         return to_list(v)
+
+
+
+class SupplementNeeded(ValueError):
+    """Ответ годен, но в нём не хватает части (например, фактов о некоторых объектах задания). Вместо того чтобы
+    пересылать модели весь её ответ и просить переписать его заново, сессия задаёт короткую дозаявку
+    (supplement_prompt → schema) и добавляет ответ к принятому (merge)."""
+
+    def __init__(self, message: str, obj: Any, supplement_prompt: str, schema: type, merge: Any, what: str = ""):
+        super().__init__(message)
+        self.obj = obj
+        self.supplement_prompt = supplement_prompt
+        self.schema = schema
+        self.merge = merge
+        self.what = what

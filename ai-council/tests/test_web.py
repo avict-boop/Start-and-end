@@ -480,3 +480,41 @@ def test_estimate_warns_about_series_and_followup_never_splits(client):
                                            "members": ["a", "b", "c"], "chair": "a", "parent": base})
     ev = read_events(client, r.json()["id"])
     assert not any(x["type"] == "split_series" for x in ev) and any(x["type"] == "done" for x in ev)
+
+
+def test_series_runs_parts_one_by_one_when_funds_are_short(client):
+    calls = []
+
+    async def probe():
+        calls.append(1)
+        return 5.0  # меньше, чем лимиты двух частей по $10
+
+    client.app.state.funds_probe = probe
+    client.app.state.funds_poll = 0.05
+    objs = [f"Company{i:02d} Foods Ltd" for i in range(1, 9)]
+    r = client.post("/api/series", json={
+        "title": "Мало денег", "task": _catalog_question(8),
+        "parts": [{"title": "A", "objects": objs[:4]}, {"title": "B", "objects": objs[4:]}],
+        "request": {"mode": "research", "mock": True, "members": ["a", "b", "c"], "chair": "a", "budget": 10},
+        "max_parallel": 2, "auto_summary": False})
+    sid = r.json()["id"]
+    v = None
+    import time as _t
+    for _ in range(400):
+        v = client.get(f"/api/series/{sid}").json()
+        if v["done"] == 2:
+            break
+        if v["parts"][1]["status"] == "queued" and v["parts"][0]["status"] == "running":
+            assert "по одной" in v["waiting"]  # страница серии объясняет, почему вторая часть ждёт
+        _t.sleep(0.1)
+    assert v["done"] == 2 and calls  # вторая часть ждала, пока первая закончит
+
+
+def test_split_can_be_revised_with_more_parts(client):
+    q = _catalog_question(22)
+    d = client.post("/api/split", json={"question": q, "request": {"mode": "research", "mock": True}}).json()
+    r = client.post("/api/split", json={"question": q, "request": {"mode": "research", "mock": True},
+                                         "objects": d["objects"], "parts": 5, "principle": "по провинциям"})
+    assert r.status_code == 200, r.text
+    x = r.json()
+    assert len(x["parts"]) == 5 and x["checks"]["ok"] and sum(len(p["objects"]) for p in x["parts"]) == 22

@@ -34,3 +34,37 @@ def test_plan_small_or_no_list_does_not_split():
     task = "| 1 | Alpha Co |\n| 2 | Beta Co |"
     d = asyncio.run(SP.plan(task, None, None, per_part=8))
     assert not d["need_split"] and d["parts"][0]["objects"] == ["Alpha Co", "Beta Co"]
+
+
+class _Fake:
+    def __init__(self, text):
+        self.text, self.prompts = text, []
+
+    async def complete(self, model, messages, **kw):
+        self.prompts.append(messages[-1]["content"])
+
+        class C:
+            pass
+        c = C()
+        c.text = self.text
+        return c
+
+
+def test_replan_follows_principle_and_count_and_keeps_everything():
+    objs = [f"Firm{i:02d}" for i in range(1, 13)]
+    import json
+    fake = _Fake(json.dumps({"reason": "по провинциям", "groups": [
+        {"title": "Шаньдун", "objects": objs[:4]}, {"title": "Гуандун", "objects": objs[4:8]},
+        {"title": "Прочие", "objects": objs[8:]}]}))
+    d = asyncio.run(SP.replan("Задание", fake, "m", objs, n_parts=3, principle="по провинциям"))
+    assert [p["title"] for p in d["parts"]] == ["Шаньдун", "Гуандун", "Прочие"] and d["checks"]["ok"]
+    assert "по провинциям" in fake.prompts[0] and "EXACTLY 3 parts" in fake.prompts[0]
+    # просили 4, модель дала 3 — программа выравнивает до 4, ничего не теряя
+    d = asyncio.run(SP.replan("Задание", fake, "m", objs, n_parts=4))
+    assert len(d["parts"]) == 4 and d["checks"]["ok"] and any("вместо 4" in n for n in d["notes"])
+
+
+def test_replan_without_model_chunks_into_requested_parts():
+    objs = [f"Firm{i:02d}" for i in range(1, 11)]
+    d = asyncio.run(SP.replan("Задание", None, None, objs, n_parts=5, principle="по размеру"))
+    assert len(d["parts"]) == 5 and d["checks"]["ok"] and any("демо" in n for n in d["notes"])

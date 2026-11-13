@@ -23,7 +23,7 @@ from .config import CouncilConfig, MemberConfig, Mode
 from .attachments import Attachment, documents_block, image_parts, images_note
 from .inflight import InFlight
 from .filerefs import FIX_MESSAGE, refs_in
-from .schemas import Ballot, CritiqueSet, ImageNotes, Proposal, Revision, Verdict
+from .schemas import Ballot, CritiqueSet, ImageNotes, Proposal, Revision, SupplementNeeded, Verdict
 from .voting import (
     TallyRow,
     assign_labels,
@@ -188,7 +188,10 @@ class Council:
         # общий учёт лимита ключа сайта и бота: остаток лимита и запросы всех идущих заседаний
         self.key_limit = key_limit
         self.shared = InFlight(shared_dir, session_id) if shared_dir and session_id else None
-        self._tag = f"[{session_id[:15]}] " if session_id else ""  # дата и время старта — метка заседания в журнале
+        # дата и время старта — метка заседания в журнале; 4 знака от полного номера различают заседания, начатые
+        # в одну секунду (части серии) — название тут не годится: оно само может кончаться цифрой («…из-3»)
+        import zlib
+        self._tag = (f"[{session_id[:15]}·{zlib.crc32(session_id.encode()) & 0xFFFF:04x}] " if session_id else "")
         self._key_left: float | None = None
         self._key_at = 0.0
         self._key_spent = 0.0
@@ -545,6 +548,29 @@ class Council:
                 self._log(entry)
                 attempt += 1
                 continue
+            except SupplementNeeded as e:  # ответ годен, не хватает части — короткая дозаявка, не переписывание
+                entry["error"] = f"дозаявка: {e}"
+                entry["finish_reason"] = comp.finish_reason
+                self._log(entry)
+                log.info("%s%s · %s: ответ принят, дозаявка — %s", self._tag, name, stage, e.what or str(e)[:200])
+                self._call(name, stage, "retry", started, detail=f"ответ принят, прошу дописать {e.what or 'недостающее'}")
+                obj = e.obj
+                try:
+                    addon = await self._ask_model(
+                        member, stage, e.schema, base_messages,
+                        list(base_messages) + [{"role": "user", "content": e.supplement_prompt}], meta, None,
+                        web_search, call_n, min(max_tokens, 16000), web_fetch)
+                    obj = e.merge(addon)
+                except OutOfCredits:
+                    raise
+                except (InvalidResponse, ProviderError) as e2:  # дозаявка не удалась — принимаем ответ как есть
+                    log.warning("%s%s · %s: дозаявка не удалась (%s) — ответ принят без неё", self._tag, name, stage, e2)
+                    self.stats[name].failures.append(f"{stage}: дозаявка не удалась: {str(e2)[:200]}")
+                if check:
+                    try:
+                        obj = check(obj)  # повторная проверка уже без дозаявок (их — одна на ответ)
+                    except ValueError:
+                        pass
             except ValueError as e:  # pydantic.ValidationError тоже ValueError
                 error = readable_error(e)
                 log.warning("%s%s · %s: ответ не принят (%s)", self._tag, name, stage, error[:400])
