@@ -220,7 +220,7 @@ class RunState:
         # Только в памяти: не в событиях, не на диске, не в отчётах; модель ответила — её рассуждение удаляется.
         self.thoughts: dict[str, dict[str, Any]] = {}
 
-    THOUGHT_KEEP = 8000
+    THOUGHT_KEEP = 30000  # ≈ 10 тысяч токенов на модель — несколько экранов текста; только в памяти
 
     def add_thought(self, member: str, stage: str, text: str, hidden: bool) -> None:
         t = self.thoughts.get(member)

@@ -555,8 +555,9 @@ def test_live_thoughts_are_shown_but_never_saved(client, tmp_path):
 def test_run_state_keeps_only_tail_of_current_thought():
     from council.web.app import RunState
     st = RunState("x", "q")
-    st.add_thought("a", "proposal", "я" * 9000, False)
-    assert len(st.thoughts["a"]["text"]) == RunState.THOUGHT_KEEP and st.thoughts["a"]["chars"] == 9000
+    n = RunState.THOUGHT_KEEP + 1000
+    st.add_thought("a", "proposal", "я" * n, False)
+    assert len(st.thoughts["a"]["text"]) == RunState.THOUGHT_KEEP and st.thoughts["a"]["chars"] == n
     st.add_thought("a", "critique", "новый этап", False)  # новый этап — новое рассуждение
     assert st.thoughts["a"]["text"] == "новый этап"
     st.push({"type": "call", "member": "a", "stage": "critique", "phase": "done"})
