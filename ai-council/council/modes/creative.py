@@ -85,7 +85,9 @@ idea with its proposal label). "final_answer" structure:
    in other relevant languages, a quick test with the target audience. Say plainly that the council did not check
    trademark registries.
 6. «Следующий шаг» — e.g. test 3-5 favourites with the audience, or run «Сравнить ваши варианты» on the shortlist.
-Keep the user's constraints and requirements."""
+Keep the user's constraints and requirements. If the user prescribes their own structure for the answer, follow it
+AND still include «Шорт-лист», «Смелые варианты» and «Гибриды» as a compact block (e.g. right after the summary) —
+bold ideas and combinations are the point of this mode and must not get lost in the user's format."""
 
 WEB_NOTE = """
 
