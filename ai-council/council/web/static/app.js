@@ -19,7 +19,7 @@ const LINK_BADGE = { dead: ' <span class="badge bad">ссылка не откр�
   refused: ' <span class="badge bad" title="Ссылка ведёт внутрь сети сервера — такие адреса не открываются">внутренний адрес</span>' };
 const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения",
   factcheck: "Проверка фактов", arbitration: "Проверяем утверждения по источникам", recheck: "Проверяем новые утверждения",
-  split: "Разбиение задания на части" };
+  split: "Разбиение задания на части", split_audit: "Проверка полноты списка", conflicts: "Противоречия между частями" };
 // что происходит на этапе — простыми словами
 const STAGE_HINT = {
   framing: "председатель уточняет вопрос и критерии",
@@ -1199,18 +1199,22 @@ async function renderSeries(id) {
       ${sm ? `<p><a class="btn primary" href="#/s/${encodeURIComponent(sm.session_id)}">Открыть сводный отчёт</a>
           <span class="arc-status ${esc(sm.status)}">${esc(PART_STATUS[sm.status] || sm.status)}</span> <span class="muted small">${money(sm.cost)}</span></p>`
         : `<p class="muted">${v.auto_summary ? "Когда все части будут готовы, совет сам сведёт их в один отчёт: проверенное в частях входит в общий реестр с теми же статусами." : "Сводка не запускается сама — нажмите «Свести», когда части будут готовы."}</p>`}
+      ${canSum || (!sm && v.auto_summary) ? `<label class="switch"><input id="serRecheck" type="checkbox" ${v.summary_recheck ? "checked" : ""}><span class="sw" aria-hidden="true"></span>
+        <span><b>Доуточнить невыясненное</b><small>Что в частях осталось «неясно» или «спорно в источниках», сводка ищет ещё раз (до 20) — дороже. Противоречия между частями проверяются всегда, проверенное — не перепроверяется.</small></span></label>` : ""}
       <div class="row-actions">
         ${stopped ? `<button type="button" class="btn" id="serCont">Продолжить серию</button>` : ""}
         ${canSum ? `<button type="button" class="btn ${v.done === v.total ? "primary" : ""}" id="serSum">${v.done === v.total ? "Свести части советом" : `Свести готовые (${v.done} из ${v.total})`}</button>` : ""}
       </div>
     </section>`;
+  const rch = $("serRecheck");
+  if (rch && !canSum) rch.onchange = () => api(`/api/series/${encodeURIComponent(id)}/summary_recheck`, { method: "POST", body: { recheck: rch.checked } }).catch((e) => toast(e.message));
   const cont = $("serCont");
   if (cont) cont.onclick = async () => { cont.disabled = true; try { await api(`/api/series/${encodeURIComponent(id)}/continue`, { method: "POST" }); toast("Серия продолжается"); } catch (e) { toast(e.message); } renderSeries(id); };
   const sum = $("serSum");
   if (sum) sum.onclick = async () => {
     if (v.done < v.total && !(await ask({ title: "Свести не все части?", html: `<p>Готово ${v.done} из ${v.total}. Сводка будет только по готовым частям — остальные объекты в неё не войдут.</p>`, ok: "Свести" }))) return;
     sum.disabled = true;
-    try { const r = await api(`/api/series/${encodeURIComponent(id)}/summary`, { method: "POST" }); toast("Совет сводит части"); if (r && r.id) loadHistory(); }
+    try { const r = await api(`/api/series/${encodeURIComponent(id)}/summary`, { method: "POST", body: { recheck: !!($("serRecheck") && $("serRecheck").checked) } }); toast("Совет сводит части"); if (r && r.id) loadHistory(); }
     catch (e) { toast(e.message); }
     renderSeries(id);
   };
@@ -1274,7 +1278,8 @@ async function splitTask() {
     <div class="split-opts">
       <label class="field"><span class="label">Одновременно идут</span><select id="spPar"><option value="1">1 часть</option><option value="2" selected>2 части</option><option value="3">3 части</option></select>
         <small class="hint">при небольшом балансе программа сама пустит части по одной</small></label>
-      <label class="switch"><input id="spSum" type="checkbox" checked><span class="sw" aria-hidden="true"></span><span><b>Сводный отчёт советом</b><small>Когда все части готовы, совет сводит их в один отчёт.</small></span></label>
+      <label class="switch"><input id="spSum" type="checkbox" checked><span class="sw" aria-hidden="true"></span><span><b>Сводный отчёт советом</b><small>Когда все части готовы, совет сводит их в один отчёт. Проверенное в частях не перепроверяется, противоречия между частями проверяются поиском.</small></span></label>
+      <label class="switch"><input id="spRecheck" type="checkbox"><span class="sw" aria-hidden="true"></span><span><b>В сводке доуточнить невыясненное</b><small>Факты, которые в частях остались «неясно» или «спорно в источниках», сводка ищет ещё раз (до 20). Дороже, но закрывает пробелы частей.</small></span></label>
     </div>
     <p class="muted small" id="spBudget"></p>`;
   const groupsNow = () => [...$("dBody").querySelectorAll("[data-sp-objs]")].map((t) => t.value.split("\n").map((x) => x.trim()).filter(Boolean));
@@ -1327,7 +1332,7 @@ async function splitTask() {
     title: shortTitle(p.question, 120), task: p.question,
     parts: groups.map((g, i) => ({ title: titles[i] || `Часть ${i + 1}`, objects: g })).filter((x) => x.objects.length),
     request: { ...p, research: { ...(p.research || {}), catalog: true, auto_split: false, facts_per_object: d.facts_per_object } },
-    max_parallel: Number($("spPar").value) || 2, auto_summary: $("spSum").checked,
+    max_parallel: Number($("spPar").value) || 2, auto_summary: $("spSum").checked, summary_recheck: $("spRecheck").checked,
   };
   try {
     const { id } = await api("/api/series", { method: "POST", body });
@@ -1439,6 +1444,9 @@ function apply(s, ev) {
   s.at = ev.ts ? Math.min(ev.ts * 1000, Date.now()) : Date.now();
   switch (ev.type) {
     case "ping":
+      break;
+    case "summary_checks":
+      logAdd(s, `Сводка: проверенное в частях не перепроверяется (${ev.skipped}); противоречий между частями — ${ev.conflicts}${ev.recheck ? `, доуточнить — ${ev.recheck}` : ""}; новых утверждений — ${ev.new}`, "k-ok");
       break;
     case "objects":
       logAdd(s, `В задании ${ev.count} ${plural(ev.count, "объект", "объекта", "объектов")}: ${ev.coverage ? `у каждого автора должны быть факты о каждом (по ${ev.facts}), ` : ""}на проверку — ${ev.checks} утв., у автора до ${ev.max_claims}`);

@@ -145,6 +145,8 @@ def _research(stage: str, who: str, meta: dict[str, Any]) -> dict[str, Any]:
         return {"items": [{"item_id": i, "status": "supported"} for i in meta.get("items") or []]}
     if stage == "split_audit":  # демо: вторая проверка пропусков не находит
         return {"missing": []}
+    if stage == "conflicts":  # демо: противоречий между частями нет
+        return {"conflicts": []}
     if stage == "framing":
         return {"refined_question": "Каков рынок кофеен у вузов и стоит ли открывать точку? (демо)",
                 "criteria": ["Полнота покрытия", "Качество доказательств", "Калибровка неопределённости", "Практическая ценность"],

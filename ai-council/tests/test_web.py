@@ -618,3 +618,40 @@ def test_retry_failed_members_after_stage_keeps_done_answers(client, monkeypatch
     import json as _json
     res = _json.loads((tmp_runs(client) / f"{sid}.json").read_text(encoding="utf-8"))
     assert len(res["proposals"]) == 3  # в итоге — варианты всех трёх
+
+
+def test_summary_checks_conflicts_between_parts_and_keeps_recheck_flag(client, monkeypatch):
+    import json as _json
+    import re as _re
+    from council import mock as M
+    orig = M.MockClient.complete
+    seen = {}
+
+    async def with_conflict(self, model, messages, **kw):
+        st = (kw.get("meta") or {}).get("stage")
+        if st == "conflicts":
+            text = str(messages[-1]["content"])
+            ids = _re.findall(r"^- (P\d+-\S+) \[", text, _re.M)
+            p1 = next(i for i in ids if i.startswith("P1-"))
+            p2 = next(i for i in ids if i.startswith("P2-"))
+            seen["ids"] = [p1, p2]
+            from council.client import Completion
+            return Completion(text=_json.dumps({"conflicts": [{"ids": [p1, p2], "question": "Что верно?"}]}),
+                              prompt_tokens=10, completion_tokens=10, cost=0.0001, model=model)
+        return await orig(self, model, messages, **kw)
+
+    monkeypatch.setattr(M.MockClient, "complete", with_conflict)
+    objs = ["Alphacorp Foods", "Betamax Nutrition"]
+    r = client.post("/api/series", json={
+        "title": "Противоречия", "task": "Проверь компании Alphacorp Foods и Betamax Nutrition",
+        "parts": [{"title": "A", "objects": objs[:1]}, {"title": "B", "objects": objs[1:]}],
+        "request": {"mode": "research", "mock": True, "members": ["a", "b", "c"], "chair": "a"},
+        "max_parallel": 2, "auto_summary": True, "summary_recheck": True})
+    v = _wait_series(client, r.json()["id"])
+    assert v["status"] == "done" and v["summary_recheck"] is True
+    d = _json.loads((tmp_runs(client) / f"{v['summary']['session_id']}.json").read_text(encoding="utf-8"))
+    assert d["request"]["research_overrides"]["summary_recheck"] is True  # галочка серии дошла до сводки
+    led = d["research"]["ledger"]
+    x = next(c for c in led["claims"] if c["id"] == "X-C1")  # противоречие проверено поиском
+    assert x["conflict_of"] == seen["ids"] and x["status"]
+    assert all(next(c for c in led["claims"] if c["id"] == i).get("conflict") == "X-C1" for i in seen["ids"])

@@ -179,6 +179,11 @@ class SeriesRequest(BaseModel):
     request: dict[str, Any] = Field(default_factory=dict)  # настройки запуска, как у одного заседания
     max_parallel: int = Field(default=2, ge=1, le=5)
     auto_summary: bool = True
+    summary_recheck: bool = False  # сводка доуточняет поиском то, что в частях осталось невыясненным
+
+
+class SummaryAsk(BaseModel):
+    recheck: bool | None = None  # доуточнить невыясненное в частях (сохраняется в серии)
 
 
 class SplitAsk(BaseModel):
@@ -1142,7 +1147,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 "auto_summary": s["auto_summary"], "origin": s.get("origin", ""), "parts": parts, "summary": summ,
                 "done": done, "total": len(parts), "status": status,
                 "cost": round(sum(p["cost"] or 0 for p in parts) + ((summ or {}).get("cost") or 0), 4),
-                "mode": (s.get("request") or {}).get("mode", "research"), "waiting": series_wait.get(s["id"], "")}
+                "mode": (s.get("request") or {}).get("mode", "research"), "waiting": series_wait.get(s["id"], ""),
+                "summary_recheck": bool(s.get("summary_recheck"))}
 
     series_wait: dict[str, str] = {}  # серия → почему следующая часть ждёт (показывается на странице серии)
 
@@ -1328,6 +1334,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                        objects="\n".join(f"- {o}" for o in objects) or "—", task=s.get("task") or "")
         base_rs = dict((s["request"] or {}).get("research") or {})
         rs = {**base_rs, "catalog": False, "facts_per_object": 1, "arbitration_claims": 10,
+              "summary_conflicts": True, "summary_recheck": bool(s.get("summary_recheck")),
               "max_claims": max(int(base_rs.get("max_claims") or 8), min(80, len(objects) + 3))}
         req = RunRequest(**{**s["request"], "question": question, "mode": "research", "research": rs,
                             "research_words": 0, "web_search": []})
@@ -1387,7 +1394,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                     max_parallel=body.max_parallel, auto_summary=body.auto_summary, origin="web")
         if uids:
             s["files"] = await asyncio.to_thread(keep_series_files, s["id"], uids)
-            await asyncio.to_thread(SR.save, runs_dir(base_config()), s)
+        s["summary_recheck"] = body.summary_recheck
+        await asyncio.to_thread(SR.save, runs_dir(base_config()), s)
         kick_series(s["id"])
         return {"id": s["id"]}
 
@@ -1410,11 +1418,25 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         kick_series(series_id)
         return {"ok": True}
 
+    @app.post("/api/series/{series_id}/summary_recheck")
+    async def series_summary_recheck(series_id: str, body: SummaryAsk) -> dict[str, Any]:
+        """Галочка «доуточнить невыясненное» для сводки, которая запустится сама после частей."""
+        rd = runs_dir(base_config())
+        s = await asyncio.to_thread(SR.load, rd, series_id)
+        if not s:
+            raise HTTPException(404, "серия не найдена")
+        s["summary_recheck"] = bool(body.recheck)
+        await asyncio.to_thread(SR.save, rd, s)
+        return {"ok": True}
+
     @app.post("/api/series/{series_id}/summary")
-    async def series_summary(series_id: str) -> dict[str, Any]:
+    async def series_summary(series_id: str, body: SummaryAsk | None = None) -> dict[str, Any]:
         s = SR.load(runs_dir(base_config()), series_id)
         if not s:
             raise HTTPException(404, "серия не найдена")
+        if body is not None and body.recheck is not None and bool(s.get("summary_recheck")) != body.recheck:
+            s["summary_recheck"] = body.recheck
+            await asyncio.to_thread(SR.save, runs_dir(base_config()), s)
         st0 = part_state(s["summary_id"])["status"] if s.get("summary_id") else ""
         if st0 in ("running", "done"):
             raise HTTPException(409, "сводный отчёт уже есть")

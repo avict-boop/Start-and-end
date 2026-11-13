@@ -181,6 +181,8 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
             proposals, critiques, rc.arbitration_claims, n_subq=len(subq), dedupe=rc.dedupe_claims,
             defer_private=rc.defer_private, coverage_first=rc.coverage_first,
             check_decisive_private=rc.check_decisive_private, objects=objects, facts_per_object=rc.facts_per_object)
+        if sess.inherited:  # сводка серии: проверенное в частях не перепроверяем; противоречия и пробелы — поиском
+            selected = await summary_checks(sess, R, chair, selected, rc, rmeta)
         if selected:
             results = await search(sess, R, refined, as_of, scope, selected, rc, "arbitration")
             ledger = make_ledger(sess, R, selected, results, rc, deferred)
@@ -446,6 +448,31 @@ async def check_links(sess: Council, R: Any, ledger: dict[str, Any], rc: Any) ->
     R.apply_links(ledger, found, quote_check=rc.quote_check)
     if ledger.get("links"):
         sess._emit("links", **ledger["links"])
+
+
+async def summary_checks(sess: Council, R: Any, chair: Any, selected: list[dict[str, Any]], rc: Any,
+                         rmeta: dict[str, Any]) -> list[dict[str, Any]]:
+    """Что проверяет поиском сводка серии: новые утверждения авторов (не проверенные в частях), противоречия между
+    частями и — по галочке — не выясненное в частях."""
+    selected, skipped = R.drop_known(selected, sess.inherited)
+    extra: list[dict[str, Any]] = []
+    n_conf = 0
+    if rc.summary_conflicts and len(sess.inherited) > 1:
+        try:
+            got = await sess._ask(chair, "conflicts", R.conflicts_prompt(sess.inherited), R.Conflicts, meta=rmeta)
+            conf = R.conflict_claims(got.conflicts, sess.inherited)
+            n_conf = len(conf)
+            extra += conf
+        except (ProviderError, InvalidResponse) as e:
+            if isinstance(e, OutOfCredits):
+                raise
+            log.warning("%sпоиск противоречий между частями не удался: %s", sess._tag, e)
+    rech = R.recheck_claims(sess.inherited, rc.summary_recheck_max) if rc.summary_recheck else []
+    extra += rech
+    log.info("%sсводка: не перепроверяем %d проверенных в частях; противоречий %d, доуточнить %d, новых %d",
+             sess._tag, skipped, n_conf, len(rech), len(selected))
+    sess._emit("summary_checks", skipped=skipped, conflicts=n_conf, recheck=len(rech), new=len(selected))
+    return extra + selected
 
 
 async def split_into_series(sess: Council, chair: Any, question: str, refined: str, objects: list[str], rc: Any,

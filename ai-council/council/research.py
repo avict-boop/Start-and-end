@@ -1448,6 +1448,98 @@ def ledger_digest(ledger: dict[str, Any] | None) -> str:
     return "\n".join(out)
 
 
+SETTLED = {"confirmed", "partially_confirmed", "refuted", "user_doc"}      # в части проверено — итог ясен
+OPEN = {"unclear", "contested_in_sources", "search_unavailable", "not_checked"}  # в части не выяснено
+
+
+def inherited_rows(parts: list[tuple[int, dict[str, Any]]]) -> list[tuple[str, int, dict[str, Any]]]:
+    """Утверждения реестров частей с номерами, под которыми они будут в сводке (P2-A-C3)."""
+    out = []
+    for n, part in parts:
+        for c in (part or {}).get("claims") or []:
+            if not c.get("duplicate_of") and c.get("text"):
+                out.append((f"P{n}-{c.get('id', '')}", n, c))
+    return out
+
+
+def summary_claim(cid: str, text: str, label: str, **extra: Any) -> dict[str, Any]:
+    """Утверждение для проверки поиском в сводке — в том же виде, что отбирает prepare_claims."""
+    return {"id": cid, "label": label, "text": text, "scope": "", "basis": "memory", "volatility": "unknown",
+            "disputed": 0, "decisive_by_critics": 0, "entity": extra.pop("entity", ""), "reasons": [],
+            "subquestions": [], "checkability": "public", "check_path": "", "dup_ids": [],
+            "source_leads": list(extra.pop("source_leads", []) or []), "decisive": True,
+            "critical": bool(extra.pop("critical", False)), **extra}
+
+
+def drop_known(selected: list[dict[str, Any]], parts: list[tuple[int, dict[str, Any]]]) -> tuple[list[dict[str, Any]], int]:
+    """Сводка не перепроверяет то, что уже проверено в частях (тот же факт с теми же числами): оно и так в общем
+    реестре со своим статусом. Остаются новые утверждения — сравнения, выводы по всему списку."""
+    known = [_claim_key(c["text"]) for _, _, c in inherited_rows(parts) if c.get("status") in SETTLED]
+    kept, skipped = [], 0
+    for c in selected:
+        k = _claim_key(c["text"])
+        if any(_same_claim(kk, k) for kk in known):
+            skipped += 1
+        else:
+            kept.append(c)
+    return kept, skipped
+
+
+def recheck_claims(parts: list[tuple[int, dict[str, Any]]], limit: int) -> list[dict[str, Any]]:
+    """Доуточнить: не выясненное в частях — ещё раз поиском (сначала важное и о конкретных объектах)."""
+    rows = [(cid, n, c) for cid, n, c in inherited_rows(parts) if c.get("status") in OPEN]
+    rows.sort(key=lambda r: (not r[2].get("critical"), not r[2].get("object"), r[1]))
+    return [summary_claim(cid, c["text"], f"P{n}", entity=c.get("entity", ""), source_leads=c.get("source_leads"),
+                          object=c.get("object", ""), recheck_of=cid, was_status=c.get("status"),
+                          critical=bool(c.get("critical")))
+            for cid, n, c in rows[:limit]]
+
+
+class Conflict(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+    question: str = ""
+
+
+class Conflicts(BaseModel):
+    conflicts: list[Conflict] = Field(default_factory=list)
+
+    @field_validator("conflicts", mode="before")
+    @classmethod
+    def _lst(cls, v: Any) -> Any:
+        return v if isinstance(v, list) else []
+
+
+def conflicts_prompt(parts: list[tuple[int, dict[str, Any]]], max_rows: int = 300) -> str:
+    rows = inherited_rows(parts)[:max_rows]
+    listed = "\n".join(f"- {cid} [{c.get('status', '')}]: {str(c['text'])[:220]}" for cid, _, c in rows)
+    return f"""Below are checked claims from several parts of one research series (each part checked its own
+objects; P1-…, P2-… is the part number). Find claims from DIFFERENT parts that cannot both be true: the same subject
+(the same market, regulation, number, date, company or product) with different values or opposite statements.
+Do NOT list claims about different objects, different years or different units — those are not contradictions.
+
+Claims:
+{listed}
+
+Reply with ONE JSON object, at most 10 conflicts, each with the ids involved and the question that settles it:
+{{"conflicts": [{{"ids": ["P1-A-C3", "P2-B-C1"], "question": "Какой объём рынка ... в 2024 году?"}}]}}
+Empty list if there are none."""
+
+
+def conflict_claims(conflicts: list[Conflict], parts: list[tuple[int, dict[str, Any]]]) -> list[dict[str, Any]]:
+    """Противоречие между частями — утверждение для поиска: какое из значений верно."""
+    texts = {cid: c["text"] for cid, _, c in inherited_rows(parts)}
+    out = []
+    for c in conflicts:
+        ids = [i for i in dict.fromkeys(c.ids) if i in texts]
+        if len(ids) < 2 or len({i.split("-", 1)[0] for i in ids}) < 2:  # только между разными частями
+            continue
+        k = len(out) + 1
+        text = (f"{c.question.strip() or 'Какое из значений верно?'} — в частях серии расходится: "
+                + "; ".join(f"«{texts[i][:160]}» ({i})" for i in ids))
+        out.append(summary_claim(f"X-C{k}", text, "X", conflict_of=ids, critical=True))  # нужна страница, не фрагмент
+    return out[:10]
+
+
 def merge_inherited(ledger: dict[str, Any] | None, parts: list[tuple[int, dict[str, Any]]]) -> dict[str, Any]:
     """Сводное заседание серии: реестры частей — в общий реестр со своими статусами и ссылками. Номера получают
     приставку части (P2-A-C1, P2-E5), чтобы не совпасть; статусы не меняются — неподтверждённое в части не становится
@@ -1458,6 +1550,10 @@ def merge_inherited(ledger: dict[str, Any] | None, parts: list[tuple[int, dict[s
     out["claims"] = list(out["claims"])
     out["evidence"] = list(out["evidence"])
     done = set(out.get("inherited_parts") or [])
+    redone = {c["id"]: c for c in out["claims"] if c.get("recheck_of")}  # доуточнены в сводке — их строки новые
+    conflicts = {i: c["id"] for c in out["claims"] for i in c.get("conflict_of") or []}
+    for c in redone.values():
+        c.setdefault("inherited", True)
     for n, part in parts:
         if n in done or not part:
             continue
@@ -1468,6 +1564,11 @@ def merge_inherited(ledger: dict[str, Any] | None, parts: list[tuple[int, dict[s
         for c in part.get("claims") or []:
             row = {**c, "id": pre + str(c.get("id", "")), "part": n, "inherited": True,
                    "evidence": [pre + str(x) for x in c.get("evidence") or []]}
+            if row["id"] in redone:  # доуточнено в сводке: новая строка уже в реестре, прежний статус — в ней
+                redone[row["id"]].update(part=n, was_status=c.get("status"), rechecked=True)
+                continue
+            if row["id"] in conflicts:
+                row["conflict"] = conflicts[row["id"]]  # расходится с другой частью — см. проверку X-C…
             if c.get("duplicate_of"):
                 row["duplicate_of"] = pre + str(c["duplicate_of"])
             if c.get("derived_from"):

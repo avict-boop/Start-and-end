@@ -416,3 +416,32 @@ def test_supplement_failure_keeps_the_paid_answer():
     res = run(Council(cfg, c, seed=4).run("Проверь компании Alphacorp Foods и Betamax Nutrition"))
     assert c.sup >= 1 and res.verdict is not None  # заседание дошло до итога: оплаченные варианты не потеряны
     assert any("дозаявка не удалась" in f for s in res.stats.values() for f in s.failures)
+
+
+def test_summary_checks_skip_known_find_conflicts_and_recheck_open():
+    parts = [(1, {"claims": [{"id": "A-C1", "text": "Рынок БАД Китая в 2024 году — 400 млрд юаней", "status": "confirmed"},
+                             {"id": "A-C2", "text": "Firm01 экспортирует в ЕС", "status": "unclear", "object": "Firm01"}]}),
+             (2, {"claims": [{"id": "B-C1", "text": "Рынок БАД Китая в 2024 году — 520 млрд юаней", "status": "confirmed"},
+                             {"id": "B-C2", "text": "Firm02 имеет сертификат GMP", "status": "refuted"}]})]
+    # проверенное в частях не перепроверяется, новое — да
+    sel = [R.summary_claim("A-C9", "Рынок БАД Китая в 2024 году — 400 млрд юаней", "A"),
+           R.summary_claim("A-C10", "Лучший поставщик по совокупности — Firm02", "A")]
+    kept, skipped = R.drop_known(sel, parts)
+    assert skipped == 1 and [c["id"] for c in kept] == ["A-C10"]
+    # противоречие между частями — утверждение для поиска; внутри одной части и выдуманные id — нет
+    conf = R.conflict_claims([R.Conflict(ids=["P1-A-C1", "P2-B-C1"], question="Какой объём рынка?"),
+                              R.Conflict(ids=["P1-A-C1", "P1-A-C2"]), R.Conflict(ids=["P1-A-C1", "P9-Z"])], parts)
+    assert len(conf) == 1 and conf[0]["conflict_of"] == ["P1-A-C1", "P2-B-C1"] and "520" in conf[0]["text"]
+    assert "P1-A-C1" in R.conflicts_prompt(parts) and "P2-B-C1" in R.conflicts_prompt(parts)
+    # доуточнить — только невыясненное
+    rc = R.recheck_claims(parts, 20)
+    assert [c["id"] for c in rc] == ["P1-A-C2"] and rc[0]["recheck_of"] == "P1-A-C2"
+    # в общем реестре: доуточненная строка заменяет прежнюю (прежний статус — рядом), противоречие отмечено
+    led = {"claims": [{**rc[0], "status": "confirmed"}, {**conf[0], "status": "confirmed"}], "evidence": []}
+    out = R.merge_inherited(led, parts)
+    ids = [c["id"] for c in out["claims"]]
+    assert ids.count("P1-A-C2") == 1
+    row = next(c for c in out["claims"] if c["id"] == "P1-A-C2")
+    assert row["status"] == "confirmed" and row["was_status"] == "unclear" and row["rechecked"]
+    assert next(c for c in out["claims"] if c["id"] == "P2-B-C1")["conflict"] == "X-C1"
+    assert next(c for c in out["claims"] if c["id"] == "P2-B-C2")["status"] == "refuted"  # статус части — как был

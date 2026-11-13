@@ -71,6 +71,11 @@ class ResearchConfig(BaseModel):
     # Большой список объектов — председатель сам разбивает задание на части серии (по objects_per_part объектов,
     # по смыслу), части идут с теми же настройками, потом совет сводит их в один отчёт. Выключено — одно заседание
     auto_split: bool = True
+    # Сводный отчёт серии: противоречия между частями (одно и то же — разные значения) проверяются поиском;
+    # доуточнить неподтверждённое в частях («неясно», «спорно в источниках») — по галочке, дороже
+    summary_conflicts: bool = True
+    summary_recheck: bool = False
+    summary_recheck_max: int = Field(default=20, ge=1, le=60)
     objects_per_part: int = Field(default=10, ge=3, le=40)
     max_evidence: int = Field(default=20, ge=5, le=40)  # источников в ответе поиска
     revision_digest: bool = True   # доработка по реестру и выжимкам чужих вариантов, а не по их полным текстам
@@ -288,7 +293,8 @@ def load_dotenv(path: str | Path = ".env") -> None:
 RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "max_claims", "revision_digest",
                     "section_vote", "fresh_scouts", "revision_search", "max_words", "shorten_long", "long_factor", "link_check",
                     "recheck_unclear", "post_revision_claims", "vote_ledger", "snippet_rule", "digest_table_rows",
-                    "object_coverage", "facts_per_object", "catalog", "auto_split", "objects_per_part")
+                    "object_coverage", "facts_per_object", "catalog", "auto_split", "objects_per_part",
+                    "summary_conflicts", "summary_recheck", "summary_recheck_max")
 
 
 class OverrideError(ValueError):
