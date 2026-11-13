@@ -2879,20 +2879,48 @@ $("howBtn").addEventListener("click", () => {
 // пресеты исследования — стартовые значения из третьей проверки совета (гипотезы для пилота, а не замеры)
 const DEPTH = {
   fast: { label: "Быстро и дёшево", budget: 4, words: 800,
-    rs: { max_claims: 5, arbitration_claims: 10, missions: 1, recheck_unclear: 0, post_revision_claims: 2, section_vote: false, digest_table_rows: 12 } },
+    rs: { max_claims: 5, arbitration_claims: 10, missions: 1, recheck_unclear: 0, post_revision_claims: 2, section_vote: false } },
   standard: { label: "Стандарт", budget: 8, words: 1400,
-    rs: { max_claims: 8, arbitration_claims: 20, missions: 2, recheck_unclear: 3, post_revision_claims: 4, section_vote: true, digest_table_rows: 12 } },
+    rs: { max_claims: 8, arbitration_claims: 20, missions: 2, recheck_unclear: 3, post_revision_claims: 4, section_vote: true } },
   deep: { label: "Тщательно", budget: 12, words: 2000,
-    rs: { max_claims: 12, arbitration_claims: 30, missions: 2, recheck_unclear: 5, post_revision_claims: 4, section_vote: true, digest_table_rows: 24 } },
+    rs: { max_claims: 12, arbitration_claims: 30, missions: 2, recheck_unclear: 5, post_revision_claims: 4, section_vote: true } },
 };
+// ваши длина и бюджет до выбора глубины: с ними сравнивает каждый пресет («как в настройках» их возвращает)
+let depthBase = null;
 $("depth").addEventListener("change", () => {
   const d = DEPTH[$("depth").value];
-  if (!d) { researchTuned = {}; $("depthHint").textContent = ""; renderResearchTuned(); formChanged(); return; }
-  researchTuned = { ...d.rs };
-  $("researchWords").value = d.words; $("researchNoLimit").checked = false; updateShortenHint();
-  $("budget").value = d.budget;
-  $("depthHint").textContent = `вариант до ${d.words} слов · утверждений у автора до ${d.rs.max_claims} · проверка ${d.rs.arbitration_claims} утв.`
-    + ` · второй поиск ${d.rs.recheck_unclear} · бюджет $${d.budget}. Правила «известно» не ослабляются.`;
+  if (!depthBase) depthBase = { words: $("researchWords").value, noLimit: noLimit(), budget: $("budget").value };
+  if (!d) {
+    researchTuned = {}; $("depthHint").textContent = "";
+    $("researchWords").value = depthBase.words; $("researchNoLimit").checked = depthBase.noLimit; $("budget").value = depthBase.budget;
+    depthBase = null; updateShortenHint(); renderResearchTuned(); formChanged(); return;
+  }
+  // «Стандарт» и «Тщательно» не опускают ниже того, что вы сами подняли в настройках или на экране (утверждения,
+  // проверки, длина, бюджет); «Быстро и дёшево» — нарочно дешевле, и подсказка называет, что стало меньше ваших настроек
+  const base = config.research_all || {};
+  const cheap = $("depth").value === "fast";
+  const lower = [];
+  researchTuned = {};
+  for (const [k, v] of Object.entries(d.rs)) {
+    const mine = base[k];
+    if (typeof v === "number" && typeof mine === "number" && mine > v) {
+      if (cheap) lower.push(`${RS_NAME[k] || k}: ${v} вместо ${mine}`);
+      else { researchTuned[k] = mine; continue; }
+    }
+    researchTuned[k] = v;
+  }
+  const words = Number(depthBase.words) || 0;
+  const keepLength = !cheap && (depthBase.noLimit || words > d.words);  // у вас длиннее или без ограничения — ваше
+  $("researchWords").value = keepLength ? depthBase.words : d.words;
+  $("researchNoLimit").checked = keepLength && depthBase.noLimit;
+  updateShortenHint();
+  const budget = Number(depthBase.budget) || 0;
+  $("budget").value = !cheap && budget > d.budget ? depthBase.budget : d.budget;
+  const rs = researchTuned;
+  $("depthHint").textContent = `${noLimit() ? "вариант без ограничения длины" : `вариант до ${$("researchWords").value} слов`}`
+    + ` · утверждений у автора до ${rs.max_claims} · проверка ${rs.arbitration_claims} утв. · второй поиск ${rs.recheck_unclear}`
+    + ` · бюджет $${$("budget").value}. Правила «известно» не ослабляются.`
+    + (lower.length ? ` Ниже ваших настроек: ${lower.join("; ")}.` : "");
   renderResearchTuned(); formChanged();
 });
 // свежие данные: сколько авторов ищут в интернете (кто именно — в «Составе и параметрах»)

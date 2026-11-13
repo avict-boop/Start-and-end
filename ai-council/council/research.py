@@ -700,9 +700,11 @@ def digest(label: str, p: Proposal, table_rows: int = 12) -> str:
     if cov:
         lines.append("Coverage: " + "; ".join(f"{c.subquestion_id} {c.status}" + (f" ({c.note[:80]})" if c.note else "")
                                               for c in cov))
-    rows = _table_rows(p.summary, table_rows) if table_rows else []
+    # таблица — целиком до 40 строк, даже если настройка меньше: иначе при списке из 22 компаний половина выпадала бы
+    # из доработки (настройка — «не меньше»; 0 — без таблиц)
+    rows = _table_rows(p.summary, max(table_rows, 40)) if table_rows else []
     if rows:
-        lines.append("Table rows from this proposal (first ones):")
+        lines.append("Table rows from this proposal:")
         lines += rows
     if p.pros:
         lines.append("Strengths claimed by the author: " + "; ".join(p.pros[:5]))

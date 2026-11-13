@@ -105,7 +105,8 @@ class ResearchConfig(BaseModel):
     # (для пилота: сравнить с ручной проверкой). Модель — semantic_audit_model, пусто — модель председателя
     semantic_audit: bool = True
     semantic_audit_model: str = ""
-    digest_table_rows: int = Field(default=12, ge=0, le=40)     # строк таблиц чужого варианта в выжимке для доработки
+    # строк таблиц чужого варианта в выжимке для доработки: таблица идёт целиком до 40 строк; 0 — без таблиц
+    digest_table_rows: int = Field(default=12, ge=0, le=40)
 
 
     @field_validator("max_words")
