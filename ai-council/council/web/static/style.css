@@ -110,7 +110,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); width
 ::placeholder { color: color-mix(in srgb, var(--muted) 85%, transparent); }
 
 .field { display: flex; flex-direction: column; gap: .35rem; margin-bottom: 1rem; min-width: 0; }
-.label, .field > span { font-weight: 650; font-size: .9rem; }
+.label, .field > span, .field > label[for] { font-weight: 650; font-size: .9rem; }
 .field em { font-weight: 400; color: var(--muted); font-style: normal; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: .75rem; align-items: start; }
 @media (max-width: 420px) { .row2 { grid-template-columns: 1fr; gap: 0; } }
