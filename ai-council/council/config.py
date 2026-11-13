@@ -58,8 +58,16 @@ class ResearchConfig(BaseModel):
     lenses: bool = True            # у каждого автора свой угол зрения (линза)
     arbitration: bool = True       # арбитраж доказательств после критики: поиск по утверждениям всех вариантов
     missions: int = Field(default=2, ge=1, le=2)        # поисковых вызовов: подтверждения и опровержения
-    arbitration_claims: int = Field(default=20, ge=3, le=30)  # сколько утверждений проверять (после объединения дублей)
-    max_claims: int = Field(default=8, ge=3, le=30)     # утверждений в варианте (до 30: проверка пакета компаний по 3 факта)
+    arbitration_claims: int = Field(default=20, ge=3, le=100)  # сколько утверждений проверять (после объединения дублей)
+    max_claims: int = Field(default=8, ge=3, le=80)     # утверждений в варианте (больше — для списков объектов)
+    # Обязательный охват объектов: если в задании есть список объектов (компании, продукты, категории), автор, у
+    # которого нет утверждений о каком-то из них, получает вариант назад с этим списком (один раз), а на проверку по
+    # источникам сначала идут facts_per_object фактов о каждом объекте. В вопросе без списка ничего не делает
+    object_coverage: bool = True
+    facts_per_object: int = Field(default=1, ge=1, le=5)
+    # «Каталог»: число проверок и утверждений у автора считается по числу объектов задания × facts_per_object
+    # (не меньше настроек; до 100 проверок и 80 утверждений)
+    catalog: bool = False
     max_evidence: int = Field(default=20, ge=5, le=40)  # источников в ответе поиска
     revision_digest: bool = True   # доработка по реестру и выжимкам чужих вариантов, а не по их полным текстам
     section_vote: bool = True      # голосование за лучший вариант по каждому подвопросу
@@ -125,7 +133,7 @@ class AdvisorConfig(BaseModel):
     max_candidates: int = Field(default=20, ge=6, le=60)  # сколько моделей каталога рассматривать
     question_chars: int = Field(default=30000, ge=2000, le=200000)  # сколько знаков вопроса видит советник
     history_min_sessions: int = Field(default=5, ge=1, le=100)  # ваша история модели — довод, только с N заседаний
-    max_arbitration_claims: int = Field(default=30, ge=3, le=30)   # потолок «утверждений на проверку»
+    max_arbitration_claims: int = Field(default=100, ge=3, le=100)   # потолок «утверждений на проверку»
     max_words_cap: int = Field(default=2500, ge=300, le=5000)      # потолок длины варианта исследования
 
 
@@ -275,7 +283,8 @@ def load_dotenv(path: str | Path = ".env") -> None:
 # какие настройки исследования можно менять для одного заседания (советник и «Параметры» вопроса)
 RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "max_claims", "revision_digest",
                     "section_vote", "fresh_scouts", "revision_search", "max_words", "shorten_long", "long_factor", "link_check",
-                    "recheck_unclear", "post_revision_claims", "vote_ledger", "snippet_rule", "digest_table_rows")
+                    "recheck_unclear", "post_revision_claims", "vote_ledger", "snippet_rule", "digest_table_rows",
+                    "object_coverage", "facts_per_object", "catalog")
 
 
 class OverrideError(ValueError):

@@ -314,7 +314,10 @@ Research settings you can tune for THIS question (current values: {json.dumps(re
 - max_words (300-{max_words_cap}): target proposal length. Proposals are material for the chair, who writes the full report;
   raise to 2000-2500 only for catalogue-like tasks with big tables; lower (700-1000) for narrow questions.
 - shorten_long (true/false): send far-too-long proposals back once to be shortened (some models ignore length).
-- max_claims (3-30): claims per proposal.
+- max_claims (3-80): claims per proposal.
+- catalog (true/false): when the request GIVES a list of objects to check (companies, products), the app sizes the
+  checks as objects × facts_per_object (up to 100) and makes every author cover every object.
+- facts_per_object (1-5): facts to check about each listed object first (catalog / object coverage).
 - lenses (true/false): a distinct angle for every author (market, technology, economics, sceptic) — off only when the
   question has one narrow angle.
 - section_vote (true/false): vote for the best proposal per subquestion — useful for multi-part questions.

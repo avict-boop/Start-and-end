@@ -234,7 +234,7 @@ def test_research_settings_are_suggested_cleaned_and_applied_per_session():
     assert rs["arbitration_claims"] == 25 and rs["fresh_scouts"] == 1 and "shorten_long" not in rs  # уже включено
     assert adv.research_cost["arbitration_claims"] > 0
     assert all(adv.research_why[k] for k in rs)
-    raw = A.Advice(mode="research", research_settings={"arbitration_claims": 99, "missions": 1, "max_words": 1400,
+    raw = A.Advice(mode="research", research_settings={"arbitration_claims": 150, "missions": 1, "max_words": 1400,
                                                      "runs_dir": "/etc", "lenses": False},
                    research_why={"missions": "дешевле", "lenses": "один угол"})
     out = A.finalize(raw, cands, c, "research")

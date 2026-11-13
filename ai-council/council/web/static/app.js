@@ -282,7 +282,8 @@ let researchTuned = {};
 const RS_NAME = {
   arbitration_claims: "Утверждений на проверку поиском", missions: "Поисковых заданий (подтвердить / опровергнуть)",
   fresh_scouts: "Авторов с поиском уже в предложениях", max_words: "Длина варианта, слов", shorten_long: "Сокращать слишком длинные варианты",
-  max_claims: "Утверждений в варианте", lenses: "Углы зрения авторов", section_vote: "Голосование по подвопросам",
+  max_claims: "Утверждений в варианте", lenses: "Углы зрения авторов", catalog: "Каталог: проверки по числу объектов",
+  object_coverage: "Обязательный охват объектов задания", facts_per_object: "Фактов на объект", section_vote: "Голосование по подвопросам",
   revision_digest: "Доработка по выжимкам", revision_search: "Поиск и на доработке", long_factor: "«Слишком длинный» — во сколько раз", arbitration: "Арбитраж доказательств",
   link_check: "Проверка ссылок", recheck_unclear: "«Не удалось проверить» — второй поиск, до",
   post_revision_claims: "Новые утверждения после доработки — проверить, до",
@@ -1186,6 +1187,9 @@ function apply(s, ev) {
   switch (ev.type) {
     case "ping":
       break;
+    case "objects":
+      logAdd(s, `В задании ${ev.count} ${plural(ev.count, "объект", "объекта", "объектов")}: ${ev.coverage ? `у каждого автора должны быть факты о каждом (по ${ev.facts}), ` : ""}на проверку — ${ev.checks} утв., у автора до ${ev.max_claims}`);
+      break;
     case "links_check":
       logAdd(s, `Проверяю ${ev.count} ${plural(ev.count, "ссылку", "ссылки", "ссылок")} и цитаты на страницах — до пары минут, без моделей`);
       break;
@@ -1545,6 +1549,11 @@ function renderResearch(s) {
     const lk = (s.ledger && s.ledger.links) || null;
     const all = lk ? ["ok", "dead", "blocked", "error"].reduce((a, k) => a + (lk[k] || 0), 0) : 0;
     h += `<details class="sources"><summary>Проверка утверждений и источники (${claims.length} утв., ${Object.keys(ev).length} источн.)</summary>`
+      + (s.ledger && s.ledger.objects && s.ledger.objects.total ? (() => {
+        const oc = s.ledger.objects;
+        return `<p class="small check-sum ${oc.missing && oc.missing.length ? "warn-text" : ""}">Объектов задания <b>${oc.total}</b>: проверены по источникам <b>${oc.checked}</b>, подтверждены <b>${oc.confirmed || 0}</b>`
+          + (oc.missing && oc.missing.length ? ` · не проверены: ${esc(oc.missing.slice(0, 15).join(", "))}${oc.missing.length > 15 ? " …" : ""}` : " · проверены все") + `</p>`;
+      })() : "")
       + (lk ? `<p class="small muted check-sum">Ссылок открылось <b>${lk.ok || 0}</b> из ${all} · цитат найдено на самих страницах <b>${lk.quotes_found || 0}</b> из ${lk.quotes_checked || 0}`
         + `${lk.rescued ? ` · засчитано по найденной цитате: ${lk.rescued}` : ""}${lk.dropped ? ` · снято — цитаты на странице нет: ${lk.dropped}` : ""}${lk.pdf ? ` · PDF прочитано: ${lk.pdf}` : ""}</p>` : "")
       + `<ul class="claims">${claims.map((c) => {
@@ -2882,6 +2891,8 @@ const DEPTH = {
     rs: { max_claims: 5, arbitration_claims: 10, missions: 1, recheck_unclear: 0, post_revision_claims: 2, section_vote: false } },
   standard: { label: "Стандарт", budget: 8, words: 1400,
     rs: { max_claims: 8, arbitration_claims: 20, missions: 2, recheck_unclear: 3, post_revision_claims: 4, section_vote: true } },
+  catalog: { label: "Каталог", budget: 20, words: 2000,
+    rs: { catalog: true, max_claims: 12, arbitration_claims: 30, missions: 2, recheck_unclear: 5, post_revision_claims: 4, section_vote: true } },
   deep: { label: "Тщательно", budget: 12, words: 2000,
     rs: { max_claims: 12, arbitration_claims: 30, missions: 2, recheck_unclear: 5, post_revision_claims: 4, section_vote: true } },
 };
@@ -2917,7 +2928,8 @@ $("depth").addEventListener("change", () => {
   const budget = Number(depthBase.budget) || 0;
   $("budget").value = !cheap && budget > d.budget ? depthBase.budget : d.budget;
   const rs = researchTuned;
-  $("depthHint").textContent = `${noLimit() ? "вариант без ограничения длины" : `вариант до ${$("researchWords").value} слов`}`
+  $("depthHint").textContent = (rs.catalog ? `Каталог: число проверок и утверждений у автора программа посчитает по числу объектов в задании × «фактов на объект» (${base.facts_per_object || 1}; до 100 проверок), не меньше значений ниже. ` : "")
+    + `${noLimit() ? "вариант без ограничения длины" : `вариант до ${$("researchWords").value} слов`}`
     + ` · утверждений у автора до ${rs.max_claims} · проверка ${rs.arbitration_claims} утв. · второй поиск ${rs.recheck_unclear}`
     + ` · бюджет $${$("budget").value}. Правила «известно» не ослабляются.`
     + (lower.length ? ` Ниже ваших настроек: ${lower.join("; ")}.` : "");

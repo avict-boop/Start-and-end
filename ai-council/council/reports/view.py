@@ -408,6 +408,11 @@ class View:
                      f"; цитат найдено на страницах {lk.get('quotes_found', 0)} из {lk.get('quotes_checked', 0)}"
                      + (f" (засчитано по цитате {lk['rescued']})" if lk.get("rescued") else "")
                      + (f" (снято — цитаты на странице нет: {lk['dropped']})" if lk.get("dropped") else ""))
+        oc = self.ledger.get("objects") or {}
+        if oc.get("total"):  # охват объектов задания
+            line += (f"; объектов задания {oc['total']}: проверены {oc['checked']}, подтверждены {oc.get('confirmed', 0)}"
+                     + (f"; не проверены: {', '.join(oc['missing'][:15])}{' …' if len(oc['missing']) > 15 else ''}"
+                        if oc.get("missing") else " — все"))
         return line
 
     def research_list(self, key: str) -> list[dict[str, Any]]:

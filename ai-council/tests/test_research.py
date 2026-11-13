@@ -327,3 +327,56 @@ def test_no_length_limit_switch_is_not_lost():
     assert cfg.research.max_words == 0
     long = R.check_length(R.ResearchProposal(title="t", summary="слово " * 5000), 0, 1.5)
     assert long.summary
+
+
+def test_objects_of_the_request_are_matched_covered_and_checked_first():
+    objs = ["山东禹王制药有限公司 / Shandong Yuwang Pharmaceutical", "威海百合生物技术股份有限公司 / Weihai Baihe",
+            "广东青云山药业有限公司 / Guangdong Qingyunshan"]
+    assert "山东禹王制药" in R.object_keys(objs[0]) and "yuwang" in R.object_keys(objs[0])
+    assert "pharmaceutical" not in R.object_keys(objs[0])  # общие слова не считаются признаком
+
+    def prop(*texts):
+        return R.ResearchProposal(title="t", summary="текст " * 50,
+                                  claims=[R.RClaim(text=t, source_leads=["https://x.example/a"]) for t in texts])
+
+    p = prop("Yuwang выпускает softgel для сторонних брендов", "威海百合 работает по OEM")
+    assert R.missing_objects(p, objs) == [objs[2]]
+    with pytest.raises(ValueError, match="Qingyunshan"):
+        R.check_objects(p, objs, 1, 10)
+    assert R.check_objects(p, objs, 1, 1) is p  # объектов больше, чем утверждений — не требуем невозможного
+    # на проверку сначала идут факты о каждом объекте, даже если их «важность» ниже
+    a = R.number_claims("A", prop("Общий факт о рынке БАД 1", "Общий факт о рынке БАД 2", "Общий факт о рынке БАД 3",
+                                  "Yuwang выпускает softgel", "Baihe работает по OEM", "Qingyunshan выпускает таблетки"))
+    sel, _ = R.prepare_claims({"A": a}, {}, 3, objects=objs, facts_per_object=1)
+    assert {c.get("object") for c in sel} == set(objs)
+    led = {"claims": [{"id": c["id"], "text": c["text"], "status": "confirmed"} for c in sel[:2]]}
+    oc = R.object_coverage(objs, led)
+    assert oc["total"] == 3 and oc["checked"] == 2 and oc["missing"] == [objs[2]]
+
+
+def test_research_with_listed_objects_runs_and_reports_coverage():
+    import json as _json
+    from council.mock import MockClient
+
+    class Objs(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.retries = 0
+
+        async def complete(self, model, messages, **kw):
+            st = (kw.get("meta") or {}).get("stage")
+            if st == "proposal" and any("objects the request requires" in (m.get("content") or "") for m in messages):
+                self.retries += 1
+            comp = await super().complete(model, messages, **kw)
+            if st == "framing":
+                d = _json.loads(comp.text)
+                d["objects"] = ["Alphacorp Foods", "Betamax Nutrition"]
+                comp.text = _json.dumps(d, ensure_ascii=False)
+            return comp
+
+    c = Objs()
+    cfg = make_cfg(mode="research", research={"catalog": True, "facts_per_object": 2})
+    res = run(Council(cfg, c, seed=4).run("Проверь компании Alphacorp Foods и Betamax Nutrition"))
+    led = (res.research or {}).get("ledger") or {}
+    assert c.retries >= 1  # авторов без фактов об объектах попросили добавить
+    assert led.get("objects", {}).get("total") == 2

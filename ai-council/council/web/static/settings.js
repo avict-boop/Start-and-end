@@ -254,11 +254,13 @@ function renderSettings() {
          ["rDecisive", "check_decisive_private", "Решающее «непубличное» — проверять", "автор мог ошибиться с меткой: правообладатель и регистрация часто публичны — один публичный поиск"],
          ["rSemantic", "semantic_audit", "Теневая сверка смысла «известно»", "одна модель без поиска проверяет, следует ли каждый пункт из своей опоры; только показывается, статус не меняет (центы)"],
          ["rQuote", "quote_check", "Искать цитату на странице", "поиск приводит дословную фразу источника, программа находит её на самой странице; для важного утверждения не нашлась — не засчитано (бесплатно)"],
-         ["rLinks", "link_check", "Проверять ссылки", "открыть каждую ссылку реестра: мёртвая ничего не подтверждает"]].map(([id, k, t, h]) =>
+         ["rLinks", "link_check", "Проверять ссылки", "открыть каждую ссылку реестра: мёртвая ничего не подтверждает"],
+         ["rObjects", "object_coverage", "Обязательный охват объектов задания", "если в задании список объектов (компании, продукты): автор без фактов о каком-то из них получает вариант назад, а на проверку сначала идут факты о каждом объекте. Без списка ничего не делает"]].map(([id, k, t, h]) =>
         `<label class="switch"><input type="checkbox" id="${id}" data-r="${k}" ${d.research[k] ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>${t}</b><small>${h}</small></span></label>`).join("")}
       <div class="row2" style="margin-top:.6rem">
         <label class="field"><span>Поисковых заданий (подтвердить / опровергнуть)</span><input type="number" id="rMissions" data-rn="missions" min="1" max="2" value="${d.research.missions}" ${ro}></label>
-        <label class="field"><span>Утверждений на проверку</span><input type="number" id="rClaims" data-rn="arbitration_claims" min="3" max="30" value="${d.research.arbitration_claims}" ${ro}></label>
+        <label class="field"><span>Фактов на объект</span><input type="number" data-rn="facts_per_object" min="1" max="5" value="${d.research.facts_per_object ?? 1}" ${ro}><small class="hint">при охвате объектов: сколько разных фактов о каждом объекте проверять в первую очередь; «Каталог» считает проверки как объекты × это число</small></label>
+        <label class="field"><span>Утверждений на проверку</span><input type="number" id="rClaims" data-rn="arbitration_claims" min="3" max="100" value="${d.research.arbitration_claims}" ${ro}></label>
         <label class="field"><span>Авторов с поиском по умолчанию (исследование)</span><input type="number" id="rScouts" data-rn="fresh_scouts" min="0" max="2" value="${d.research.fresh_scouts}" ${ro}>
           <div class="muted small">начальное значение «Свежих данных» на экране вопроса в исследовании — вместе с участниками, у которых поиск включён в «Моделях»; для вопроса меняется там. 0 — независимо и дешевле</div></label>
         <label class="field"><span>Длина варианта, слов</span><input type="number" id="rWords" data-rn="max_words" min="0" max="5000" step="100" value="${d.research.max_words}" ${ro}><small class="hint">0 — без ограничения длины (или от 300)</small>
@@ -269,7 +271,7 @@ function renderSettings() {
         <label class="field"><span>Новые утверждения после доработки — проверить, до</span><input type="number" data-rn="post_revision_claims" min="0" max="10" value="${d.research.post_revision_claims}" ${ro}></label>
         <label class="field"><span>Фрагмент страницы — не подтверждение</span>
           <select data-rs="snippet_rule" ${ro}>${[["critical", "для спорных и быстро меняющихся"], ["all", "для всех утверждений"], ["off", "не применять"]].map(([v, t]) => `<option value="${v}" ${d.research.snippet_rule === v ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-        <label class="field"><span>Утверждений в варианте, до</span><input type="number" data-rn="max_claims" min="3" max="30" value="${d.research.max_claims}" ${ro}></label>
+        <label class="field"><span>Утверждений в варианте, до</span><input type="number" data-rn="max_claims" min="3" max="80" value="${d.research.max_claims}" ${ro}></label>
         <label class="field"><span>Строк таблиц в выжимке для доработки</span><input type="number" data-rn="digest_table_rows" min="0" max="40" value="${d.research.digest_table_rows}" ${ro}><small class="hint">таблица чужого варианта идёт в выжимку целиком, до 40 строк; 0 — без таблиц</small></label>
         <label class="field"><span>Предел ответа автора: токенов на слово</span><input type="number" data-rn="author_tokens_per_word" min="0" max="20" step="0.5" value="${d.research.author_tokens_per_word}" ${ro}>
           <div class="muted small">× длина варианта; 0 — общий предел</div></label>
@@ -287,7 +289,7 @@ function renderSettings() {
         <label class="field"><span>Модель-советник</span><input type="text" list="modelList" data-as="model" value="${esc(d.advisor.model)}" ${ro}><div class="muted small">пусто — модель председателя</div></label>
         ${[["dossier_days", "Обзор свежий, дней", "1", "180"], ["max_candidates", "Моделей каталога на выбор", "6", "60"],
            ["question_chars", "Знаков вопроса видит советник", "2000", "200000"], ["history_min_sessions", "Ваша история — довод, с заседаний", "1", "100"],
-           ["max_arbitration_claims", "Потолок «утверждений на проверку»", "3", "30"], ["max_words_cap", "Потолок длины варианта, слов", "300", "5000"]].map(([k, t, mn, mx]) =>
+           ["max_arbitration_claims", "Потолок «утверждений на проверку»", "3", "100"], ["max_words_cap", "Потолок длины варианта, слов", "300", "5000"]].map(([k, t, mn, mx]) =>
           `<label class="field"><span>${t}</span><input type="number" data-an="${k}" min="${mn}" max="${mx}" value="${d.advisor[k]}" ${ro}></label>`).join("")}
       </div>
       <h2 style="margin-top:1.2rem">Голосовые сообщения</h2>

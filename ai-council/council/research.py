@@ -64,6 +64,17 @@ class ResearchFraming(Framing):
     subquestions: list[str] = Field(default_factory=list)
     lenses: list[str] = Field(default_factory=list)
     input_gaps: list[str] = Field(default_factory=list)
+    objects: list[str] = Field(default_factory=list)  # объекты, которые задание велит охватить (компании, продукты…)
+
+    @field_validator("objects", mode="before")
+    @classmethod
+    def _objs(cls, v: Any) -> list[str]:
+        out: list[str] = []
+        for x in v if isinstance(v, list) else to_list(v):
+            t = to_text(_pick(x, "name", "object", "title", "text") if isinstance(x, dict) else x).strip()
+            if t and t not in out:
+                out.append(t[:200])
+        return out[:150]
 
     @field_validator("as_of", "scope", mode="before")
     @classmethod
@@ -479,10 +490,15 @@ User question:
 5. "subquestions": 3-5 subquestions that together cover the research question (a checklist, not separate tasks).
 6. "lenses": {lenses} different angles for independent authors, adapted to this topic, e.g. first-hand data and
    market facts; technology and constraints; economics and calculations; methodology skeptic / pre-mortem.
+7. "objects": if the user GIVES a list of specific objects that every answer must cover (companies, products,
+   brands, sites, categories — e.g. a table of candidates to check), copy each one as a short identifying name
+   that appears in the request (keep the original-language name and the English name, e.g.
+   "山东禹王制药 / Shandong Yuwang"). Only objects the user listed — not ones the council should find. Empty list if
+   the request has no such list. At most 150.
 
 JSON format:
 {{"refined_question": "...", "criteria": ["..."], "requirements": ["..."], "as_of": "...", "scope": "...",
-  "subquestions": ["...", "..."], "lenses": ["...", "..."], "input_gaps": ["..."]}}"""
+  "subquestions": ["...", "..."], "lenses": ["...", "..."], "input_gaps": ["..."], "objects": ["..."]}}"""
 
 
 def _claims_rule(max_claims: int) -> str:
@@ -964,9 +980,69 @@ def _same_claim(a: tuple, b: tuple) -> bool:
     return len(a[2] & b[2]) / len(a[2] | b[2]) >= 0.8
 
 
+_OBJ_SPLIT_RE = re.compile(r"\s*(?:/|\||;|\(|\)|（|）|,|，)\s*")
+_OBJ_STOP = {"co", "ltd", "inc", "group", "company", "limited", "corp", "corporation", "the", "and", "biotech",
+             "biotechnology", "pharmaceutical", "health", "technology", "biological", "bio", "science"}
+
+
+def object_keys(obj: str) -> list[str]:
+    """Признаки объекта для поиска в утверждениях: китайское имя (и его начало без «有限公司»), английские слова."""
+    keys: list[str] = []
+    for part in _OBJ_SPLIT_RE.split(obj):
+        part = part.strip().lower()
+        if not part:
+            continue
+        if re.search(r"[\u4e00-\u9fff]", part):
+            cjk = re.sub(r"[^\u4e00-\u9fff]", "", part)
+            cjk = re.sub(r"(股份)?有限(责任)?公司$|集团$", "", cjk)
+            for k in (cjk, cjk[:4] if len(cjk) > 4 else ""):
+                if len(k) >= 2 and k not in keys:
+                    keys.append(k)
+        else:
+            for w in re.findall(r"[a-zа-яё0-9][a-zа-яё0-9\-]{2,}", part):
+                if w not in _OBJ_STOP and len(w) >= 4 and w not in keys:
+                    keys.append(w)
+    return keys
+
+
+def mentions(obj_keys: list[str], text: str) -> bool:
+    low = text.lower()
+    return any(k in low for k in obj_keys)
+
+
+def missing_objects(p: Any, objects: list[str]) -> list[str]:
+    """Объекты задания, о которых в утверждениях варианта ничего нет."""
+    texts = [f"{c.text} {getattr(c, 'entity', '')}" for c in getattr(p, "claims", None) or []]
+    out = []
+    for obj in objects:
+        ks = object_keys(obj)
+        if ks and not any(mentions(ks, t) for t in texts):
+            out.append(obj)
+    return out
+
+
+def check_objects(p: Any, objects: list[str], facts: int, max_claims: int) -> Any:
+    """Обязательный охват: если о каких-то объектах задания нет утверждений — вариант назад с их списком."""
+    if not objects:
+        return p
+    need = facts if len(objects) * facts <= max_claims else 1 if len(objects) <= max_claims else 0
+    if not need:
+        return p
+    miss = missing_objects(p, objects)
+    if miss:
+        raise ValueError(
+            f'"claims" contain no facts about {len(miss)} of the {len(objects)} objects the request requires: '
+            + "; ".join(miss[:40]) + (" …" if len(miss) > 40 else "")
+            + f". Add {need} checkable claim(s) about EACH of them (one fact about one object per claim, with a direct "
+            f"link in source_leads), within the limit of {max_claims} claims — shorten other claims if needed. If "
+            "nothing could be found about an object, say so in the text. Reply with the full JSON again")
+    return p
+
+
 def prepare_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, Any], limit: int, *, n_subq: int = 0,
                    dedupe: bool = True, defer_private: bool = True, coverage_first: bool = True,
-                   check_decisive_private: bool = True) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                   check_decisive_private: bool = True, objects: list[str] | None = None,
+                   facts_per_object: int = 1) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Что проверять поиском — и что сразу в «неизвестно».
 
     1. Дубли разных авторов склеиваются (проверяются один раз; статус получат все копии — «dup_ids»).
@@ -1020,6 +1096,15 @@ def prepare_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, 
         if c["id"] not in seen and len(out) < limit:
             out.append(c)
             seen.add(c["id"])
+    if objects:  # сначала каждый объект задания — по facts_per_object разных фактов
+        for obj in objects:
+            ks = object_keys(obj)
+            if not ks:
+                continue
+            for c in [c for c in pool if c["id"] not in seen and mentions(ks, f"{c['text']} {c.get('entity', '')}")][
+                    :facts_per_object]:
+                c["object"] = obj
+                take(c)
     if coverage_first:
         for q in [f"Q{i}" for i in range(1, n_subq + 1)]:  # по утверждению на подвопрос
             c = next((c for c in pool if q in c["subquestions"] and c["id"] not in seen), None)
@@ -1033,6 +1118,19 @@ def prepare_claims(proposals: dict[str, ResearchProposal], critiques: dict[str, 
     for c in pool:
         take(c)
     return out, deferred
+
+
+def object_coverage(objects: list[str], ledger: dict[str, Any]) -> dict[str, Any]:
+    """Охват объектов задания проверкой по источникам: о каких объектах есть проверенные утверждения, о каких — нет."""
+    claims = [c for c in ledger.get("claims", []) if not c.get("duplicate_of")]
+    checked, confirmed, missing = [], [], []
+    for obj in objects:
+        ks = object_keys(obj)
+        mine = [c for c in claims if mentions(ks, f"{c.get('text', '')} {c.get('entity', '')}")] if ks else []
+        (checked if mine else missing).append(obj)
+        if any(c.get("status") == "confirmed" for c in mine):
+            confirmed.append(obj)
+    return {"total": len(objects), "checked": len(checked), "confirmed": len(confirmed), "missing": missing}
 
 
 _LEAD_URL_RE = re.compile(r"https?://[^\s\]\)>\"'<,;]+")

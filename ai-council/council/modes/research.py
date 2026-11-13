@@ -86,6 +86,18 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
     sess._emit("framing", refined_question=refined, criteria=criteria, requirements=sess.requirements,
                scope=scope, as_of=as_of, subquestions=subq, lenses=lenses)
     req = sess.requirements or None
+    objects = (fr.objects if fr else [])[:150]
+    if objects and rc.catalog:  # «Каталог»: проверок и утверждений — по числу объектов
+        want = len(objects) * rc.facts_per_object
+        rc = rc.model_copy(update={"arbitration_claims": max(rc.arbitration_claims, min(100, want)),
+                                   "max_claims": max(rc.max_claims, min(80, want + 3))})
+    if objects:
+        log.info("%sобъектов в задании: %d (охват %s, фактов на объект %d, проверок %d, утверждений у автора %d)",
+                 sess._tag, len(objects), "вкл" if rc.object_coverage else "выкл", rc.facts_per_object,
+                 rc.arbitration_claims, rc.max_claims)
+        sess._emit("objects", count=len(objects), objects=objects, coverage=rc.object_coverage,
+                   facts=rc.facts_per_object, checks=rc.arbitration_claims, max_claims=rc.max_claims)
+    cover_objects = objects if rc.object_coverage else []
     rhead = R.research_head(refined, question, req, scope, as_of, subq)
     sess.head = rhead  # одинаковое начало всех запросов — его кэширует провайдер
 
@@ -106,11 +118,14 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
     def fit(p: Proposal, stage: str, name: str) -> Proposal:
         """Слишком длинный вариант — на сокращение (если включено), но один раз: второй ответ принимается как
         есть (12.11 gemini на доработке дважды сокращал 3888 → 2704 слов: +$0,4 и 7 минут ожидания всего совета).
-        Уже оплаченный ответ из журнала не переспрашивается."""
+        Уже оплаченный ответ из журнала не переспрашивается. Охват объектов задания — тоже один раз."""
         k = (stage, name)
         tries[k] = tries.get(k, 0) + 1
-        if rc.shorten_long and not sess._replaying and tries[k] <= min(1, sess.cfg.json_retries):
-            return R.check_length(p, rc.max_words, rc.long_factor)
+        if not sess._replaying and tries[k] <= min(1, sess.cfg.json_retries):
+            if cover_objects:
+                R.check_objects(p, cover_objects, rc.facts_per_object, rc.max_claims)
+            if rc.shorten_long:
+                return R.check_length(p, rc.max_words, rc.long_factor)
         return p
 
     got = await sess._parallel("proposal", {
@@ -160,7 +175,7 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
         selected, deferred = R.prepare_claims(  # type: ignore[arg-type]
             proposals, critiques, rc.arbitration_claims, n_subq=len(subq), dedupe=rc.dedupe_claims,
             defer_private=rc.defer_private, coverage_first=rc.coverage_first,
-            check_decisive_private=rc.check_decisive_private)
+            check_decisive_private=rc.check_decisive_private, objects=objects, facts_per_object=rc.facts_per_object)
         if selected:
             results = await search(sess, R, refined, as_of, scope, selected, rc, "arbitration")
             ledger = make_ledger(sess, R, selected, results, rc, deferred)
@@ -258,6 +273,13 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
     if flags:
         ballot_notes = "ballots strongly diverging from the others: " + ", ".join(
             f"{n} ({'; '.join(FLAG_NAME[f] for f in fl['flags'])})" for n, fl in flags.items())
+
+    # охват объектов задания проверкой по источникам — в реестр (отчёт и сайт покажут, кого не проверили)
+    if objects and ledger is not None:
+        ledger["objects"] = R.object_coverage(objects, ledger)
+        oc = ledger["objects"]
+        log.info("%sохват объектов: %d из %d проверены, подтверждены %d; не проверены: %s", sess._tag, oc["checked"],
+                 oc["total"], oc["confirmed"], "; ".join(oc["missing"][:20]) or "—")
 
     # 6. Синтез: «известно / спорно / неизвестно»
     sess._emit("stage", stage="verdict", title="Синтез исследования")
