@@ -166,6 +166,11 @@ class Council:
         self.cfg = config
         self.client = client
         self.on_event = on_event or (lambda *a, **k: None)
+        if seed is None and session_id:
+            # порядок меток и вариантов у судей — тот же при продолжении и «Доделать»: иначе запросы отличаются
+            # от сохранённых, и все этапы оплачиваются заново (12.11 «Доделать» прогнал всё заседание ещё раз)
+            import zlib
+            seed = zlib.crc32(session_id.encode("utf-8"))
         self.rng = random.Random(seed)
         self.seed = seed
         # своя температура для этапов режима (например, «Креатив»: выше на предложениях и доработке)

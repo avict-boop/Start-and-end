@@ -710,3 +710,36 @@ def test_chair_with_search_checks_at_verdict_only_to_verify():
         v = [x for x in c.seen if x[0] == "verdict"]
         assert v and all(w and "ONLY to verify" in t for _, _, w, t in v), mode
         assert not any(w for st, who, w, _ in c.seen if who == "a" and st in ("proposal", "revision"))
+
+
+def test_order_is_reproducible_for_the_same_session_without_seed():
+    # продолжение и «Доделать» должны задавать те же запросы, что и в первый раз — иначе сохранённое не подходит
+    from council.mock import MockClient
+    cfg = make_cfg()
+    a = Council(cfg, MockClient(delay=0), session_id="20261112-215817-x")
+    b = Council(cfg, MockClient(delay=0), session_id="20261112-215817-x")
+    assert [a.rng.random() for _ in range(3)] == [b.rng.random() for _ in range(3)]
+
+
+def test_search_requests_are_not_cut_for_silence(monkeypatch):
+    # с поиском модель молчит, пока идут поиск и чтение страниц: это не зависание
+    import asyncio as aio
+    import httpx
+    import council.client as cl
+    monkeypatch.setattr(cl, "STALL_S", 0.05)
+
+    def handler(req):
+        class Quiet(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                yield b'data: {"choices":[{"delta":{"reasoning":"searching"}}]}\n\n'
+                for _ in range(15):
+                    await aio.sleep(0.01)
+                    yield b": OPENROUTER PROCESSING\n\n"
+                yield b'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'
+                yield b'data: {"usage":{"prompt_tokens":1,"completion_tokens":1,"cost":0}}\n\ndata: [DONE]\n\n'
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Quiet())
+
+    c = cl.OpenRouterClient("k", transport=httpx.MockTransport(handler), max_retries=0, retry_base_delay=0)
+    c.stream = True
+    comp = aio.run(c.complete("x/y", [], temperature=0, max_tokens=10, web_search=True))
+    assert comp.text == "ok"

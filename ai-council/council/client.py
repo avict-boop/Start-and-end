@@ -495,7 +495,9 @@ class OpenRouterClient:
                     except ValueError as e:
                         raise _Retryable("ответ не JSON") from e
                     return self._from_json(data, model)
-                return await self._from_stream(resp, model, report, started)
+                # с поиском и чтением страниц модель надолго замолкает: идут поиск и чтение найденного (12.11
+                # gemini с поиском обрывался на всех 4 попытках) — там действуют только общие пределы времени
+                return await self._from_stream(resp, model, report, started, stall=not payload.get("tools"))
         except httpx.TransportError as e:
             raise _Retryable(f"сетевая ошибка: {e.__class__.__name__}") from e
 
@@ -521,7 +523,7 @@ class OpenRouterClient:
         }
 
     async def _from_stream(self, resp: httpx.Response, model: str, report: ProgressFn,
-                           started: float) -> dict[str, Any]:
+                           started: float, stall: bool = True) -> dict[str, Any]:
         text: list[str] = []
         chars = reasoning_chars = 0
         finish = None
@@ -540,7 +542,7 @@ class OpenRouterClient:
                 raise _Retryable(f"ответ идёт слишком долго (более {int(self.timeout * 3)} с)")
             if chars + reasoning_chars > seen:
                 seen, moved = chars + reasoning_chars, now
-            elif seen and now - moved > STALL_S:
+            elif stall and seen and now - moved > STALL_S:
                 # только если модель уже начала присылать текст или рассуждения и замолчала. Модели OpenAI
                 # рассуждения не показывают: до первого слова у них молчание — норма, это не зависание
                 # (12.11 так chatgpt потерял критику и доработку: все 4 попытки обрывались на 150 с)
