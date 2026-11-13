@@ -1124,7 +1124,7 @@ class CouncilBot:
                 except (asyncio.CancelledError, Exception) as e:  # noqa: BLE001 — любая остановка = пауза
                     updater.cancel()
                     reason, message = classify(e)
-                    if isinstance(e, CouncilError) or reason in ("credits", "stopped"):
+                    if isinstance(e, CouncilError) or reason in ("credits", "stopped", "key_limit", "budget"):
                         log.warning("заседание %s приостановлено (%s): %s", stem, reason, message)
                     else:
                         log.exception("заседание %s упало", stem)

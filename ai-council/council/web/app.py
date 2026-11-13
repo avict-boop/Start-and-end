@@ -816,7 +816,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                         log.warning("заседание %s: сбои участников: %s", sid, failures)
                 except (asyncio.CancelledError, Exception) as e:  # noqa: BLE001 — любая остановка = пауза
                     reason, message = classify(e)
-                    if isinstance(e, CouncilError) or reason in ("credits", "stopped"):
+                    # бюджет, лимит ключа, баланс и ручная пауза — штатные остановки, а не сбой программы
+                    if isinstance(e, CouncilError) or reason in ("credits", "stopped", "key_limit", "budget"):
                         log.warning("заседание %s приостановлено (%s): %s", sid, reason, message)
                     else:
                         log.exception("заседание %s упало", sid)
