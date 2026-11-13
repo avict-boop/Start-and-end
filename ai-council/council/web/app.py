@@ -849,9 +849,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     st.council = council
                     council.allow_split = bool(sp.get("allow_split")) and not (sp.get("request") or {}).get("series")
-                    council.fixed_objects = [str(o) for o in sp.get("objects") or []]
-                    if sp.get("inherit"):  # сводный отчёт серии: проверенное в частях
-                        council.inherited = await asyncio.to_thread(load_inherited, sp["inherit"])
+                    # часть серии: свои объекты; сводка: реестры частей (общее с ботом — council/series.apply_spec)
+                    await asyncio.to_thread(SR.apply_spec, council, sp, archive())
                     if journal.replayable or journal.loose:
                         st.push({"type": "resumed", "replayable": journal.replayable or len(journal.loose),
                                  "spent": round(journal.spent, 4)})
@@ -1023,18 +1022,6 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             except HTTPException as e:
                 log.warning("серия %s: сводный отчёт не запустился: %s", series_id, e.detail)
 
-    def load_inherited(items: list[Any]) -> list[tuple[int, dict[str, Any]]]:
-        out = []
-        for n, sid in items:
-            try:
-                d = archive().load(sid)
-            except (KeyError, OSError, ValueError):
-                continue
-            led = (d.get("research") or {}).get("ledger") or {}
-            if led:
-                out.append((int(n), led))
-        return out
-
     def part_state(sid: str) -> dict[str, Any]:
         """Что с заседанием части сейчас: ждёт / идёт / готово / на паузе — по самому заседанию."""
         if not sid:
@@ -1057,8 +1044,11 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                   **part_state(p["session_id"])} for p in s["parts"]]
         summ = {"session_id": s.get("summary_id", ""), **part_state(s.get("summary_id", ""))} if s.get("summary_id") else None
         done = sum(1 for p in parts if p["status"] == "done")
-        status = ("summary" if summ and summ["status"] != "done" else "done" if summ and summ["status"] == "done"
-                  else "running" if s["id"] in series_tasks and not series_tasks[s["id"]].done()
+        busy = s["id"] in series_tasks and not series_tasks[s["id"]].done()
+        status = ("done" if summ and summ["status"] == "done"
+                  else "summary" if summ and summ["status"] in ("running", "queued")
+                  else "running" if busy
+                  else "stopped" if summ  # сводка на паузе / прервана / удалена — «Продолжить серию» или «Свести»
                   else "ready" if done == len(parts) else "stopped")
         return {"id": s["id"], "title": s["title"], "created": s["created"], "max_parallel": s["max_parallel"],
                 "auto_summary": s["auto_summary"], "origin": s.get("origin", ""), "parts": parts, "summary": summ,
@@ -1090,6 +1080,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         s = SR.load(rd, series_id)
         if not s:
             return
+        series_wait.pop(series_id, None)  # прежняя причина ожидания / сбоя части — с нового запуска не актуальна
         sem = asyncio.Semaphore(s["max_parallel"])
         log.info("серия %s: старт (%d частей, одновременно до %d)", series_id, len(s["parts"]), s["max_parallel"])
         active: set[int] = set()
@@ -1106,11 +1097,12 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     break
                 if not told:
                     told = True
-                    series_wait[series_id] = (f"на балансе ${left:.2f} — меньше лимитов двух частей "
-                                              f"(${part_budget:g} каждая): части идут по одной")
+                    series_wait[series_id] = (f"на балансе ${left:.2f} — меньше лимитов идущих частей и следующей "
+                                              f"(${part_budget:g} каждая): следующая часть ждёт, пока идущая закончит")
                     log.info("серия %s, часть %d: ждёт — %s", series_id, n, series_wait[series_id])
                 await asyncio.sleep(getattr(app.state, "funds_poll", 30))
-            series_wait.pop(series_id, None)
+            if told:
+                series_wait.pop(series_id, None)
 
         async def one(n: int) -> None:
             async with sem:
@@ -1118,6 +1110,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 active.add(n)
                 try:
                     await one_part(n)
+                except Exception as e:  # noqa: BLE001 — одна часть не остановит остальные, но причина — в журнал
+                    log.warning("серия %s, часть %d: не запустилась: %s", series_id, n,
+                                getattr(e, "detail", None) or e)
+                    series_wait[series_id] = f"часть {n} не запустилась: {getattr(e, 'detail', None) or e}"[:300]
                 finally:
                     active.discard(n)
 
@@ -1158,7 +1154,14 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         s = SR.load(rd, series_id) or s
         v = series_view(s)
         log.info("серия %s: части готовы %d из %d", series_id, v["done"], v["total"])
-        if s["auto_summary"] and not s.get("summary_id") and v["done"] == v["total"]:
+        summ_id = s.get("summary_id") or ""
+        if summ_id and summ_id not in runs and await asyncio.to_thread(Checkpoint.load, rd, summ_id):
+            try:  # сводка встала на паузу — «Продолжить серию» продолжает и её (оплаченное не повторяется)
+                await resume_session(summ_id)
+            except HTTPException as e:
+                log.warning("серия %s: сводный отчёт не продолжился: %s", series_id, e.detail)
+            return
+        if s["auto_summary"] and not summ_id and v["done"] == v["total"]:
             try:
                 await start_summary(series_id)
             except HTTPException as e:
@@ -1220,6 +1223,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         s = SR.load(rd, series_id)
         if not s:
             raise HTTPException(404, "серия не найдена")
+        if s.get("summary_id") and part_state(s["summary_id"])["status"] not in ("missing", "error", "cancelled"):
+            return s["summary_id"]  # сводка уже есть (идёт, на паузе или готова) — вторую не создаём
         done = [(p, p["session_id"]) for p in s["parts"] if p["session_id"] and archive().exists(p["session_id"])]
         if not done:
             raise HTTPException(400, "нет ни одной готовой части")
@@ -1322,8 +1327,11 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         s = SR.load(runs_dir(base_config()), series_id)
         if not s:
             raise HTTPException(404, "серия не найдена")
-        if s.get("summary_id") and part_state(s["summary_id"])["status"] in ("running", "done"):
+        st0 = part_state(s["summary_id"])["status"] if s.get("summary_id") else ""
+        if st0 in ("running", "done"):
             raise HTTPException(409, "сводный отчёт уже есть")
+        if st0 in ("paused", "interrupted"):
+            raise HTTPException(409, "сводный отчёт на паузе — нажмите «Продолжить серию» (оплаченное не повторится)")
         return {"id": await start_summary(series_id)}
 
     @app.post("/api/search-test")

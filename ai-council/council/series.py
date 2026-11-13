@@ -133,3 +133,19 @@ def settings_for(n_objects: int, facts: int, base_checks: int, base_claims: int)
     """Настройки части: проверок = объекты × фактов на объект (до 100), утверждений у автора — столько же + 3."""
     want = n_objects * max(1, facts)
     return {"arbitration_claims": max(base_checks, min(100, want)), "max_claims": max(base_claims, min(80, want + 3))}
+
+
+def apply_spec(council: Any, spec: dict[str, Any], archive: Any) -> None:
+    """Что заседание серии берёт из своего «паспорта» — одинаково на сайте и в Telegram-боте (бот тоже умеет
+    продолжать приостановленные заседания сайта): объекты части задаёт программа, сводке — реестры частей."""
+    council.fixed_objects = [str(o) for o in spec.get("objects") or []]
+    inherited = []
+    for n, sid in spec.get("inherit") or []:
+        try:
+            d = archive.load(sid)
+        except (KeyError, OSError, ValueError):
+            continue
+        led = (d.get("research") or {}).get("ledger") or {}
+        if led:
+            inherited.append((int(n), led))
+    council.inherited = inherited

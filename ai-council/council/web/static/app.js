@@ -18,7 +18,8 @@ const LINK_BADGE = { dead: ' <span class="badge bad">ссылка не откр�
   error: ' <span class="badge plain">не открылась при проверке</span>',
   refused: ' <span class="badge bad" title="Ссылка ведёт внутрь сети сервера — такие адреса не открываются">внутренний адрес</span>' };
 const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения",
-  factcheck: "Проверка фактов", arbitration: "Проверяем утверждения по источникам", recheck: "Проверяем новые утверждения" };
+  factcheck: "Проверка фактов", arbitration: "Проверяем утверждения по источникам", recheck: "Проверяем новые утверждения",
+  split: "Разбиение задания на части" };
 // что происходит на этапе — простыми словами
 const STAGE_HINT = {
   framing: "председатель уточняет вопрос и критерии",
@@ -1094,7 +1095,8 @@ async function loadArchive() {
 }
 
 const SERIES_STATUS = { running: "идёт", summary: "совет сводит", done: "готова", ready: "части готовы", stopped: "остановлена" };
-const PART_STATUS = { queued: "в очереди", running: "идёт", done: "готова", paused: "на паузе", error: "ошибка", missing: "нет данных" };
+const PART_STATUS = { queued: "в очереди", running: "идёт", done: "готова", paused: "на паузе", interrupted: "прервана (перезапуск)",
+  error: "ошибка", cancelled: "остановлена", missing: "нет данных" };
 
 async function loadSeriesList(show) {
   let box = $("seriesList");
@@ -1146,7 +1148,7 @@ async function renderSeries(id) {
       <td><span class="arc-status ${esc(p.status)}">${esc(PART_STATUS[p.status] || p.status)}</span></td>
       <td>${money(p.cost)}</td></tr>`).join("");
   const sm = v.summary;
-  const canSum = v.done > 0 && (!sm || sm.status === "error" || sm.status === "missing");
+  const canSum = v.done > 0 && (!sm || ["error", "missing", "cancelled"].includes(sm.status));
   const stopped = v.status === "stopped";
   $("serBody").innerHTML = `<section class="card">
       <h2 class="sub-h">Части</h2>

@@ -960,3 +960,4 @@ details[open] > summary .params-edit { visibility: hidden; }
 .split-revise-body { display: grid; gap: .5rem; margin-top: .5rem; }
 .split-revise-body .field { margin-bottom: 0; }
 .split-revise-body #spN { max-width: 8rem; }
+.arc-status.interrupted { background: var(--warn-soft); color: var(--warn); }

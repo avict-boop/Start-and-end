@@ -505,7 +505,7 @@ def test_series_runs_parts_one_by_one_when_funds_are_short(client):
         if v["done"] == 2:
             break
         if v["parts"][1]["status"] == "queued" and v["parts"][0]["status"] == "running":
-            assert "по одной" in v["waiting"]  # страница серии объясняет, почему вторая часть ждёт
+            assert "ждёт, пока идущая закончит" in v["waiting"]  # страница серии объясняет, почему вторая часть ждёт
         _t.sleep(0.1)
     assert v["done"] == 2 and calls  # вторая часть ждала, пока первая закончит
 
@@ -518,3 +518,19 @@ def test_split_can_be_revised_with_more_parts(client):
     assert r.status_code == 200, r.text
     x = r.json()
     assert len(x["parts"]) == 5 and x["checks"]["ok"] and sum(len(p["objects"]) for p in x["parts"]) == 22
+
+
+def test_series_summary_is_never_duplicated(client):
+    objs = ["Alphacorp Foods", "Betamax Nutrition"]
+    r = client.post("/api/series", json={
+        "title": "Одна сводка", "task": "Проверь компании Alphacorp Foods и Betamax Nutrition",
+        "parts": [{"title": "A", "objects": objs[:1]}, {"title": "B", "objects": objs[1:]}],
+        "request": {"mode": "research", "mock": True, "members": ["a", "b", "c"], "chair": "a"},
+        "max_parallel": 2, "auto_summary": True})
+    v = _wait_series(client, r.json()["id"])
+    assert v["status"] == "done"
+    sid = v["summary"]["session_id"]
+    assert client.post(f"/api/series/{v['id']}/summary").status_code == 409  # готовая сводка — вторую не создаём
+    client.post(f"/api/series/{v['id']}/continue")
+    v2 = _wait_series(client, v["id"])
+    assert v2["summary"]["session_id"] == sid and v2["status"] == "done"

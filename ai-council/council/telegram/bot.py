@@ -17,6 +17,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .. import series as SR
 from ..client import LLMClient, OpenRouterClient, ProviderError
 from ..config import CouncilConfig, OverrideError, load_config, with_overrides
 from ..estimate import ModelCatalog, estimate, learn_lengths, parse_pricing, similar_actual, unknown_models, vision_map
@@ -1104,6 +1105,8 @@ class CouncilBot:
                                       stage_out=stage_out, session_id=cp.id, shared_dir=rdir / "notes",
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     council_ref["c"] = council
+                    # продолжение заседания серии с сайта: объекты части и реестры частей — как на сайте
+                    await asyncio.to_thread(SR.apply_spec, council, sp, self.archive)
                     r = self.running.get(chat_id)
                     if r:
                         r.council = council

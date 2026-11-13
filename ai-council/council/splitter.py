@@ -142,14 +142,20 @@ def heuristic_objects(task: str) -> list[str]:
     return []
 
 
+def _norm(s: str) -> str:
+    return re.sub(r"[\s\"'«»“”()（）/|·,，.]+", " ", s.casefold()).strip()
+
+
 def fix_groups(objects: list[str], groups: list[list[str]], per_part: int) -> tuple[list[list[str]], list[str]]:
     """Программа доводит группировку модели до «каждый объект ровно в одной части»; что поправлено — в notes."""
     notes: list[str] = []
     seen: set[str] = set()
     out: list[list[str]] = []
+    canon = {_norm(o): o for o in objects}  # модель могла чуть иначе написать название: пробелы, регистр, кавычки
     for g in groups:
         keep = []
         for o in g:
+            o = o if o in objects else canon.get(_norm(o), o)
             if o not in objects:
                 notes.append(f"убран объект, которого нет в задании: {o}")
             elif o in seen:
@@ -245,7 +251,8 @@ async def plan(task: str, client: Any, model: str | None, *, per_part: int = 8, 
                                          temperature=0.0, max_tokens=4000, json_mode=True)
             miss = Missing.model_validate(parse_json(comp.text)).missing
             low = task.casefold()
-            audit_added = [m.strip() for m in miss if m.strip() and m.strip() not in objects
+            have = {_norm(o) for o in objects}  # «пропущенный» объект, который уже есть в другом написании, — не новый
+            audit_added = [m.strip() for m in miss if m.strip() and _norm(m) not in have
                            and any(w in low for w in re.findall(r"\w{4,}", m.casefold()))][:50]
             objects += audit_added
         except Exception:  # noqa: BLE001

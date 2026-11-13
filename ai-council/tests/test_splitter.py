@@ -68,3 +68,26 @@ def test_replan_without_model_chunks_into_requested_parts():
     objs = [f"Firm{i:02d}" for i in range(1, 11)]
     d = asyncio.run(SP.replan("Задание", None, None, objs, n_parts=5, principle="по размеру"))
     assert len(d["parts"]) == 5 and d["checks"]["ok"] and any("демо" in n for n in d["notes"])
+
+
+def test_apply_spec_gives_part_objects_and_part_ledgers_same_for_web_and_bot():
+    class Arch:
+        def load(self, sid):
+            if sid == "gone":
+                raise KeyError(sid)
+            return {"research": {"ledger": {"claims": [{"id": "A-C1", "status": "confirmed"}], "evidence": []}}}
+
+    class C:
+        fixed_objects, inherited = [], []
+
+    c = C()
+    SR.apply_spec(c, {"objects": ["A Ltd", "B Ltd"], "inherit": [[1, "s1"], [2, "gone"]]}, Arch())
+    assert c.fixed_objects == ["A Ltd", "B Ltd"] and [n for n, _ in c.inherited] == [1]
+    SR.apply_spec(c, {}, Arch())  # обычное заседание: ничего лишнего
+    assert c.fixed_objects == [] and c.inherited == []
+
+
+def test_fix_groups_accepts_slightly_different_spelling():
+    objs = ["山东禹王制药 / Shandong Yuwang", "Weihai Baihe (威海百合)"]
+    groups, notes = SP.fix_groups(objs, [["山东禹王制药/Shandong Yuwang", "weihai baihe  （威海百合）"]], 8)
+    assert groups == [objs] and not notes  # то же название в другом написании — не «лишний» объект
