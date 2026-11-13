@@ -38,6 +38,15 @@ class MockClient:
         who = meta.get("member", model)
         if meta.get("research"):
             out = _research(stage, who, meta)
+            text = str((messages[-1] or {}).get("content") or "") if messages else ""
+            if stage == "framing":  # демо: объекты задания — строки нумерованной таблицы вопроса
+                from .splitter import heuristic_objects
+                out["objects"] = heuristic_objects(text)
+            if stage == "split":  # демо: председатель делит объекты на части по порядку
+                objs = [ln[2:].strip() for ln in text.split("Use exactly these objects")[-1].splitlines() if ln.startswith("- ")]
+                per = 10
+                out = {"objects": objs, "facts_per_object": 1, "one_session": False, "reason": "демо: много объектов",
+                       "groups": [{"title": f"Пакет {i // per + 1}", "objects": objs[i:i + per]} for i in range(0, len(objs), per)]}
             return Completion(text=json.dumps(out, ensure_ascii=False), prompt_tokens=800, completion_tokens=300,
                               cost=0.001, model=model,
                               citations=["https://example.com/stat", "https://example.org/report"] if stage == "arbitration" else [])

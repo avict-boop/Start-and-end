@@ -78,6 +78,14 @@ def create(runs: Path, *, title: str, task: str, parts: list[dict[str, Any]], re
     return s
 
 
+class SplitRequested(Exception):
+    """Председатель решил разбить большое задание на части серии (исследование останавливается до вариантов)."""
+
+    def __init__(self, plan: dict[str, Any]):
+        super().__init__(f"задание разбито на {len(plan.get('parts') or [])} частей")
+        self.plan = plan
+
+
 # ------------------------------------------------------------------ разбиение без потерь
 
 SCOPE_NOTE = """

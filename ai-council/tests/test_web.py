@@ -395,3 +395,40 @@ def test_series_runs_parts_in_parallel_then_council_summary(client):
     assert led.get("inherited_parts") == [1, 2, 3] and any(c["id"].startswith("P2-") for c in led["claims"])
     assert client.get("/api/sessions").json()["items"][0].get("series")  # части и сводка помечены серией
     assert any(x["id"] == sid for x in client.get("/api/series").json()["items"])
+
+
+def _catalog_question(n):
+    rows = "\n".join(f"| {i} | Company{i:02d} Foods Ltd | Провинция {i} | https://c{i}.example |" for i in range(1, n + 1))
+    return ("Проверь каждую компанию из таблицы по трём фактам.\n\n| № | Компания | Провинция | Сайт |\n|---|---|---|---|\n"
+            + rows)
+
+
+def test_split_plan_keeps_everything_and_checks_coverage(client):
+    q = _catalog_question(22)
+    r = client.post("/api/split", json={"question": q, "request": {"mode": "research", "mock": True}, "per_part": 8,
+                                         "facts": 3})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert len(d["objects"]) == 22 and d["need_split"] and d["checks"]["ok"]
+    assert sum(len(p["objects"]) for p in d["parts"]) == 22 and len(d["parts"]) == 3
+    for p in d["parts"]:
+        assert p["question"].startswith(q.rstrip()) and "Рамка этой части серии" in p["question"]  # задание целиком
+        assert p["settings"]["arbitration_claims"] >= len(p["objects"]) * 3
+
+
+def test_chair_splits_a_big_list_into_a_series(client):
+    import time as _t
+    r = client.post("/api/sessions", json={"question": _catalog_question(23), "mode": "research", "mock": True,
+                                           "members": ["a", "b", "c"], "chair": "a"})
+    sid = r.json()["id"]
+    ev = read_events(client, sid)
+    sp = [e for e in ev if e["type"] == "split_series"]
+    assert sp and sp[0]["parts"] == 3 and sp[0]["objects"] == 23
+    series_id = sp[0]["series"]
+    v = None
+    for _ in range(400):
+        v = client.get(f"/api/series/{series_id}").json()
+        if v["status"] == "done":
+            break
+        _t.sleep(0.25)
+    assert v["status"] == "done" and v["done"] == 3 and v["summary"]["status"] == "done", v

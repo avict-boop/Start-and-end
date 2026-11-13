@@ -197,7 +197,9 @@ class Council:
         self.link_checker = link_checker  # проверка ссылок реестра (в демо и тестах — нет)
         self.page_cache: dict[str, str] = {}
         # сводное заседание серии: реестры частей [(номер части, реестр)] — входят в общий реестр как проверенные
-        self.inherited: list[tuple[int, dict[str, Any]]] = []  # текст страниц, скачанных программой (ссылки авторов) — по адресу
+        self.inherited: list[tuple[int, dict[str, Any]]] = []
+        # можно ли председателю разбить большое задание на серию (не у частей серии и не у сводного отчёта)
+        self.allow_split = False  # текст страниц, скачанных программой (ссылки авторов) — по адресу
         self._replaying = False
         self.forced_labels = dict(labels or {})
         self._seen: dict[tuple[str, str], int] = {}  # (этап, участник) -> сколько обращений уже было

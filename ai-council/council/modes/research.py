@@ -97,6 +97,8 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
                  rc.arbitration_claims, rc.max_claims)
         sess._emit("objects", count=len(objects), objects=objects, coverage=rc.object_coverage,
                    facts=rc.facts_per_object, checks=rc.arbitration_claims, max_claims=rc.max_claims)
+    if objects and rc.auto_split and sess.allow_split and len(objects) > rc.objects_per_part:
+        await split_into_series(sess, chair, question, refined, objects, rc, rmeta)
     cover_objects = objects if rc.object_coverage else []
     rhead = R.research_head(refined, question, req, scope, as_of, subq)
     sess.head = rhead  # одинаковое начало всех запросов — его кэширует провайдер
@@ -441,6 +443,38 @@ async def check_links(sess: Council, R: Any, ledger: dict[str, Any], rc: Any) ->
     R.apply_links(ledger, found, quote_check=rc.quote_check)
     if ledger.get("links"):
         sess._emit("links", **ledger["links"])
+
+
+async def split_into_series(sess: Council, chair: Any, question: str, refined: str, objects: list[str], rc: Any,
+                            rmeta: dict[str, Any]) -> None:
+    """Большой список объектов: председатель группирует объекты по смыслу на части, программа собирает тексты
+    частей (полное задание + рамка части) и проверяет, что каждый объект ровно в одной части. Заседание
+    останавливается до вариантов — дальше серия (council/series.py)."""
+    from .. import series as SR
+    from .. import splitter as SP
+    per = rc.objects_per_part
+    titles: list[str] = []
+    raw: list[list[str]] = []
+    try:
+        p = await sess._ask(chair, "split", SP.split_prompt(question, per, rc.facts_per_object) +
+                            "\n\nUse exactly these objects (same spelling):\n" + "\n".join(f"- {o}" for o in objects),
+                            SP.SplitPlan, meta=rmeta)
+        raw = [g.objects for g in p.groups]
+        titles = [g.title for g in p.groups]
+    except (ProviderError, InvalidResponse) as e:
+        if isinstance(e, OutOfCredits):
+            raise
+        log.warning("%sразбиение председателем не удалось (%s) — ровные части по порядку", sess._tag, e)
+    groups, notes = SP.fix_groups(objects, raw or SR.chunk(objects, per), per)
+    if notes:
+        titles = []
+    parts = SP.build_parts(question, groups, titles, rc.facts_per_object, rc.arbitration_claims, rc.max_claims)
+    plan = {"objects": objects, "facts_per_object": rc.facts_per_object, "parts": parts, "notes": notes,
+            "checks": SR.check_split(objects, groups), "title": refined[:120]}
+    log.info("%sзадание разбито председателем: %d объектов → %d частей (%s)", sess._tag, len(objects), len(parts),
+             ", ".join(str(len(g)) for g in groups))
+    sess._emit("split", parts=[{"title": x["title"], "objects": len(x["objects"])} for x in parts], objects=len(objects))
+    raise SR.SplitRequested(plan)
 
 
 async def read_leads(sess: Council, R: Any, selected: list[dict[str, Any]]) -> dict[str, list[tuple[str, str]]]:

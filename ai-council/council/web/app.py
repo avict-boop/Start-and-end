@@ -35,6 +35,7 @@ from ..session import Council, CouncilError
 from .auth import BasicAuth
 
 log = logging.getLogger("council.web")
+from .. import series as SR  # noqa: E402
 from ..diagnostics import bundle, list_failed, save_events, save_failed, setup_logging, stamp  # noqa: E402
 STATIC = Path(__file__).parent / "static"
 ID_RE = re.compile(r"^[\w\-]{1,120}$", re.U)
@@ -177,6 +178,13 @@ class SeriesRequest(BaseModel):
     request: dict[str, Any] = Field(default_factory=dict)  # настройки запуска, как у одного заседания
     max_parallel: int = Field(default=2, ge=1, le=5)
     auto_summary: bool = True
+
+
+class SplitAsk(BaseModel):
+    question: str = Field(min_length=3)
+    request: dict[str, Any] = Field(default_factory=dict)
+    per_part: int | None = Field(default=None, ge=3, le=40)
+    facts: int | None = Field(default=None, ge=1, le=5)
 
 
 class BudgetRequest(BaseModel):
@@ -823,6 +831,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                       stage_out=stage_out, session_id=sid, shared_dir=runs_dir(cfg) / "notes",
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     st.council = council
+                    council.allow_split = not (sp.get("request") or {}).get("series")
                     if sp.get("inherit"):  # сводный отчёт серии: проверенное в частях
                         council.inherited = await asyncio.to_thread(load_inherited, sp["inherit"])
                     if journal.replayable or journal.loose:
@@ -847,6 +856,22 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     failures = {n: s.failures for n, s in res.stats.items() if s.failures}
                     if failures:
                         log.warning("заседание %s: сбои участников: %s", sid, failures)
+                except SR.SplitRequested as e:  # председатель разбил задание: дальше — серия частей
+                    req0 = {k: v for k, v in (sp.get("request") or {}).items()
+                            if k in RunRequest.model_fields and k not in ("question", "parent", "attachments")}
+                    rs = {**(req0.get("research") or (sp.get("request") or {}).get("research_overrides") or {}),
+                          "catalog": True, "auto_split": False, "facts_per_object": e.plan["facts_per_object"]}
+                    req0 = {**req0, "research": rs, "mode": "research", "budget": council.budget if council else None}
+                    s = await asyncio.to_thread(
+                        SR.create, runs_dir(cfg), title=e.plan["title"] or sp["question"][:120], task=sp["question"],
+                        parts=e.plan["parts"], request={k: v for k, v in req0.items() if v is not None},
+                        max_parallel=2, auto_summary=True, origin=f"split:{sid}")
+                    kick_series(s["id"])
+                    await asyncio.to_thread(cp.remove)
+                    final = "done"
+                    st.push({"type": "split_series", "series": s["id"], "parts": len(e.plan["parts"]),
+                             "objects": len(e.plan["objects"]), "notes": e.plan.get("notes") or []})
+                    log.info("заседание %s: разбито на серию %s (%d частей)", sid, s["id"], len(e.plan["parts"]))
                 except (asyncio.CancelledError, Exception) as e:  # noqa: BLE001 — любая остановка = пауза
                     reason, message = classify(e)
                     # бюджет, лимит ключа, баланс и ручная пауза — штатные остановки, а не сбой программы
@@ -931,7 +956,6 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         return {"id": sid}
 
     # ------------------------------------------------------------ серия заседаний (council/series.py)
-    from .. import series as SR
     series_tasks: dict[str, asyncio.Task] = {}
 
     def load_inherited(items: list[Any]) -> list[tuple[int, dict[str, Any]]]:
@@ -1100,6 +1124,28 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         SR.save(rd, s)
         log.info("серия %s: сводный отчёт %s (частей %d, объектов %d)", series_id, sid, len(done), len(objects))
         return sid
+
+    @app.post("/api/split")
+    async def split_plan(body: SplitAsk) -> dict[str, Any]:
+        """Советник: анализ задания (объекты, факты, пределы режима) и разбиение на части — без запуска."""
+        from .. import splitter as SP
+        req = RunRequest(**{**{k: v for k, v in body.request.items() if k != "question"}, "question": body.question})
+        cfg = build_config(req)
+        client = make_client(cfg, req.mock)
+        model = None if req.mock else (cfg.advisor.model or cfg.member(cfg.chair).model)
+        rc = cfg.research
+        try:
+            out = await SP.plan(body.question, client, model, per_part=body.per_part or rc.objects_per_part,
+                                facts=body.facts or rc.facts_per_object, base_checks=rc.arbitration_claims,
+                                base_claims=rc.max_claims)
+        finally:
+            close = getattr(client, "aclose", None)
+            if close:
+                await close()
+        out["model"] = model or "по правилам (демо)"
+        log.info("разбиение задания: объектов %d, частей %d, проверка %s", len(out["objects"]), len(out["parts"]),
+                 "ок" if out["checks"]["ok"] else out["checks"])
+        return out
 
     @app.post("/api/series")
     async def series_create(body: SeriesRequest) -> dict[str, Any]:
