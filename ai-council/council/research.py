@@ -74,7 +74,7 @@ class ResearchFraming(Framing):
             t = to_text(_pick(x, "name", "object", "title", "text") if isinstance(x, dict) else x).strip()
             if t and t not in out:
                 out.append(t[:200])
-        return out[:150]
+        return out[:300]  # длинный список не обрезается молча: больше «объектов в части» — серия частей
 
     @field_validator("as_of", "scope", mode="before")
     @classmethod
@@ -505,7 +505,7 @@ User question:
    brands, sites, categories — e.g. a table of candidates to check), copy each one as a short identifying name
    that appears in the request (keep the original-language name and the English name, e.g.
    "山东禹王制药 / Shandong Yuwang"). Only objects the user listed — not ones the council should find. Empty list if
-   the request has no such list. At most 150.
+   the request has no such list. At most 300 — list ALL of them, never shorten the list.
 
 JSON format:
 {{"refined_question": "...", "criteria": ["..."], "requirements": ["..."], "as_of": "...", "scope": "...",

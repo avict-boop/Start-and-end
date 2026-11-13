@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from . import series as SR
 
+MAX_OBJECTS = 300  # столько объектов задания программа держит без потерь (постановка задачи — столько же)
+
 # Пределы режима «Исследование», которые советник учитывает (держать в согласии с config.ResearchConfig)
 LIMITS = {"checks": 100, "claims": 80, "requirements": 40, "subquestions": 5, "per_part_default": 8}
 
@@ -27,7 +29,7 @@ class Group(BaseModel):
 
 class SplitPlan(BaseModel):
     objects: list[str] = Field(default_factory=list)
-    facts_per_object: int = 3
+    facts_per_object: int = 0  # 0 — модель не сказала: берётся из настроек («Фактов на объект»)
     one_session: bool = False
     reason: str = ""
     groups: list[Group] = Field(default_factory=list)
@@ -41,7 +43,7 @@ class SplitPlan(BaseModel):
             t = t.strip()
             if t and t not in out:
                 out.append(t[:200])
-        return out[:200]
+        return out[:MAX_OBJECTS]
 
 
 class Missing(BaseModel):
@@ -146,6 +148,25 @@ def _norm(s: str) -> str:
     return re.sub(r"[\s\"'«»“”()（）/|·,，.]+", " ", s.casefold()).strip()
 
 
+def audit_added(task: str, objects: list[str], missing: list[str]) -> list[str]:
+    """Что вторая проверка нашла пропущенным: только то, что есть в тексте задания и чего нет в списке (в любом
+    написании)."""
+    low = task.casefold()
+    have = {_norm(o) for o in objects}
+    out: list[str] = []
+    for m in missing:
+        m = (m or "").strip()
+        if m and _norm(m) not in have and any(w in low for w in re.findall(r"\w{4,}", m.casefold())):
+            out.append(m[:200])
+            have.add(_norm(m))
+    return out[:50]
+
+
+def need_split(n_objects: int, per_part: int) -> bool:
+    """Делить или нет — одно правило для советника и председателя: объектов больше, чем «объектов в части»."""
+    return n_objects > per_part
+
+
 def fix_groups(objects: list[str], groups: list[list[str]], per_part: int) -> tuple[list[list[str]], list[str]]:
     """Программа доводит группировку модели до «каждый объект ровно в одной части»; что поправлено — в notes."""
     notes: list[str] = []
@@ -172,6 +193,26 @@ def fix_groups(objects: list[str], groups: list[list[str]], per_part: int) -> tu
     if not out:
         out = SR.chunk(objects, per_part)
     return out, notes
+
+
+def cap_groups(groups: list[list[str]], titles: list[str], per_part: int) -> tuple[list[list[str]], list[str], list[str]]:
+    """Часть больше «объектов в части» (модель сгруппировала крупнее, чем задано) — делится на ровные куски с тем же
+    названием («… (1/2)»): настройка пользователя соблюдается, смысловая группа остаётся рядом."""
+    out_g: list[list[str]] = []
+    out_t: list[str] = []
+    notes: list[str] = []
+    for i, g in enumerate(groups):
+        t = titles[i] if i < len(titles) else ""
+        if len(g) <= per_part:
+            out_g.append(g)
+            out_t.append(t)
+            continue
+        pieces = SR.chunk(g, per_part)
+        notes.append(f"часть «{t or i + 1}» — {len(g)} объектов, больше {per_part}: разделена на {len(pieces)}")
+        for k, piece in enumerate(pieces):
+            out_g.append(piece)
+            out_t.append(f"{t} ({k + 1}/{len(pieces)})" if t else "")
+    return out_g, out_t, notes
 
 
 def build_parts(task: str, groups: list[list[str]], titles: list[str], facts: int,
@@ -217,6 +258,9 @@ async def replan(task: str, client: Any, model: str | None, objects: list[str], 
     notes += fixes
     if fixes:
         titles = []
+    if not n_parts:  # просили «по принципу» без числа частей — части не крупнее настройки
+        groups, titles, big = cap_groups(groups, titles, per_part)
+        notes += big
     if n_parts and len(groups) != n_parts:
         notes.append(f"модель сделала {len(groups)} частей вместо {n_parts} — части выровнены до {n_parts}, порядок "
                      "объектов сохранён")
@@ -244,21 +288,19 @@ async def plan(task: str, client: Any, model: str | None, *, per_part: int = 8, 
     objects = p.objects or heuristic_objects(task)
     if not p.objects and objects and not notes:
         notes.append("объекты найдены по нумерованной таблице задания")
-    audit_added: list[str] = []
+    added: list[str] = []
     if objects and model and client is not None:  # вторая модель: каких объектов задания нет в списке
         try:
             comp = await client.complete(model, [{"role": "user", "content": audit_prompt(task, objects)}],
                                          temperature=0.0, max_tokens=4000, json_mode=True)
             miss = Missing.model_validate(parse_json(comp.text)).missing
-            low = task.casefold()
-            have = {_norm(o) for o in objects}  # «пропущенный» объект, который уже есть в другом написании, — не новый
-            audit_added = [m.strip() for m in miss if m.strip() and _norm(m) not in have
-                           and any(w in low for w in re.findall(r"\w{4,}", m.casefold()))][:50]
-            objects += audit_added
+            added = audit_added(task, objects, miss)  # «пропущенный» объект в другом написании — не новый
+            objects += added
         except Exception:  # noqa: BLE001
             notes.append("проверка второй моделью не удалась")
     facts = max(1, min(int(p.facts_per_object or facts), 5))
-    need = len(objects) > per_part and not (p.one_session and len(objects) <= per_part * 2)
+    # то же правило, что у председателя: иначе советник сказал бы «делить не нужно», а председатель разбил бы
+    need = need_split(len(objects), per_part)
     if not objects:
         return {"objects": [], "need_split": False, "facts_per_object": facts, "parts": [], "notes": notes,
                 "reason": p.reason or "в задании нет списка объектов — делить нечего: совет ищет объекты сам",
@@ -268,14 +310,20 @@ async def plan(task: str, client: Any, model: str | None, *, per_part: int = 8, 
         groups, fixes = fix_groups(objects, raw, per_part)
         titles = [g.title for g in p.groups] if p.groups and not fixes else []
         notes += fixes
+        groups, titles, big = cap_groups(groups, titles, per_part)
+        notes += big
     else:
         groups, titles = [objects], ["Всё задание"]
     check = SR.check_split(objects, groups)
     parts = build_parts(task, groups, titles, facts, base_checks, base_claims)
-    reason = p.reason or (f"{len(objects)} объектов × {facts} факта — больше, чем одно заседание проверит хорошо"
-                          if need else "задание помещается в одно заседание")
+    auto = (f"{len(objects)} объектов — больше, чем «объектов в части» ({per_part}): так каждая часть проверяется глубже"
+            if need else f"{len(objects)} объектов — не больше {per_part}: задание помещается в одно заседание")
+    reason = p.reason if p.reason and bool(p.one_session) != need else auto  # довод модели — если совпал с решением
+    if added and any(set(g) <= set(added) for g in groups):
+        notes = [n for n in notes if "не распределила" not in n] + [
+            "объекты, найденные второй проверкой, — отдельной частью (их можно перенести в другие части)"]
     return {"objects": objects, "facts_per_object": facts, "need_split": need, "reason": reason, "parts": parts,
-            "notes": notes, "checks": {**check, "audit_added": audit_added}}
+            "notes": notes, "checks": {**check, "audit_added": added}}
 
 
 def plan_json(d: dict[str, Any]) -> str:

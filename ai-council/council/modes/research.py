@@ -86,9 +86,9 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
     sess._emit("framing", refined_question=refined, criteria=criteria, requirements=sess.requirements,
                scope=scope, as_of=as_of, subquestions=subq, lenses=lenses)
     req = sess.requirements or None
-    objects = (fr.objects if fr else [])[:150]
+    objects = list(fr.objects if fr else [])
     if sess.fixed_objects:  # часть серии / сводка: объекты задала программа — в тексте вся таблица задания
-        objects = list(sess.fixed_objects)[:150]
+        objects = list(sess.fixed_objects)
     if objects and rc.catalog:  # «Каталог»: проверок и утверждений — по числу объектов
         want = len(objects) * rc.facts_per_object
         rc = rc.model_copy(update={"arbitration_claims": max(rc.arbitration_claims, min(100, want)),
@@ -99,7 +99,8 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
                  rc.arbitration_claims, rc.max_claims)
         sess._emit("objects", count=len(objects), objects=objects, coverage=rc.object_coverage,
                    facts=rc.facts_per_object, checks=rc.arbitration_claims, max_claims=rc.max_claims)
-    if objects and rc.auto_split and sess.allow_split and len(objects) > rc.objects_per_part:
+    from .. import splitter as SP
+    if objects and rc.auto_split and sess.allow_split and SP.need_split(len(objects), rc.objects_per_part):
         await split_into_series(sess, chair, question, refined, objects, rc, rmeta)
     cover_objects = objects if rc.object_coverage else []
     rhead = R.research_head(refined, question, req, scope, as_of, subq)
@@ -455,23 +456,44 @@ async def split_into_series(sess: Council, chair: Any, question: str, refined: s
     from .. import series as SR
     from .. import splitter as SP
     per = rc.objects_per_part
+    facts = rc.facts_per_object
     titles: list[str] = []
     raw: list[list[str]] = []
+    notes: list[str] = []
+    objects = list(objects)
+    # как у советника: вторая проверка — каких объектов задания нет в списке (иначе пропущенный при постановке
+    # задачи объект не попал бы ни в одну часть, а рамка части запрещает браться за чужие объекты)
     try:
-        p = await sess._ask(chair, "split", SP.split_prompt(question, per, rc.facts_per_object) +
+        m = await sess._ask(chair, "split_audit", SP.audit_prompt(question, objects), SP.Missing, meta=rmeta)
+        added = SP.audit_added(question, objects, m.missing)
+        if added:
+            objects += added
+            notes.append(f"вторая проверка добавила пропущенные объекты: {', '.join(added[:10])}"
+                         + (" …" if len(added) > 10 else ""))
+    except (ProviderError, InvalidResponse) as e:
+        if isinstance(e, OutOfCredits):
+            raise
+        log.warning("%sпроверка полноты списка не удалась (%s)", sess._tag, e)
+    try:
+        p = await sess._ask(chair, "split", SP.split_prompt(question, per, facts) +
                             "\n\nUse exactly these objects (same spelling):\n" + "\n".join(f"- {o}" for o in objects),
                             SP.SplitPlan, meta=rmeta)
         raw = [g.objects for g in p.groups]
         titles = [g.title for g in p.groups]
+        if p.facts_per_object:  # сколько фактов на объект нужно заданию — как оценил председатель (не меньше настроек)
+            facts = max(facts, min(5, int(p.facts_per_object)))
     except (ProviderError, InvalidResponse) as e:
         if isinstance(e, OutOfCredits):
             raise
         log.warning("%sразбиение председателем не удалось (%s) — ровные части по порядку", sess._tag, e)
-    groups, notes = SP.fix_groups(objects, raw or SR.chunk(objects, per), per)
-    if notes:
+    groups, fixes = SP.fix_groups(objects, raw or SR.chunk(objects, per), per)
+    notes += fixes
+    if fixes:
         titles = []
-    parts = SP.build_parts(question, groups, titles, rc.facts_per_object, rc.arbitration_claims, rc.max_claims)
-    plan = {"objects": objects, "facts_per_object": rc.facts_per_object, "parts": parts, "notes": notes,
+    groups, titles, big = SP.cap_groups(groups, titles, per)  # части не крупнее «объектов в части»
+    notes += big
+    parts = SP.build_parts(question, groups, titles, facts, rc.arbitration_claims, rc.max_claims)
+    plan = {"objects": objects, "facts_per_object": facts, "parts": parts, "notes": notes,
             "checks": SR.check_split(objects, groups), "title": refined[:120]}
     log.info("%sзадание разбито председателем: %d объектов → %d частей (%s)", sess._tag, len(objects), len(parts),
              ", ".join(str(len(g)) for g in groups))

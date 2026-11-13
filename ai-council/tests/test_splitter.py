@@ -91,3 +91,58 @@ def test_fix_groups_accepts_slightly_different_spelling():
     objs = ["山东禹王制药 / Shandong Yuwang", "Weihai Baihe (威海百合)"]
     groups, notes = SP.fix_groups(objs, [["山东禹王制药/Shandong Yuwang", "weihai baihe  （威海百合）"]], 8)
     assert groups == [objs] and not notes  # то же название в другом написании — не «лишний» объект
+
+
+def test_cap_groups_respects_objects_per_part():
+    groups, titles, notes = SP.cap_groups([[f"o{i}" for i in range(15)], ["x", "y"]], ["Шаньдун", "Прочие"], 10)
+    assert [len(g) for g in groups] == [8, 7, 2] and titles[:2] == ["Шаньдун (1/2)", "Шаньдун (2/2)"] and notes
+
+
+def test_advisor_and_chair_use_one_rule_and_model_facts():
+    import json
+    objs = [f"Firm{i:02d} Co" for i in range(1, 13)]
+    task = "Проверь по 3 факта:\n" + "\n".join(f"| {i} | {o} |" for i, o in enumerate(objs, 1))
+    # модель говорит «помещается в одно заседание», но объектов больше «объектов в части» — делим, как и председатель
+    fake = _Fake(json.dumps({"objects": objs, "one_session": True, "reason": "влезет", "groups": []}))
+    d = asyncio.run(SP.plan(task, fake, "m", per_part=10, facts=1))
+    assert d["need_split"] and SP.need_split(12, 10) and "влезет" not in d["reason"]
+    assert d["facts_per_object"] == 1  # модель не назвала число фактов — из настроек, а не «3 по умолчанию»
+    assert all(len(p["objects"]) <= 10 for p in d["parts"]) and d["checks"]["ok"]
+
+
+def test_chair_split_audits_missing_objects_and_keeps_model_facts():
+    import json as _json
+    from council import series as _SR
+    from council.mock import MockClient
+    from council.session import Council
+    from tests.test_research import make_cfg, run
+
+    objs = [f"Firm{i:02d} Co" for i in range(1, 13)]
+    q = "Проверь каждую компанию:\n" + "\n".join(f"| {i} | {o} |" for i, o in enumerate(objs, 1)) + "\n| 13 | Zeta Extra Co |"
+
+    class C(MockClient):
+        async def complete(self, model, messages, **kw):
+            st = (kw.get("meta") or {}).get("stage")
+            comp = await super().complete(model, messages, **kw)
+            if st == "framing":
+                d = _json.loads(comp.text)
+                d["objects"] = objs  # постановка задачи «потеряла» последнюю строку таблицы
+                comp.text = _json.dumps(d, ensure_ascii=False)
+            elif st == "split_audit":
+                comp.text = _json.dumps({"missing": ["Zeta Extra Co", "Придуманная Корп"]}, ensure_ascii=False)
+            elif st == "split":
+                comp.text = _json.dumps({"facts_per_object": 3, "groups": [{"title": "Все", "objects": objs}]},
+                                        ensure_ascii=False)
+            return comp
+
+    cfg = make_cfg(mode="research", research={"auto_split": True, "objects_per_part": 10})
+    c = Council(cfg, C(delay=0), seed=1)
+    c.allow_split = True
+    try:
+        run(c.run(q))
+        raise AssertionError("должно было разбиться")
+    except _SR.SplitRequested as e:
+        plan = e.plan
+    assert "Zeta Extra Co" in plan["objects"] and "Придуманная Корп" not in plan["objects"]  # пропуск найден, выдумка — нет
+    assert plan["checks"]["ok"] and plan["facts_per_object"] == 3
+    assert all(len(p["objects"]) <= 10 for p in plan["parts"])  # группа «Все» из 12 — разделена по настройке
