@@ -305,6 +305,16 @@ class Council:
             log.debug("%s… %s · %s ждёт свободного слота", self._tag, member, stage)
         self._emit("call", member=member, stage=stage, phase=phase, elapsed=round(now - started, 1), **data)
 
+    def _thought(self, member: str, stage: str, call: int, text: str | None, hidden: bool = False) -> None:
+        """Рассуждение одного обращения — в показ вживую (text=None: обращение закончилось, его текст не нужен).
+        У одной модели на этапе бывает несколько обращений сразу (пачки проверки утверждений) — они раздельно."""
+        if self.thought_sink is None:
+            return
+        try:
+            self.thought_sink(member, stage, text, hidden, call)
+        except Exception:  # noqa: BLE001 — показ мыслей не должен мешать заседанию
+            pass
+
     def _account(self, member: MemberConfig, comp: Completion) -> None:
         s = self.stats[member.name]
         s.calls += 1
@@ -434,11 +444,8 @@ class Council:
             ev = dict(ev)
             # текст рассуждения — только для показа вживую: в события (их пишут на диск) он не попадает
             th, th_hidden = ev.pop("thought", ""), ev.pop("thought_hidden", False)
-            if self.thought_sink is not None and (th or th_hidden):
-                try:
-                    self.thought_sink(name, stage, th, bool(th_hidden))
-                except Exception:  # noqa: BLE001 — показ мыслей не должен мешать заседанию
-                    pass
+            if th or th_hidden:
+                self._thought(name, stage, call_n, th, bool(th_hidden))
             phase = ev.pop("phase", "")
             if phase == "sent" and ev.get("attempt", 1) > 1:
                 ev["detail"] = f"попытка {ev['attempt']}"
@@ -505,6 +512,7 @@ class Council:
                 if e.spent is not None:  # неудачные попытки тоже стоят денег
                     self._account(member, e.spent)
                 self._call(name, stage, "failed", started, detail=str(e)[:300])
+                self._thought(name, stage, call_n, None)
                 raise
             self._account(member, comp)
             log.info("%s← %s · %s: %s, вход %d (кэш %d), выход %d (рассужд. %d), $%.5f, %.1f с, finish=%s, %d зн., модель %s",
@@ -622,8 +630,10 @@ class Council:
             entry["gen_id"] = comp.gen_id
             self._log(entry)
             self._call(name, stage, "done", started, cost=round(self.stats[name].cost, 6))
+            self._thought(name, stage, call_n, None)
             return obj
         self._call(name, stage, "failed", started, detail=f"некорректный ответ: {error}"[:300])
+        self._thought(name, stage, call_n, None)
         raise InvalidResponse(f"{member.name}: некорректный ответ после {self.cfg.json_retries + 1} попыток: {error}")
 
     MAX_CONTINUATIONS = 4  # сколько раз можно попросить продолжить длинный ответ

@@ -556,9 +556,17 @@ def test_run_state_keeps_only_tail_of_current_thought():
     from council.web.app import RunState
     st = RunState("x", "q")
     n = RunState.THOUGHT_KEEP + 1000
-    st.add_thought("a", "proposal", "я" * n, False)
-    assert len(st.thoughts["a"]["text"]) == RunState.THOUGHT_KEEP and st.thoughts["a"]["chars"] == n
-    st.add_thought("a", "critique", "новый этап", False)  # новый этап — новое рассуждение
-    assert st.thoughts["a"]["text"] == "новый этап"
-    st.push({"type": "call", "member": "a", "stage": "critique", "phase": "done"})
-    assert "a" not in st.thoughts  # модель ответила — рассуждение удалено
+    st.add_thought("a", "proposal", "я" * n)
+    v = st.thought_view("a")
+    assert len(v["text"]) == RunState.THOUGHT_KEEP and v["chars"] == n
+    st.add_thought("a", "critique", "новый этап")  # новый этап — новое рассуждение
+    assert st.thought_view("a")["text"] == "новый этап"
+    st.add_thought("a", "critique", None)  # обращение закончилось — рассуждение удалено
+    assert st.thought_view("a") is None and "a" not in st.thoughts
+    # проверка утверждений: несколько пачек одной модели сразу — не перемешиваются, конец одной не стирает другие
+    st.add_thought("s", "arbitration", "пачка один", call=0)
+    st.add_thought("s", "arbitration", "пачка два", call=1)
+    v = st.thought_view("s")
+    assert v["parallel"] == 2 and v["text"].index("пачка один") < v["text"].index("пачка два")
+    st.add_thought("s", "arbitration", None, call=0)
+    assert st.thought_view("s")["text"] == "пачка два"

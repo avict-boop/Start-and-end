@@ -222,17 +222,37 @@ class RunState:
 
     THOUGHT_KEEP = 30000  # ≈ 10 тысяч токенов на модель — несколько экранов текста; только в памяти
 
-    def add_thought(self, member: str, stage: str, text: str, hidden: bool) -> None:
+    def add_thought(self, member: str, stage: str, text: str | None, hidden: bool = False, call: int = 0) -> None:
+        """text=None — обращение закончилось: его рассуждение удаляется (остальные обращения модели — нет)."""
         t = self.thoughts.get(member)
+        if text is None:
+            if t is not None and t["stage"] == stage:
+                t["calls"].pop(call, None)
+                if not t["calls"]:
+                    self.thoughts.pop(member, None)
+            return
         if t is None or t["stage"] != stage:
-            t = self.thoughts[member] = {"stage": stage, "text": "", "chars": 0, "hidden": False}
-        t["text"] = (t["text"] + text)[-self.THOUGHT_KEEP:]
-        t["chars"] += len(text)
-        t["hidden"] = t["hidden"] or hidden
+            t = self.thoughts[member] = {"stage": stage, "calls": {}}
+        c = t["calls"].setdefault(call, {"text": "", "chars": 0, "hidden": False})
+        c["text"] = (c["text"] + text)[-self.THOUGHT_KEEP:]
+        c["chars"] += len(text)
+        c["hidden"] = c["hidden"] or hidden
+
+    def thought_view(self, member: str) -> dict[str, Any] | None:
+        """Что показать: одно обращение — его текст; несколько сразу — по очереди, с подписями."""
+        t = self.thoughts.get(member)
+        if not t or not t["calls"]:
+            return None
+        calls = [c for _, c in sorted(t["calls"].items())]
+        if len(calls) == 1:
+            return {"stage": t["stage"], **calls[0]}
+        text = "\n\n".join(f"── запрос {i + 1} из {len(calls)} ──\n" + (("…" if c["chars"] > len(c["text"]) else "") + c["text"]
+                                                                       if c["text"] else "(пока без рассуждений)")
+                              for i, c in enumerate(calls))
+        return {"stage": t["stage"], "text": text, "chars": len(text), "hidden": all(c["hidden"] for c in calls),
+                "parallel": len(calls)}
 
     def push(self, event: dict[str, Any]) -> None:
-        if event.get("type") == "call" and event.get("phase") in ("done", "failed"):
-            self.thoughts.pop(str(event.get("member")), None)  # ответ готов — рассуждение больше не держим
         self.events.append(stamp(event))
         self._changed.set()
         self._changed = asyncio.Event()
@@ -1488,7 +1508,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         st = runs.get(sid)
         if st is None or st.status != "running":
             return {"running": False, "items": {}}
-        items = {m: dict(t) for m, t in st.thoughts.items() if not member or m == member}
+        items = {m: v for m in list(st.thoughts) if not member or m == member if (v := st.thought_view(m))}
         return {"running": True, "items": items}
 
     @app.get("/api/sessions/{sid}/events")
