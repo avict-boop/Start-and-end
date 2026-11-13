@@ -138,9 +138,21 @@ def settings_for(n_objects: int, facts: int, base_checks: int, base_claims: int)
 def apply_spec(council: Any, spec: dict[str, Any], archive: Any) -> None:
     """Что заседание серии берёт из своего «паспорта» — одинаково на сайте и в Telegram-боте (бот тоже умеет
     продолжать приостановленные заседания сайта): объекты части задаёт программа, сводке — реестры частей."""
-    council.fixed_objects = [str(o) for o in spec.get("objects") or []]
+    # «Доделать» из архива собирает паспорт заново из записи заседания: тогда объекты и части берутся из
+    # request.series (13.11 сводка после «Доделать» прошла без реестров частей — охват «3 из 22»)
+    ser = dict((spec.get("request") or {}).get("series") or {})
+    if ser.get("id") and not (spec.get("objects") or ser.get("objects") or spec.get("inherit") or ser.get("inherit")):
+        # заседание серии из старой записи (до 14.11): части и объекты — из файла серии
+        s = load(Path(getattr(archive, "dir", ".")), ser["id"])
+        if s:
+            if ser.get("summary"):
+                ser["inherit"] = [[p["n"], p["session_id"]] for p in s["parts"] if p.get("session_id")]
+                ser["objects"] = [o for p in s["parts"] for o in p.get("objects") or []]
+            elif ser.get("part"):
+                ser["objects"] = next((p.get("objects") or [] for p in s["parts"] if p["n"] == ser["part"]), [])
+    council.fixed_objects = [str(o) for o in (spec.get("objects") or ser.get("objects") or [])]
     inherited = []
-    for n, sid in spec.get("inherit") or []:
+    for n, sid in spec.get("inherit") or ser.get("inherit") or []:
         try:
             d = archive.load(sid)
         except (KeyError, OSError, ValueError):

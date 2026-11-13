@@ -1625,7 +1625,11 @@ def check_length(p: Proposal, max_words: int, factor: float) -> Proposal:
     return p
 
 
-_IDS_RE = re.compile(r"\[[^\]]*\]|\b[A-Z]-C\d+(?:-V\d+)?\b|\b[EQRKU]\d+\b")
+_IDS_RE = re.compile(
+    r"\[[^\]]*\]|\bP\d+-(?:[A-Z]-C\d+(?:-V\d+)?|E\d+)\b|\b[A-Z]-C\d+(?:-V\d+)?\b|\b[EQRKU]\d+\b"
+    # номер части серии («часть 2», «chast-1.md», «Part 3») и запись единиц («万 = 10 000») — не числа фактов
+    r"|\b(?:част[ьиеяюй]\w*|part|chast)[-\s]?\d+(?:\s+из\s+\d+)?(?:\.md)?|[万亿]\s*=\s*\d[\d \u00a0\u202f]*",
+    re.I)
 _NUM_RE = re.compile(r"\d+(?:[ \u00a0\u202f]\d{3})*(?:[.,]\d+)?")
 
 

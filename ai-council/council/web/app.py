@@ -1113,7 +1113,20 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             try:
                 await start_summary(series_id)
             except HTTPException as e:
-                log.warning("серия %s: сводный отчёт не запустился: %s", series_id, e.detail)
+                log.info("серия %s: сводный отчёт пока не запускается: %s", series_id, e.detail)
+
+    def part_mtime(sid: str) -> float:
+        try:
+            return archive().path(sid, "json").stat().st_mtime
+        except OSError:
+            return 0.0
+
+    def summary_stale(s: dict[str, Any]) -> list[int]:
+        """Части, переделанные после сводки (её вложения — их прежние итоги)."""
+        inputs = s.get("summary_inputs") or {}
+        if not s.get("summary_id") or not inputs:
+            return []
+        return [p["n"] for p in s["parts"] if p["session_id"] and part_mtime(p["session_id"]) > inputs.get(p["session_id"], 0) + 1]
 
     def part_state(sid: str) -> dict[str, Any]:
         """Что с заседанием части сейчас: ждёт / идёт / готово / на паузе — по самому заседанию."""
@@ -1148,7 +1161,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 "done": done, "total": len(parts), "status": status,
                 "cost": round(sum(p["cost"] or 0 for p in parts) + ((summ or {}).get("cost") or 0), 4),
                 "mode": (s.get("request") or {}).get("mode", "research"), "waiting": series_wait.get(s["id"], ""),
-                "summary_recheck": bool(s.get("summary_recheck"))}
+                "summary_recheck": bool(s.get("summary_recheck")), "summary_stale": summary_stale(s)}
 
     series_wait: dict[str, str] = {}  # серия → почему следующая часть ждёт (показывается на странице серии)
 
@@ -1231,7 +1244,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     files = await asyncio.to_thread(series_atts, cur)
                     sid = await create_session(req, extra_atts=files, spec_extra={"objects": p.get("objects") or []},
                                                request_extra={"series": {
-                        "id": series_id, "part": n, "total": len(cur["parts"]), "title": cur["title"]}})
+                        "id": series_id, "part": n, "total": len(cur["parts"]), "title": cur["title"],
+                        "objects": p.get("objects") or []}})
                     fresh = SR.load(rd, series_id) or cur
                     for x in fresh["parts"]:
                         if x["n"] == n:
@@ -1317,8 +1331,13 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         s = SR.load(rd, series_id)
         if not s:
             raise HTTPException(404, "серия не найдена")
-        if s.get("summary_id") and part_state(s["summary_id"])["status"] not in ("missing", "error", "cancelled"):
+        if (s.get("summary_id") and part_state(s["summary_id"])["status"] not in ("missing", "error", "cancelled")
+                and not summary_stale(s)):
             return s["summary_id"]  # сводка уже есть (идёт, на паузе или готова) — вторую не создаём
+        busy = [p["n"] for p in s["parts"] if p["session_id"] and part_state(p["session_id"])["status"]
+                in ("running", "paused", "interrupted")]
+        if busy:  # часть переделывается («Доделать», продолжение) — её итог в архиве ещё старый
+            raise HTTPException(409, f"часть {', '.join(map(str, busy))} ещё идёт или на паузе — сводка после неё")
         done = [(p, p["session_id"]) for p in s["parts"] if p["session_id"] and archive().exists(p["session_id"])]
         if not done:
             raise HTTPException(400, "нет ни одной готовой части")
@@ -1341,9 +1360,11 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         sid = await create_session(req, extra_atts=atts, spec_extra={"inherit": [[p["n"], x] for p, x in done],
                                                                      "objects": objects},
                                    request_extra={"series": {"id": series_id, "summary": True, "title": s["title"],
-                                                             "total": len(s["parts"])}})
+                                                             "total": len(s["parts"]), "objects": objects,
+                                                             "inherit": [[p["n"], x] for p, x in done]}})
         s = SR.load(rd, series_id) or s
         s["summary_id"] = sid
+        s["summary_inputs"] = {x: part_mtime(x) for _, x in done}  # какие версии частей вошли в сводку
         SR.save(rd, s)
         log.info("серия %s: сводный отчёт %s (частей %d, объектов %d)", series_id, sid, len(done), len(objects))
         return sid
@@ -1438,7 +1459,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             s["summary_recheck"] = body.recheck
             await asyncio.to_thread(SR.save, runs_dir(base_config()), s)
         st0 = part_state(s["summary_id"])["status"] if s.get("summary_id") else ""
-        if st0 in ("running", "done"):
+        if st0 == "running" or (st0 == "done" and not summary_stale(s)):
             raise HTTPException(409, "сводный отчёт уже есть")
         if st0 in ("paused", "interrupted"):
             raise HTTPException(409, "сводный отчёт на паузе — нажмите «Продолжить серию» (оплаченное не повторится)")

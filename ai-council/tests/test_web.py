@@ -655,3 +655,79 @@ def test_summary_checks_conflicts_between_parts_and_keeps_recheck_flag(client, m
     x = next(c for c in led["claims"] if c["id"] == "X-C1")  # противоречие проверено поиском
     assert x["conflict_of"] == seen["ids"] and x["status"]
     assert all(next(c for c in led["claims"] if c["id"] == i).get("conflict") == "X-C1" for i in seen["ids"])
+
+
+def test_summary_waits_for_part_being_redone_and_goes_stale_after(client, monkeypatch):
+    import asyncio as _a
+    import time as _t
+    from council import mock as M
+    objs = ["Alphacorp Foods", "Betamax Nutrition"]
+    r = client.post("/api/series", json={
+        "title": "Устаревшая сводка", "task": "Проверь компании Alphacorp Foods и Betamax Nutrition",
+        "parts": [{"title": "A", "objects": objs[:1]}, {"title": "B", "objects": objs[1:]}],
+        "request": {"mode": "research", "mock": True, "members": ["a", "b", "c"], "chair": "a"},
+        "max_parallel": 2, "auto_summary": True})
+    v = _wait_series(client, r.json()["id"])
+    assert v["status"] == "done" and not v["summary_stale"]
+    first_summary = v["summary"]["session_id"]
+    part2 = v["parts"][1]["session_id"]
+    orig = M.MockClient.complete
+
+    async def slow(self, model, messages, **kw):
+        await _a.sleep(0.05)
+        return await orig(self, model, messages, **kw)
+
+    monkeypatch.setattr(M.MockClient, "complete", slow)
+    _t.sleep(1.1)  # время файла части должно отличаться от записанного в сводке
+    assert client.post(f"/api/sessions/{part2}/redo", json={"budget": 5}).status_code == 200
+    busy = client.post(f"/api/series/{v['id']}/summary")
+    assert busy.status_code == 409  # пока часть 2 переделывается — новой сводки нет
+    # сводки ещё нет, а часть идёт — сводка не берёт её старый итог
+    rd = tmp_runs(client)
+    import json as _json
+    sf = rd / "series" / f"{v['id']}.json"
+    d = _json.loads(sf.read_text(encoding="utf-8"))
+    d["summary_id"] = ""
+    sf.write_text(_json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    busy = client.post(f"/api/series/{v['id']}/summary")
+    assert busy.status_code == 409 and "ещё идёт" in busy.json()["detail"], busy.text
+    d["summary_id"] = first_summary
+    sf.write_text(_json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    for _ in range(300):
+        st = client.get(f"/api/series/{v['id']}").json()
+        if st["parts"][1]["status"] == "done" and st["summary_stale"]:
+            break
+        _t.sleep(0.1)
+    assert st["summary_stale"] == [2]  # сводка устарела: часть 2 переделана после неё
+    again = client.post(f"/api/series/{v['id']}/summary")
+    assert again.status_code == 200 and again.json()["id"] != first_summary
+
+
+def test_redo_of_summary_and_part_keeps_inherited_ledgers_and_objects(client):
+    import json as _json
+    objs = ["Alphacorp Foods", "Betamax Nutrition"]
+    r = client.post("/api/series", json={
+        "title": "Доделать сводку", "task": "Проверь компании Alphacorp Foods и Betamax Nutrition",
+        "parts": [{"title": "A", "objects": objs[:1]}, {"title": "B", "objects": objs[1:]}],
+        "request": {"mode": "research", "mock": True, "members": ["a", "b", "c"], "chair": "a"},
+        "max_parallel": 2, "auto_summary": True})
+    v = _wait_series(client, r.json()["id"])
+    rd = tmp_runs(client)
+    for sid, want_parts, want_objects in [(v["summary"]["session_id"], [1, 2], 2), (v["parts"][1]["session_id"], None, 1)]:
+        assert client.post(f"/api/sessions/{sid}/redo", json={"budget": 5}).status_code == 200
+        assert any(e["type"] == "done" for e in read_events(client, sid))
+        led = _json.loads((rd / f"{sid}.json").read_text(encoding="utf-8"))["research"]["ledger"]
+        if want_parts:  # 13.11: после «Доделать» сводка шла без реестров частей
+            assert led.get("inherited_parts") == want_parts
+        assert led["objects"]["total"] == want_objects  # объекты части / все объекты серии — не вся таблица задания
+    # старая запись (без частей в request.series) — части берутся из файла серии
+    sid = v["summary"]["session_id"]
+    f = rd / f"{sid}.json"
+    d = _json.loads(f.read_text(encoding="utf-8"))
+    d["request"]["series"].pop("inherit", None)
+    d["request"]["series"].pop("objects", None)
+    f.write_text(_json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    assert client.post(f"/api/sessions/{sid}/redo", json={"budget": 5}).status_code == 200
+    assert any(e["type"] == "done" for e in read_events(client, sid))
+    led = _json.loads(f.read_text(encoding="utf-8"))["research"]["ledger"]
+    assert led.get("inherited_parts") == [1, 2] and led["objects"]["total"] == 2

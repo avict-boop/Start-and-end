@@ -1188,7 +1188,8 @@ async function renderSeries(id) {
       <td><span class="arc-status ${esc(p.status)}">${esc(PART_STATUS[p.status] || p.status)}</span></td>
       <td>${money(p.cost)}</td></tr>`).join("");
   const sm = v.summary;
-  const canSum = v.done > 0 && (!sm || ["error", "missing", "cancelled"].includes(sm.status));
+  const stale = (v.summary_stale || []).length && sm && sm.status === "done";
+  const canSum = v.done > 0 && (!sm || ["error", "missing", "cancelled"].includes(sm.status) || stale);
   const stopped = v.status === "stopped";
   $("serBody").innerHTML = `<section class="card">
       <h2 class="sub-h">Части</h2>
@@ -1196,6 +1197,7 @@ async function renderSeries(id) {
     </section>
     <section class="card">
       <h2 class="sub-h">Сводный отчёт</h2>
+      ${stale ? `<p class="warnbox">Сводка устарела: ${plural(v.summary_stale.length, "часть", "части", "частей")} ${v.summary_stale.join(", ")} переделана после неё — в сводке её прежний итог. Можно свести заново (новое заседание).</p>` : ""}
       ${sm ? `<p><a class="btn primary" href="#/s/${encodeURIComponent(sm.session_id)}">Открыть сводный отчёт</a>
           <span class="arc-status ${esc(sm.status)}">${esc(PART_STATUS[sm.status] || sm.status)}</span> <span class="muted small">${money(sm.cost)}</span></p>`
         : `<p class="muted">${v.auto_summary ? "Когда все части будут готовы, совет сам сведёт их в один отчёт: проверенное в частях входит в общий реестр с теми же статусами." : "Сводка не запускается сама — нажмите «Свести», когда части будут готовы."}</p>`}
@@ -1203,7 +1205,7 @@ async function renderSeries(id) {
         <span><b>Доуточнить невыясненное</b><small>Что в частях осталось «неясно» или «спорно в источниках», сводка ищет ещё раз (до 20) — дороже. Противоречия между частями проверяются всегда, проверенное — не перепроверяется.</small></span></label>` : ""}
       <div class="row-actions">
         ${stopped ? `<button type="button" class="btn" id="serCont">Продолжить серию</button>` : ""}
-        ${canSum ? `<button type="button" class="btn ${v.done === v.total ? "primary" : ""}" id="serSum">${v.done === v.total ? "Свести части советом" : `Свести готовые (${v.done} из ${v.total})`}</button>` : ""}
+        ${canSum ? `<button type="button" class="btn ${v.done === v.total ? "primary" : ""}" id="serSum">${stale ? "Свести заново" : v.done === v.total ? "Свести части советом" : `Свести готовые (${v.done} из ${v.total})`}</button>` : ""}
       </div>
     </section>`;
   const rch = $("serRecheck");

@@ -445,3 +445,11 @@ def test_summary_checks_skip_known_find_conflicts_and_recheck_open():
     assert row["status"] == "confirmed" and row["was_status"] == "unclear" and row["rechecked"]
     assert next(c for c in out["claims"] if c["id"] == "P2-B-C1")["conflict"] == "X-C1"
     assert next(c for c in out["claims"] if c["id"] == "P2-B-C2")["status"] == "refuted"  # статус части — как был
+
+
+def test_part_numbers_and_unit_definitions_are_not_fact_numbers():
+    nums = lambda t: sorted(min(f) for f in R._numbers(t))  # noqa: E731
+    assert nums("Часть 1 сообщает мощность 7,2 млрд/год") == ["7.2"]
+    assert nums("Часть 2 из 2: ни у одной из 11 компаний; см. P2-D-C3-V1 и chast-1.md") == ["11"]
+    assert nums("242 774,46万 (万 = 10 000)") == ["242774.46"]
+    assert nums("в 2 компаниях из 3") == ["2", "3"]  # обычные числа по-прежнему проверяются
