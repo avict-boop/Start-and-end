@@ -432,3 +432,51 @@ def test_chair_splits_a_big_list_into_a_series(client):
             break
         _t.sleep(0.25)
     assert v["status"] == "done" and v["done"] == 3 and v["summary"]["status"] == "done", v
+
+
+def _wait_series(client, series_id, tries=400):
+    import time as _t
+    v = None
+    for _ in range(tries):
+        v = client.get(f"/api/series/{series_id}").json()
+        if v["status"] == "done":
+            return v
+        _t.sleep(0.25)
+    return v
+
+
+def test_series_parts_get_files_and_only_their_objects(client):
+    import json as _json
+    q = _catalog_question(14)
+    up = client.post("/api/uploads?name=zametki.txt", content="Справка по рынку".encode()).json()
+    objs = [f"Company{i:02d} Foods Ltd" for i in range(1, 15)]
+    r = client.post("/api/series", json={
+        "title": "Файлы", "task": q, "parts": [{"title": "A", "objects": objs[:7]}, {"title": "B", "objects": objs[7:]}],
+        "request": {"mode": "research", "mock": True, "members": ["a", "b", "c"], "chair": "a",
+                    "attachments": [up["id"]], "research": {"catalog": True}},
+        "max_parallel": 1, "auto_summary": True})
+    assert r.status_code == 200, r.text
+    v = _wait_series(client, r.json()["id"])
+    assert v["status"] == "done", v
+    for p in v["parts"]:  # вторая часть тоже получила файл (первая готовая часть удаляет черновые загрузки)
+        d = _json.loads((tmp_runs(client) / f"{p['session_id']}.json").read_text(encoding="utf-8"))
+        assert "zametki.txt" in _json.dumps(d.get("attachments"), ensure_ascii=False)
+        led = d["research"]["ledger"]
+        assert led["objects"]["total"] == 7  # охват — только объекты своей части, а не вся таблица задания
+    summ = _json.loads((tmp_runs(client) / f"{v['summary']['session_id']}.json").read_text(encoding="utf-8"))
+    assert summ["research"]["ledger"]["objects"]["total"] == 14
+
+
+def test_estimate_warns_about_series_and_followup_never_splits(client):
+    e = client.post("/api/estimate", json={"question": _catalog_question(23), "mode": "research", "mock": True}).json()
+    assert e["series"] and e["series"]["parts"] == 3 and e["series"]["objects"] == 23
+    e = client.post("/api/estimate", json={"question": _catalog_question(5), "mode": "research", "mock": True}).json()
+    assert e["series"] is None
+    r = client.post("/api/sessions", json={"question": "Короткий вопрос про рынок", "mode": "research", "mock": True,
+                                           "members": ["a", "b", "c"], "chair": "a"})
+    base = r.json()["id"]
+    assert any(x["type"] == "done" for x in read_events(client, base))
+    r = client.post("/api/sessions", json={"question": _catalog_question(23), "mode": "research", "mock": True,
+                                           "members": ["a", "b", "c"], "chair": "a", "parent": base})
+    ev = read_events(client, r.json()["id"])
+    assert not any(x["type"] == "split_series" for x in ev) and any(x["type"] == "done" for x in ev)

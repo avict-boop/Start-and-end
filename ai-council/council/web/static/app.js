@@ -884,8 +884,12 @@ $("form").addEventListener("submit", async (ev) => {
       if (!e) return;
       if (!renderEstimate(e)) { $("estimate").hidden = false; return; }
       if (e.low != null) {
-        const warn = e.balance != null && e.balance < e.high ? `<p class="warnbox">На балансе $${e.balance.toFixed(2)} — может не хватить.</p>`
+        let warn = e.balance != null && e.balance < e.high ? `<p class="warnbox">На балансе $${e.balance.toFixed(2)} — может не хватить.</p>`
           : e.high > e.budget ? `<p class="warnbox">Верхняя оценка выше лимита $${e.budget} — заседание может остановиться раньше.</p>` : "";
+        if (e.series) warn += `<p class="warnbox">В задании ${e.series.objects} объектов — председатель, скорее всего, разобьёт его
+          на ${e.series.parts} ${plural(e.series.parts, "часть", "части", "частей")} по ~${e.series.per_part} и совет сведёт их в один отчёт.
+          Оценка выше — на одну часть; лимит $${e.budget} действует на каждую, вся серия — до $${e.series.budget_total}.
+          Посмотреть разбиение заранее — «Разбить на части…».</p>`;
         const go = await ask({ title: "Начать заседание?",
           html: `<p>Примерная стоимость: <b>$${e.low.toFixed(2)} – $${e.high.toFixed(2)}</b></p>
             <p class="muted">${esc(MODE_NAME[mode])} · ${p.members.length} ${plural(p.members.length, "модель", "модели", "моделей")} · лимит $${e.budget}</p>${warn}`,

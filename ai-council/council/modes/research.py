@@ -87,6 +87,8 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
                scope=scope, as_of=as_of, subquestions=subq, lenses=lenses)
     req = sess.requirements or None
     objects = (fr.objects if fr else [])[:150]
+    if sess.fixed_objects:  # часть серии / сводка: объекты задала программа — в тексте вся таблица задания
+        objects = list(sess.fixed_objects)[:150]
     if objects and rc.catalog:  # «Каталог»: проверок и утверждений — по числу объектов
         want = len(objects) * rc.facts_per_object
         rc = rc.model_copy(update={"arbitration_claims": max(rc.arbitration_claims, min(100, want)),

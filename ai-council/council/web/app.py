@@ -680,6 +680,15 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             note = (f"Модели без зрения ({', '.join(blind)}) получат описание картинок, "
                     f"которое заранее сделает одна из «зрячих» моделей.")
             warning = f"{warning} {note}" if warning else note
+        series_hint = None
+        if mode_eff == "research" and cfg.research.auto_split and not req.parent:
+            from ..splitter import heuristic_objects
+            n_obj = len(heuristic_objects("\n".join([req.question, req.context or ""]
+                                                     + [a.text for a in atts if a.kind == "document"])))
+            if n_obj > cfg.research.objects_per_part:
+                parts = -(-n_obj // cfg.research.objects_per_part)
+                series_hint = {"objects": n_obj, "parts": parts, "per_part": cfg.research.objects_per_part,
+                               "budget_total": round(cfg.max_cost_usd * (parts + 1), 2)}
         balance = None
         key = os.environ.get("OPENROUTER_API_KEY")
         if not req.mock and key:
@@ -699,13 +708,15 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             "budget": cfg.max_cost_usd,
             "unknown": missing,
             "warning": warning,
+            "series": series_hint,
         }
 
     create_lock = asyncio.Lock()  # части серии создаются одновременно с похожими вопросами — номера не должны совпасть
 
     @app.post("/api/sessions")
     async def start_session(req: RunRequest) -> dict[str, Any]:
-        return {"id": await create_session(req)}
+        # председатель может разбить на серию только новое заседание (не уточнение, не продолжение, не «доделать»)
+        return {"id": await create_session(req, spec_extra={"allow_split": not req.parent})}
 
     async def create_session(req: RunRequest, *, extra_atts: list | None = None,
                              request_extra: dict[str, Any] | None = None,
@@ -833,7 +844,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                       stage_out=stage_out, session_id=sid, shared_dir=runs_dir(cfg) / "notes",
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     st.council = council
-                    council.allow_split = not (sp.get("request") or {}).get("series")
+                    council.allow_split = bool(sp.get("allow_split")) and not (sp.get("request") or {}).get("series")
+                    council.fixed_objects = [str(o) for o in sp.get("objects") or []]
                     if sp.get("inherit"):  # сводный отчёт серии: проверенное в частях
                         council.inherited = await asyncio.to_thread(load_inherited, sp["inherit"])
                     if journal.replayable or journal.loose:
@@ -850,6 +862,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                         shutil.rmtree(uploads_dir() / uid, ignore_errors=True)
                     await asyncio.to_thread(cp.remove)
                     final = "done"
+                    ser = (sp.get("request") or {}).get("series") or {}
+                    if ser.get("id") and not ser.get("summary"):
+                        asyncio.create_task(maybe_summary(ser["id"]))
                     st.push({"type": "done", "id": sid, "total_cost": res.total_cost, "duration_s": res.duration_s,
                              "stats": jsonable(res.stats), "semantic": (res.research or {}).get("semantic_audit")})
                     cached = sum(s.cached_tokens for s in res.stats.values())
@@ -868,6 +883,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                         SR.create, runs_dir(cfg), title=(sp["question"].strip().splitlines() or [""])[0][:120] or e.plan["title"], task=sp["question"],
                         parts=e.plan["parts"], request={k: v for k, v in req0.items() if v is not None},
                         max_parallel=2, auto_summary=True, origin=f"split:{sid}")
+                    if sp.get("uploads"):  # файлы задания нужны каждой части
+                        s["files"] = await asyncio.to_thread(keep_series_files, s["id"], sp["uploads"])
+                        await asyncio.to_thread(SR.save, runs_dir(cfg), s)
                     kick_series(s["id"])
                     await asyncio.to_thread(cp.remove)
                     final = "done"
@@ -960,6 +978,47 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     # ------------------------------------------------------------ серия заседаний (council/series.py)
     series_tasks: dict[str, asyncio.Task] = {}
 
+    def series_files_dir(series_id: str) -> Path:
+        return SR.series_dir(runs_dir(base_config())) / "files" / series_id
+
+    def keep_series_files(series_id: str, uids: list[str]) -> list[str]:
+        """Копирует загрузки в папку серии: части идут долго, а черновые загрузки удаляются."""
+        import shutil
+        kept = []
+        for uid in uids or []:
+            src = uploads_dir() / uid
+            if UPLOAD_ID.match(uid) and (src / "meta.json").is_file():
+                dst = series_files_dir(series_id) / uid
+                if not dst.exists():
+                    shutil.copytree(src, dst)
+                kept.append(uid)
+        return kept
+
+    def series_atts(s: dict[str, Any]) -> list:
+        atts = []
+        for uid in s.get("files") or []:
+            folder = series_files_dir(s["id"]) / uid
+            try:
+                meta = json.loads((folder / "meta.json").read_text(encoding="utf-8"))
+                atts.append(load_attachment((folder / "data").read_bytes(), meta["name"]))
+            except (OSError, ValueError, KeyError, AttachmentError) as e:
+                log.warning("серия %s: файл %s не прочитан: %s", s["id"], uid, e)
+        return atts
+
+    async def maybe_summary(series_id: str) -> None:
+        """Часть готова вне очереди серии (её продолжили сами) — все готовы? Совет сводит."""
+        t = series_tasks.get(series_id)
+        if t is not None and not t.done():
+            return  # очередь серии сама запустит сводку
+        s = await asyncio.to_thread(SR.load, runs_dir(base_config()), series_id)
+        if not s or not s.get("auto_summary") or s.get("summary_id"):
+            return
+        if all(p["session_id"] and archive().exists(p["session_id"]) for p in s["parts"]):
+            try:
+                await start_summary(series_id)
+            except HTTPException as e:
+                log.warning("серия %s: сводный отчёт не запустился: %s", series_id, e.detail)
+
     def load_inherited(items: list[Any]) -> list[tuple[int, dict[str, Any]]]:
         out = []
         for n, sid in items:
@@ -1029,8 +1088,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                         log.warning("серия %s, часть %d: не продолжилась: %s", series_id, n, e.detail)
                         return
                 else:
-                    req = RunRequest(**{**cur["request"], "question": p["question"]})
-                    sid = await create_session(req, request_extra={"series": {
+                    req = RunRequest(**{**cur["request"], "question": p["question"], "attachments": []})
+                    files = await asyncio.to_thread(series_atts, cur)
+                    sid = await create_session(req, extra_atts=files, spec_extra={"objects": p.get("objects") or []},
+                                               request_extra={"series": {
                         "id": series_id, "part": n, "total": len(cur["parts"]), "title": cur["title"]}})
                     fresh = SR.load(rd, series_id) or cur
                     for x in fresh["parts"]:
@@ -1077,7 +1138,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 ## Исходное задание
 {task}"""
 
-    def part_doc(n: int, title: str, objects: list[str], d: dict[str, Any]) -> str:
+    def part_doc(n: int, title: str, objects: list[str], d: dict[str, Any], room: int = 60_000) -> str:
         v = d.get("verdict") or {}
         led = (d.get("research") or {}).get("ledger") or {}
         ev = {e.get("id"): e.get("url", "") for e in led.get("evidence") or []}
@@ -1088,12 +1149,20 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             urls = " ".join(ev.get(e, "") for e in c.get("evidence") or [] if ev.get(e))
             rows.append(f"| P{n}-{c.get('id')} | {c.get('status')} | {str(c.get('text', '')).replace('|', '/')} | {urls} |")
         oc = led.get("objects") or {}
-        return (f"# Часть {n} серии: {title}\n\nОбъекты части ({len(objects)}): " + "; ".join(objects)
+        head = (f"# Часть {n} серии: {title}\n\nОбъекты части ({len(objects)}): " + "; ".join(objects)
                 + (f"\n\nОхват части: проверены {oc.get('checked')} из {oc.get('total')}; не проверены: "
-                   + ", ".join(oc.get("missing") or []) if oc.get("total") else "")
-                + "\n\n## Итог части\n\n" + str(v.get("final_answer") or "")
-                + "\n\n## Реестр проверенных утверждений части\n\n| № | статус | утверждение | источники |\n|---|---|---|---|\n"
-                + "\n".join(rows) + "\n")
+                   + ", ".join(oc.get("missing") or []) if oc.get("total") else "") + "\n\n## Итог части\n\n")
+        table = ("\n\n## Реестр проверенных утверждений части\n\n| № | статус | утверждение | источники |\n|---|---|---|---|\n"
+                 + "\n".join(rows) + "\n")
+        answer = str(v.get("final_answer") or "")
+        room = max(2000, room - len(head))
+        if len(answer) + len(table) <= room:
+            return head + answer + table
+        # не помещается: итог части важнее — реестр части и так целиком в общем реестре сводки (номера P{n}-…)
+        note = f"\n\n(Реестр части не приложен — он целиком в общем реестре сводки, номера P{n}-….)\n"
+        if len(answer) + len(note) > room:
+            answer = answer[:room - len(note) - 80].rsplit("\n", 1)[0] + "\n\n…(итог части сокращён по объёму — полный в заседании части)"
+        return head + answer + note
 
     async def start_summary(series_id: str) -> str:
         """Сводный отчёт серии: совет (обычное исследование) по итогам частей и общему реестру."""
@@ -1105,11 +1174,13 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         done = [(p, p["session_id"]) for p in s["parts"] if p["session_id"] and archive().exists(p["session_id"])]
         if not done:
             raise HTTPException(400, "нет ни одной готовой части")
+        from ..attachments import MAX_DOC_CHARS, MAX_TOTAL_DOC_CHARS
         atts, objects = [], []
+        room = min(MAX_DOC_CHARS, MAX_TOTAL_DOC_CHARS // len(done) - 200)  # поровну: ни одна часть не обрезается целиком
         for p, sid in done:
             d = await asyncio.to_thread(archive().load, sid)
             objects += [o for o in p.get("objects") or [] if o not in objects]
-            atts.append(load_attachment(part_doc(p["n"], p["title"], p.get("objects") or [], d).encode("utf-8"),
+            atts.append(load_attachment(part_doc(p["n"], p["title"], p.get("objects") or [], d, room).encode("utf-8"),
                                         f"chast-{p['n']}.md"))
         question = SUMMARY_TASK.format(title=s["title"], n=len(done), count=len(objects),
                                        objects="\n".join(f"- {o}" for o in objects) or "—", task=s.get("task") or "")
@@ -1118,7 +1189,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
               "max_claims": max(int(base_rs.get("max_claims") or 8), min(80, len(objects) + 3))}
         req = RunRequest(**{**s["request"], "question": question, "mode": "research", "research": rs,
                             "research_words": 0, "web_search": []})
-        sid = await create_session(req, extra_atts=atts, spec_extra={"inherit": [[p["n"], x] for p, x in done]},
+        sid = await create_session(req, extra_atts=atts, spec_extra={"inherit": [[p["n"], x] for p, x in done],
+                                                                     "objects": objects},
                                    request_extra={"series": {"id": series_id, "summary": True, "title": s["title"],
                                                              "total": len(s["parts"])}})
         s = SR.load(rd, series_id) or s
@@ -1151,7 +1223,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 
     @app.post("/api/series")
     async def series_create(body: SeriesRequest) -> dict[str, Any]:
-        req0 = {k: v for k, v in body.request.items() if k not in ("question", "parent")}
+        req0 = {k: v for k, v in body.request.items() if k not in ("question", "parent", "attachments")}
+        uids = list(body.request.get("attachments") or [])
+        if uids:
+            await asyncio.to_thread(load_uploads, uids)  # файлы есть и читаются — иначе ошибка сразу, а не в части
         parts = [p.model_dump() for p in body.parts]
         for i, p in enumerate(parts):
             if not p["question"].strip():
@@ -1162,6 +1237,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         s = await asyncio.to_thread(SR.create, runs_dir(base_config()), title=body.title, task=body.task,
                                     parts=parts, request=req0,
                                     max_parallel=body.max_parallel, auto_summary=body.auto_summary, origin="web")
+        if uids:
+            s["files"] = await asyncio.to_thread(keep_series_files, s["id"], uids)
+            await asyncio.to_thread(SR.save, runs_dir(base_config()), s)
         kick_series(s["id"])
         return {"id": s["id"]}
 
