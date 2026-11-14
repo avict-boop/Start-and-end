@@ -805,3 +805,45 @@ def test_stage_output_caps_lower_only_service_stages():
     c2 = Spy()  # предел участника меньше потолка — остаётся меньший
     run(Council(make_cfg(max_tokens=8000), c2, seed=1).run("Вопрос?"))
     assert c2.mt["critique"] == {8000} and c2.mt["vote"] == {8000}
+
+
+def test_budget_gate_shows_reason_and_lifts_when_budget_raised():
+    from council.mock import MockClient
+
+    class Slow(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.now = 0
+            self.peak = 0
+
+        async def complete(self, model, messages, **kw):
+            self.now += 1
+            self.peak = max(self.peak, self.now)
+            try:
+                await asyncio.sleep(0.15)
+                return await super().complete(model, messages, **kw)
+            finally:
+                self.now -= 1
+
+    events = []
+
+    async def scenario():
+        c = Slow()
+        council = Council(make_cfg(max_concurrency=8), c, seed=1,
+                          on_event=lambda ev, **d: events.append((ev, d)))
+        council._budget_warned = True  # потрачено 80% бюджета — запросы по два
+        task = asyncio.create_task(council.run("Вопрос?"))
+        for _ in range(200):
+            await asyncio.sleep(0.02)
+            if any(ev == "call" and d.get("phase") == "queued" and "бюджет" in (d.get("detail") or "") for ev, d in events):
+                break
+        peak_narrow = c.peak
+        council.budget = 1000.0
+        council.set_budget(1000.0)  # подняли бюджет — ждавшие запускаются сразу
+        await task
+        return peak_narrow, c.peak
+
+    narrow, after = asyncio.run(scenario())
+    assert narrow <= 2  # у границы бюджета — по два
+    assert any("поднимите бюджет" in (d.get("detail") or "") for ev, d in events if ev == "call")  # причина видна
+    assert after > 2  # после подъёма бюджета — снова параллельно

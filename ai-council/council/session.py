@@ -223,7 +223,9 @@ class Council:
         self.forced_labels = dict(labels or {})
         self._seen: dict[tuple[str, str], int] = {}  # (этап, участник) -> сколько обращений уже было
         self._sem = asyncio.Semaphore(config.max_concurrency)
-        self._narrow = asyncio.Semaphore(2)
+        self._narrow = asyncio.Semaphore(2)  # (прежнее; очередь у границы бюджета — _budget_gate)
+        self._narrow_busy = 0
+        self._gate = asyncio.Event()
         self.stats: dict[str, MemberStats] = {m.name: MemberStats() for m in config.active_members}
         if config.fact_check.enabled:
             self.stats[FACT_CHECKER] = MemberStats()
@@ -356,6 +358,32 @@ class Council:
         self.budget = float(budget)
         self._budget_warned = self.total_cost >= self.budget * self.BUDGET_WARN
         self._emit("budget", budget=self.budget, spent=round(self.total_cost, 4))
+        self._wake_gate()  # бюджет подняли — ждавшие «по два» запускаются сразу
+
+    NARROW = 2  # у границы бюджета — столько запросов одновременно
+
+    def _wake_gate(self) -> None:
+        ev, self._gate = self._gate, asyncio.Event()
+        ev.set()
+
+    @contextlib.asynccontextmanager
+    async def _budget_gate(self, name: str, stage: str, started: float):
+        """У границы бюджета (потрачено 80%) запросы идут по NARROW: меньше «в полёте» — меньше перерасход. Ждущий
+        виден на экране с причиной; бюджет подняли — очередь снимается сразу."""
+        told = False
+        while self._budget_warned and self._narrow_busy >= self.NARROW:
+            if not told:
+                told = True
+                self._call(name, stage, "queued", started,
+                           detail="бюджет заседания почти исчерпан — запросы идут по два; поднимите бюджет, и он "
+                                  "запустится сразу")
+            await self._gate.wait()
+        self._narrow_busy += 1
+        try:
+            yield
+        finally:
+            self._narrow_busy -= 1
+            self._wake_gate()
 
     def _log(self, entry: dict[str, Any]) -> None:
         self.transcript.append(entry)
@@ -503,7 +531,7 @@ class Council:
             try:
                 async with self._sem:
                     # у границы бюджета запросы идут по два: меньше запросов «в полёте» — меньше превышение лимита
-                    async with (self._narrow if self._budget_warned else contextlib.nullcontext()):
+                    async with self._budget_gate(name, stage, started):
                         extra: dict[str, Any] = ({"web_search": True, "web_tools": self.cfg.web_tools,
                                                   "search_engine": self.cfg.search_engine,
                                                   "search_uses": self.cfg.search_uses,

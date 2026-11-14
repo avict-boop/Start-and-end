@@ -1953,6 +1953,7 @@ function phaseText(c) {
   if (c.phase === "writing") t = `пишет ответ · ≈${approxTokens(c.chars)} ток.`;
   if (c.phase === "sent" && c.attempt > 1) t += ` (попытка ${c.attempt})`;
   if (c.phase === "retry") t = `повтор: ${c.detail || "временная ошибка"}`;
+  if (c.phase === "queued" && c.detail) t = `ждёт: ${c.detail}`;
   if (c.phase === "done") t = `готово${c.cost != null ? ` · ${money(c.cost)}` : ""}`;
   if (c.phase === "failed") t = `сбой: ${c.detail || ""}`;
   return t;
@@ -1987,7 +1988,8 @@ function workerRows(s, now) {
   for (const name of Object.keys(s.work)) {
     const c = s.calls[name];
     if (!c || c.stage !== s.stage) {
-      rows.push(`<li class="w idle"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">ожидает запуска</span><span class="w-time"></span></li>`);
+      const why = s.budgetWarn && !s.done ? "ждёт: бюджет почти исчерпан — запросы идут по два" : "ожидает запуска";
+      rows.push(`<li class="w idle"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">${why}</span><span class="w-time"></span></li>`);
       continue;
     }
     const active = PHASE_ACTIVE.has(c.phase);
