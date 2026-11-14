@@ -340,6 +340,10 @@ class ResearchBallot(Ballot):
         return {str(k).strip().upper(): to_text(x).strip().upper()[:1] for k, x in v.items() if k and x}
 
 
+# Номер источника: свой E7 или источник части сводки P2-E7 (целиком — иначе «P2-E7» читался бы как свой «E7»)
+SOURCE_ID_RE = r"(?<![\w-])(?:P\d+-)?E\d+\b"
+
+
 class KnownItem(BaseModel):
     statement: str
     claim_ids: list[str] = Field(default_factory=list)   # на какие проверенные утверждения реестра опирается
@@ -355,7 +359,7 @@ class KnownItem(BaseModel):
     @classmethod
     def _shape(cls, data: Any) -> Any:
         if isinstance(data, str):
-            return {"statement": data, "evidence_ids": re.findall(r"\bE\d+\b|\[DOC", data)}
+            return {"statement": data, "evidence_ids": re.findall(SOURCE_ID_RE + r"|\[DOC", data)}
         return data
 
     @field_validator("statement", "scope", "doc_ref", "doc_quote", mode="before")
@@ -1876,7 +1880,7 @@ def _mark_answer(answer: str, bad: list[tuple[KnownItem, str]], all_ids: set[str
     Ссылка [E…] на источник, которого нет в реестре или который ничего не подтвердил, помечается на месте."""
     if all_ids:
         def fix(m: re.Match) -> str:
-            ids = re.findall(r"\bE\d+\b", m.group(0))
+            ids = re.findall(SOURCE_ID_RE, m.group(0))  # P2-E10 — источник части целиком, не «E10»
             if not ids or "⚠" in m.group(0):
                 return m.group(0)
             if any(i not in all_ids for i in ids):

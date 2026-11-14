@@ -540,3 +540,15 @@ def test_research_passes_page_excerpts_to_arbitration():
     c = Council(cfg, Spy(delay=0), seed=3, link_checker=checker)
     run(c.run("Вопрос?"))
     assert seen  # арбитраж был; отрывки — только если у утверждений есть ссылки (в демо их может не быть)
+
+
+def test_part_source_ids_checked_whole_not_as_own_e_numbers():
+    """Сводка серии: [P2-E10] — источник части 2; раньше читался как свой «E10» и ложно получал «нет в реестре»."""
+    led = {"claims": [{"id": "P2-A-C1", "status": "confirmed", "evidence": ["P2-E10"], "text": "Завод X выпускает таблетки"}],
+           "evidence": [{"id": "E1"}, {"id": "P2-E10"}, {"id": "P1-E3"}]}
+    v = R.ResearchVerdict(final_answer="Итог. Завод X [P2-E10]; завод Y [P1-E3]; завод Z [P1-E77]; свой [E1].")
+    out = R.check_verdict(v, ledger=led, n_subq=0, strict=False, mark=True)
+    a = out.final_answer
+    assert "[P2-E10]" in a and "[P1-E77 ⚠ нет в реестре]" in a
+    assert "[P1-E3 · не подтверждено]" in a and "[E1 · не подтверждено]" in a
+    assert R.KnownItem.model_validate("факт [P2-E10] и [E4]").evidence_ids == ["P2-E10", "E4"]

@@ -214,8 +214,8 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
             selected = early + rest
             try:  # пауза на границе этапа («Повторить не ответивших») — ранний поиск не оставляем работать в фоне
                 sess._emit("stage", stage="arbitration",
-                           title=f"Арбитраж доказательств: {len(selected)} утверждений ({len(early)} уже ищутся с "
-                                 f"критикой), поиск {sess.cfg.fact_check.model}",
+                           title=f"Арбитраж доказательств: {len(selected)} {_claims_word(len(selected))} "
+                                 f"({len(early)} уже ищутся с критикой), поиск {sess.cfg.fact_check.model}",
                            claims=[c["id"] for c in selected], model=sess.cfg.fact_check.model)
             except BaseException:
                 early_task.cancel()
@@ -625,6 +625,12 @@ async def read_leads(sess: Council, R: Any, selected: list[dict[str, Any]]) -> d
     return pages
 
 
+def _claims_word(n: int) -> str:
+    n = abs(n) % 100
+    return "утверждение" if n % 10 == 1 and n != 11 else (
+        "утверждения" if 2 <= n % 10 <= 4 and not 12 <= n <= 14 else "утверждений")
+
+
 async def search(sess: Council, R: Any, question: str, as_of: str, scope: str, selected: list[dict[str, Any]], rc: Any,
                   stage: str, *, recheck: bool = False, missions: int | None = None, announce: bool = True) -> list[Any]:
     """Поисковые вызовы по пачкам утверждений: подтвердить и опровергнуть (второй поиск — другими запросами).
@@ -635,7 +641,7 @@ async def search(sess: Council, R: Any, question: str, as_of: str, scope: str, s
     sess.stats.setdefault(FACT_CHECKER, MemberStats())
     if stage == "arbitration" and not recheck and announce:
         sess._emit("stage", stage="arbitration",
-                   title=f"Арбитраж доказательств: {len(selected)} утверждений, поиск {fc.model}",
+                   title=f"Арбитраж доказательств: {len(selected)} {_claims_word(len(selected))}, поиск {fc.model}",
                    claims=[c["id"] for c in selected], model=fc.model)
     size = R.ARBITRATION_BATCH
     chunks = [selected[k:k + size] for k in range(0, len(selected), size)]

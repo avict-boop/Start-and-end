@@ -317,6 +317,11 @@ def _same_site(src: str, request: Any) -> bool:
     return bool(host) and host in own
 
 
+def _ru_plural(n: int, one: str, few: str, many: str) -> str:
+    n = abs(n) % 100
+    return one if n % 10 == 1 and n != 11 else few if 2 <= n % 10 <= 4 and not 12 <= n <= 14 else many
+
+
 def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: str | None = None) -> FastAPI:
     config_path = Path(config_path)
     @asynccontextmanager
@@ -1299,7 +1304,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         others = sorted((n for n in score if n != chair), key=lambda n: -score[n])
         return [chair] + others[:max(0, k - 1)] if others else []
 
-    SUMMARY_TASK = """Сводный отчёт серии «{title}». Задание ниже проверялось по частям ({n} заседаний с одинаковыми
+    SUMMARY_TASK = """Сводный отчёт серии «{title}». Задание ниже проверялось по частям ({n} {sessions_word} с одинаковыми
 настройками); итоги частей и их реестры проверенных утверждений приложены (файлы «chast-N.md»), а проверенные в
 частях утверждения уже стоят в общем реестре с номерами P1-…, P2-… и своими статусами.
 
@@ -1369,7 +1374,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             objects += [o for o in p.get("objects") or [] if o not in objects]
             atts.append(load_attachment(part_doc(p["n"], p["title"], p.get("objects") or [], d, room).encode("utf-8"),
                                         f"chast-{p['n']}.md"))
-        question = SUMMARY_TASK.format(title=s["title"], n=len(done), count=len(objects),
+        question = SUMMARY_TASK.format(title=s["title"], n=len(done),
+                                       sessions_word=_ru_plural(len(done), "заседание", "заседания", "заседаний"),
+                                       count=len(objects),
                                        objects="\n".join(f"- {o}" for o in objects) or "—", task=s.get("task") or "")
         base_rs = dict((s["request"] or {}).get("research") or {})
         authors = summary_authors(datas, (s["request"] or {}).get("chair") or base_config().chair,
