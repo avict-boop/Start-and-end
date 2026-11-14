@@ -212,16 +212,21 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
         feedback = [{"scores": rv.scores, "strengths": rv.strengths, "weaknesses": rv.weaknesses,
                      "disputed_claims": rv.disputed_claims, "missing_subquestions": rv.missing_subquestions}
                     for reviewer, cs in critiques.items() if reviewer != m.name for rv in cs.reviews if rv.label == own]
+        # доработка правками: свой вариант — блоками [S#], автор присылает только изменённые (дешевле в разы)
+        blocks = R.summary_blocks(proposals[own].summary) if rc.revision_patches else []
+        blocks = blocks if len(blocks) >= 2 else []
         jobs[m.name] = sess._ask(
             m, "revision",
             R.revision(rhead, criteria, own, proposals[own], feedback, others(m.name), ledger_txt,
                        lens_of.get(m.name, ""), rc.max_words, rc.max_claims, full_others=not rc.revision_digest,
-                       table_rows=rc.digest_table_rows) + (prompts.WEB_NOTE if m.name in rev_scouts else ""),
+                       table_rows=rc.digest_table_rows, blocks=blocks or None)
+            + (prompts.WEB_NOTE if m.name in rev_scouts else ""),
             R.ResearchRevision,
             # сокращение слишком длинного варианта до заданной длины — не «потеря содержания»
             check=lambda r, prev=(None if rc.shorten_long and len(proposals[own].summary.split())
-                                  > rc.max_words * rc.long_factor and rc.max_words else proposals[own]), n=m.name: fit(
-                check_substance(_normalize_revision(r), previous=prev), "revision", n),
+                                  > rc.max_words * rc.long_factor and rc.max_words else proposals[own]), n=m.name,
+            bl=blocks, t0=proposals[own].title: fit(check_substance(
+                _normalize_revision(R.apply_block_edits(r, bl, t0) if bl else r), previous=prev), "revision", n),
             meta={"label": own, **rmeta}, max_tokens=sess.author_tokens(m), web_search=m.name in rev_scouts)
     revised = await sess._parallel("revision", jobs)
     known_urls = {e["url"] for e in (ledger or {}).get("evidence", [])}
@@ -265,7 +270,8 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
             return b.model_copy(update={"ranking": normalize_ranking(b.ranking, e), "best_by_subquestion": best})
 
         jobs[m.name] = sess._ask(m, "vote", R.vote(rhead, criteria, target, subq, req, rc.section_vote,
-                                                    R.ledger_digest(ledger) if rc.vote_ledger else ""),
+                                                    R.ledger_digest(ledger) if rc.vote_ledger else "",
+                                                    digests=rc.vote_digest),
                                  R.ResearchBallot, check=check_ballot,
                                  meta={"labels": expected, "subquestions": len(subq), **rmeta})
     ballots = await sess._parallel("vote", jobs)

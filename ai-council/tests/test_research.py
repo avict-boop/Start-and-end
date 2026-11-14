@@ -453,3 +453,48 @@ def test_part_numbers_and_unit_definitions_are_not_fact_numbers():
     assert nums("Часть 2 из 2: ни у одной из 11 компаний; см. P2-D-C3-V1 и chast-1.md") == ["11"]
     assert nums("242 774,46万 (万 = 10 000)") == ["242774.46"]
     assert nums("в 2 компаниях из 3") == ["2", "3"]  # обычные числа по-прежнему проверяются
+
+
+def test_cheaper_research_patches_caps_and_vote_digest():
+    """Доработка правками собирается программой; критика и доработка — с потолком рассуждений; голосование — по
+    выжимке, а не по полным текстам."""
+    import json as _json
+    from council.mock import MockClient
+
+    class Spy(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.effort: dict[str, set] = {}
+            self.vote_chars = 0
+            self.rev_prompts = []
+
+        async def complete(self, model, messages, **kw):
+            st = (kw.get("meta") or {}).get("stage")
+            self.effort.setdefault(st, set()).add(kw.get("reasoning_effort"))
+            text = "".join(str(m.get("content")) for m in messages)
+            if st == "vote":
+                self.vote_chars = max(self.vote_chars, len(text))
+            comp = await super().complete(model, messages, **kw)
+            if st == "proposal":  # длинный вариант с разделами — есть что править блоками
+                d = _json.loads(comp.text)
+                d["summary"] = "\n\n".join(f"## Раздел {i}\n\n" + f"Текст раздела {i}. " * 120 for i in range(1, 6))
+                comp.text = _json.dumps(d, ensure_ascii=False)
+            if st == "revision":
+                self.rev_prompts.append(text)
+                d = _json.loads(comp.text)
+                d.pop("summary", None)
+                d["edits"] = [{"block": "S2", "text": "## Раздел 2\n\nИсправлено по реестру [E1]."}]
+                d["delete_blocks"] = ["S5"]
+                comp.text = _json.dumps(d, ensure_ascii=False)
+            return comp
+
+    c = Spy()
+    cfg = make_cfg(mode="research", reasoning_effort="high", max_concurrency=8)
+    res = run(Council(cfg, c, seed=3).run("Каков рынок кофеен у вузов?"))
+    assert any("[S1]" in p and "edits" in p for p in c.rev_prompts)  # автору показан вариант по блокам
+    revised = [p for p in res.proposals.values() if "Исправлено по реестру" in p.summary]
+    assert revised and all("Раздел 5" not in p.summary and "Раздел 4" in p.summary for p in revised)  # правки применены
+    assert c.effort["critique"] == {"medium"} and c.effort["revision"] == {"medium"}  # потолок: high → medium
+    assert c.effort["proposal"] == {"high"} and "high" in c.effort["verdict"]  # варианты и итог — полная глубина
+    full = sum(len(p.summary) for p in res.proposals.values())
+    assert c.vote_chars < full  # голосующий видит выжимки, а не все полные тексты

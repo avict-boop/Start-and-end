@@ -446,6 +446,11 @@ class Council:
         effort = member.reasoning_effort or self.cfg.reasoning_effort
         if stage == "vote" and self.cfg.vote_reasoning:
             effort = self.cfg.vote_reasoning  # ранжирование готовых вариантов — без глубоких скрытых рассуждений
+        cap = {"critique": self.cfg.critique_reasoning, "revision": self.cfg.revision_reasoning}.get(stage) or ""
+        if cap and effort != "none":  # потолок: понижает «high», но не повышает «low» и не включает выключенное
+            order = ["none", "minimal", "low", "medium", "high"]
+            if effort not in order or order.index(effort) > order.index(cap):
+                effort = cap
         error = ""
         started = time.monotonic()
         name = member.name

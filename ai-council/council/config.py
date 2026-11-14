@@ -79,6 +79,12 @@ class ResearchConfig(BaseModel):
     objects_per_part: int = Field(default=10, ge=3, le=40)
     max_evidence: int = Field(default=20, ge=5, le=40)  # источников в ответе поиска
     revision_digest: bool = True   # доработка по реестру и выжимкам чужих вариантов, а не по их полным текстам
+    # Доработка правками: автор присылает только изменённые блоки своего варианта (программа собирает новую версию),
+    # а не переписывает его целиком. На 13.11 доработка — треть счёта исследования, почти всё — переписанный текст
+    revision_patches: bool = True
+    # Голосование по выжимке вариантов (главный вывод, утверждения, таблицы, риски, что изменено), а не по полным
+    # текстам: ранжирование опирается на суть и реестр, полный текст читают критики и председатель
+    vote_digest: bool = True
     section_vote: bool = True      # голосование за лучший вариант по каждому подвопросу
     fresh_scouts: int = Field(default=0, ge=0, le=2)    # авторов с поиском уже на этапе предложений («свежие данные»)
     # Поиск у авторов и на доработке. Выключено: на доработке у автора уже есть реестр проверенных источников, а
@@ -217,6 +223,11 @@ class CouncilConfig(BaseModel):
     json_mode: bool = True
     # Глубина скрытых рассуждений на голосовании (ранжирование готовых вариантов): low — дешевле; "" — как у участника
     vote_reasoning: Literal["", "none", "low", "medium", "high"] = "low"
+    # Потолок глубины рассуждений на критике и доработке: полная глубина нужна вариантам и итогу, а разбор чужих
+    # вариантов и правки по реестру идут по готовому материалу. Только понижает (ниже у участника — так и остаётся);
+    # пусто — как у участника. На 13.11 рассуждения критики и доработки — ~300 тыс. токенов ответа за серию из 2 частей
+    critique_reasoning: Literal["", "none", "low", "medium", "high"] = "medium"
+    revision_reasoning: Literal["", "none", "low", "medium", "high"] = "medium"
     # Пилот: модель для «ответа одной модели с поиском» — контрольная группа к совету; пусто — модель председателя
     pilot_solo_model: str = ""
     chair: str
@@ -290,7 +301,7 @@ def load_dotenv(path: str | Path = ".env") -> None:
 
 
 # какие настройки исследования можно менять для одного заседания (советник и «Параметры» вопроса)
-RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "max_claims", "revision_digest",
+RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "max_claims", "revision_digest", "revision_patches", "vote_digest",
                     "section_vote", "fresh_scouts", "revision_search", "max_words", "shorten_long", "long_factor", "link_check",
                     "recheck_unclear", "post_revision_claims", "vote_ledger", "snippet_rule", "digest_table_rows",
                     "object_coverage", "facts_per_object", "catalog", "auto_split", "objects_per_part",

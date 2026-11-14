@@ -208,6 +208,13 @@ function renderSettings() {
         <select id="sVoteReason" ${ro}>${[["", "как у участника"], ["none", "без рассуждений"], ["low", "низкая — дешевле (рекомендуем)"], ["medium", "средняя"], ["high", "высокая"]]
           .map(([v, t]) => `<option value="${v}" ${(d.vote_reasoning ?? "low") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
         <small class="hint">голосование — ранжирование готовых вариантов; глубокие скрытые рассуждения здесь дороги и почти не нужны</small></label>
+      <div class="row2">
+        ${[["sCritReason", "critique_reasoning", "Глубина рассуждений на критике (потолок)"], ["sRevReason", "revision_reasoning", "Глубина рассуждений на доработке (потолок)"]].map(([id, k, t]) => `
+        <label class="field"><span>${t}</span>
+          <select id="${id}" ${ro}>${[["", "как у участника"], ["low", "низкая"], ["medium", "средняя — дешевле, без потери (рекомендуем)"], ["high", "высокая"]]
+            .map(([v, n]) => `<option value="${v}" ${(d[k] ?? "medium") === v ? "selected" : ""}>${n}</option>`).join("")}</select>
+          <small class="hint">только понижает: у участника ниже — так и останется. Полная глубина — у вариантов и итога</small></label>`).join("")}
+      </div>
       <h2 style="margin-top:1rem">Журнал программы</h2>
       <div class="row2">
         <label class="field"><span>Подробность</span>
@@ -256,6 +263,8 @@ function renderSettings() {
          ["rQuote", "quote_check", "Искать цитату на странице", "поиск приводит дословную фразу источника, программа находит её на самой странице; для важного утверждения не нашлась — не засчитано (бесплатно)"],
          ["rLinks", "link_check", "Проверять ссылки", "открыть каждую ссылку реестра: мёртвая ничего не подтверждает"],
          ["rObjects", "object_coverage", "Обязательный охват объектов задания", "если в задании список объектов (компании, продукты): автор без фактов о каком-то из них получает вариант назад, а на проверку сначала идут факты о каждом объекте. Без списка ничего не делает"],
+         ["rPatches", "revision_patches", "Доработка правками", "автор присылает только изменённые блоки своего варианта, программа собирает новую версию — доработка в разы дешевле, текст и утверждения те же; сменивший подход автор может прислать вариант целиком"],
+         ["rVoteDigest", "vote_digest", "Голосование по выжимке", "голосующие видят главный вывод, утверждения, таблицы, риски и правки, а не полные тексты (их читают критики и председатель) — голосование в 3–5 раз дешевле"],
          ["rAutoSplit", "auto_split", "Председатель разбивает большой список на серию", "объектов больше, чем «объектов в части», — председатель группирует их по смыслу, части идут друг за другом с теми же настройками (по 2 одновременно), потом совет сводит их в один отчёт. Каждая часть получает полное задание без сокращений"]].map(([id, k, t, h]) =>
         `<label class="switch"><input type="checkbox" id="${id}" data-r="${k}" ${d.research[k] ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>${t}</b><small>${h}</small></span></label>`).join("")}
       <div class="row2" style="margin-top:.6rem">
@@ -377,6 +386,8 @@ function bindSettings() {
   bindVal("fFetch", (t) => { d.fact_check.fetch_pages = num(t.value); });
   bindVal("fLeads", (t) => { const n = num(t.value) || 0; d.fact_check.lead_pages = n; d.fact_check.read_leads = n > 0; });
   bindVal("sVoteReason", (t) => { d.vote_reasoning = t.value; });
+  bindVal("sCritReason", (t) => { d.critique_reasoning = t.value; });
+  bindVal("sRevReason", (t) => { d.revision_reasoning = t.value; });
   bindVal("sEngine", (t) => { d.search_engine = t.value; });
   bindVal("sLogLevel", (t) => { d.log_level = t.value; });
   bindVal("tModel", (t) => { d.transcribe_model = t.value.trim(); });

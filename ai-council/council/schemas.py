@@ -127,7 +127,8 @@ TEXT_ALIASES = ("answer", "content", "text", "proposal", "response", "solution",
                 "option", "result", "report")
 KNOWN_PROPOSAL = {"title", "summary", "reasoning", "pros", "risks", "confidence",
                   "changes", "comparison", "borrowed", "position", "not_accepted",
-                  "claims", "coverage", "unknowns", "what_would_change", "new_after_ledger"}  # + режим «Исследование»
+                  "claims", "coverage", "unknowns", "what_would_change", "new_after_ledger",  # + режим «Исследование»
+                  "edits", "insert_after", "delete_blocks", "omitted_for_length"}  # доработка правками
 
 
 class Proposal(BaseModel):
@@ -148,7 +149,11 @@ class Proposal(BaseModel):
             return data
         data = dict(data)
         sections: dict = {}
-        if data.get("summary") in (None, "", [], {}):
+        patched = any(data.get(k) for k in ("edits", "insert_after", "delete_blocks"))
+        if patched and data.get("summary") in (None, "", [], {}):
+            data["summary"] = ""  # доработка правками: текст соберёт программа из блоков
+            data.setdefault("title", "")  # заголовок — прежний, если автор его не прислал
+        elif data.get("summary") in (None, "", [], {}):
             alt = _pick(data, *TEXT_ALIASES)
             if alt is not None:
                 data["summary"] = alt

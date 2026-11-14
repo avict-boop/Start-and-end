@@ -215,8 +215,35 @@ class ClaimsAddon(BaseModel):
         return v if isinstance(v, list) else ([v] if v else [])
 
 
+class BlockEdit(BaseModel):
+    block: str = ""
+    text: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _keys(cls, v: Any) -> Any:
+        if isinstance(v, dict):
+            return {"block": str(_pick(v, "block", "id", "after") or "").strip(), "text": to_text(_pick(v, "text", "new_text") or "")}
+        return v
+
+
 class ResearchRevision(ResearchProposal):
     """Этап 4: доработка по реестру доказательств."""
+
+    # правки по блокам своего варианта (доработка правками): заменить, вставить после, удалить
+    edits: list[BlockEdit] = Field(default_factory=list)
+    insert_after: list[BlockEdit] = Field(default_factory=list)
+    delete_blocks: list[str] = Field(default_factory=list)
+
+    @field_validator("edits", "insert_after", mode="before")
+    @classmethod
+    def _edits(cls, v: Any) -> Any:
+        return v if isinstance(v, list) else ([v] if v else [])
+
+    @field_validator("delete_blocks", mode="before")
+    @classmethod
+    def _dels(cls, v: Any) -> list[str]:
+        return [str(x).strip() for x in (v if isinstance(v, list) else to_list(v)) if str(x).strip()]
 
     changes: str = ""
     comparison: str = ""
@@ -587,6 +614,68 @@ JSON format:
  "confidence": 0.0-1.0}}"""
 
 
+BLOCK_CHARS = 1800  # блок для правок: раздел по заголовку, длинный — по абзацам (таблица не разрывается)
+
+
+def summary_blocks(text: str) -> list[str]:
+    """Вариант → блоки для доработки правками: новый блок с каждого заголовка и когда блок длиннее BLOCK_CHARS;
+    абзац (и таблица целиком — в ней нет пустых строк) не разрывается."""
+    paras = [p for p in re.split(r"\n\s*\n", text or "") if p.strip()]
+    blocks: list[str] = []
+    for p in paras:
+        heading = bool(re.match(r"\s*#{1,6}\s", p))
+        only_heading = bool(blocks) and bool(re.fullmatch(r"\s*#{1,6}\s[^\n]*\s*", blocks[-1]))
+        if not blocks or heading or (len(blocks[-1]) + len(p) > BLOCK_CHARS and not only_heading):  # заголовок — с текстом
+            blocks.append(p)
+        else:
+            blocks[-1] += "\n\n" + p
+    return blocks
+
+
+def blocks_text(blocks: list[str]) -> str:
+    return "\n\n".join(f"[S{i}]\n{b}" for i, b in enumerate(blocks, 1))
+
+
+def apply_block_edits(r: Any, blocks: list[str], prev_title: str = "") -> Any:
+    """Собирает доработанный вариант из правок по блокам. Полный «summary» без правок — принимается как есть
+    (автор сменил подход и переписал целиком). Неизвестный номер блока — ошибка: модель исправит ответ."""
+    edits, ins, dels = list(r.edits), list(r.insert_after), list(r.delete_blocks)
+    if prev_title and (not r.title.strip() or r.title.strip() in ("...", "…")):
+        r = r.model_copy(update={"title": prev_title})  # правки без заголовка — заголовок прежний
+    if not (edits or ins or dels):
+        return r
+    if _letters_n(r.summary) > _letters_n("\n".join(blocks)) * 0.5:  # и правки, и полный текст — верим полному
+        return r.model_copy(update={"edits": [], "insert_after": [], "delete_blocks": []})
+    n = len(blocks)
+    ids = {f"S{i}" for i in range(1, n + 1)}
+
+    def key(x: str) -> str:
+        x = x.strip().upper().strip("[]")
+        return x if x.startswith("S") else f"S{x}"
+    bad = [e.block for e in edits + ins if key(e.block) not in ids and key(e.block) != "S0"] + \
+          [d for d in dels if key(d) not in ids]
+    if bad:
+        raise ValueError(f'edits name blocks that do not exist: {", ".join(bad[:5])}. Your proposal has blocks S1–S{n}; '
+                         'use only these ids (insert_after "S0" inserts at the very beginning). Reply with the full JSON again')
+    new = {key(e.block): e.text for e in edits if e.text.strip()}
+    after: dict[str, list[str]] = {}
+    for e in ins:
+        if e.text.strip():
+            after.setdefault(key(e.block), []).append(e.text)
+    gone = {key(d) for d in dels}
+    out = list(after.get("S0", []))
+    for i, b in enumerate(blocks, 1):
+        k = f"S{i}"
+        if k not in gone:
+            out.append(new.get(k, b))
+        out += after.get(k, [])
+    return r.model_copy(update={"summary": "\n\n".join(out), "edits": [], "insert_after": [], "delete_blocks": []})
+
+
+def _letters_n(text: str) -> int:
+    return sum(ch.isalpha() for ch in text or "")
+
+
 def proposal_block(label: str, p: Proposal, claim_ids: bool = True) -> str:
     lines = [f"### Proposal {label}: {p.title}", p.summary]
     if p.reasoning:
@@ -743,7 +832,7 @@ def digest(label: str, p: Proposal, table_rows: int = 12) -> str:
 
 def revision(rhead: str, criteria: list[str], own_label: str, own: Proposal, feedback: list[dict],
              others: dict[str, Proposal], ledger: str, lens: str, max_words: int, max_claims: int,
-             full_others: bool, table_rows: int = 12) -> str:
+             full_others: bool, table_rows: int = 12, blocks: list[str] | None = None) -> str:
     fb = json.dumps(feedback, ensure_ascii=False, indent=1) if feedback else "(no feedback received)"
     if full_others:
         others_txt = "Other proposals, in full (anonymous):\n\n" + "\n\n".join(proposal_block(l, p) for l, p in others.items())
@@ -756,7 +845,7 @@ Criteria:
 {_criteria(criteria)}
 
 Your current research proposal (label {own_label}):
-{proposal_block(own_label, own)}
+{proposal_block(own_label, own) if not blocks else own_with_blocks(own_label, own, blocks)}
 
 Anonymous feedback other members gave on your proposal:
 {fb}
@@ -774,9 +863,9 @@ Do this in order:
 4. Any claim you ADD or CHANGE that is not covered by the ledger goes to "new_after_ledger" (by its text).
 {dossier_rule(max_words)}
 {_claims_rule(max_claims)}
-
+{PATCH_RULE if blocks else ""}
 JSON format:
-{{"title": "...", "summary": "the full revised research answer with [E#]/[DOC]/[CALC]/[MEM] tags",
+{{"title": "...", {PATCH_JSON if blocks else '"summary": "the full revised research answer with [E#]/[DOC]/[CALC]/[MEM] tags",'}
  "reasoning": "...", "claims": [{CLAIM_JSON}], "pros": ["..."], "risks": ["..."],
  "coverage": [{{"subquestion_id": "Q1", "status": "covered|partial|unknown", "note": "..."}}],
  "unknowns": ["..."], "what_would_change": ["..."], "confidence": 0.0-1.0,
@@ -784,6 +873,53 @@ JSON format:
  "not_accepted": ["critique not accepted and why"], "position": "kept | improved | switched",
  "changes": "what you changed and why", "new_after_ledger": ["claim text"],
  "omitted_for_length": ["..."]}}"""
+
+
+PATCH_RULE = """Revise by EDITS, do not rewrite the whole answer: your summary above is split into blocks [S1], [S2]…
+- "edits": blocks you change — the block id and its FULL new text (the block is replaced entirely);
+- "insert_after": new blocks — after which block ("S0" = at the very beginning) and the text;
+- "delete_blocks": ids of blocks to remove.
+Blocks you do not mention stay exactly as they are. Leave "summary" empty. Only if you switch your whole approach,
+return the complete new "summary" instead of edits. "claims" is always the complete list (unchanged ones included).
+"""
+PATCH_JSON = ('"summary": "", "edits": [{"block": "S3", "text": "full new text of block S3"}], '
+              '"insert_after": [{"block": "S5", "text": "new block"}], "delete_blocks": ["S7"],')
+
+
+def own_with_blocks(label: str, p: Proposal, blocks: list[str]) -> str:
+    """Свой вариант для доработки правками: текст по блокам [S#], остальное — как обычно."""
+    full = proposal_block(label, p)
+    head = f"### Proposal {label}: {p.title}\n{p.summary}"
+    tail = full[len(head):] if full.startswith(head) else ""  # утверждения, неизвестное, риски — как обычно
+    return f"### Proposal {label}: {p.title}\n{blocks_text(blocks)}{tail}"
+
+
+VOTE_LEAD_CHARS = 2500  # начало варианта (главный вывод) — в выжимке для голосования
+
+
+def vote_digest(label: str, p: Proposal, table_rows: int = 40) -> str:
+    """Вариант для голосования без полного текста: главный вывод (начало), утверждения, покрытие, строки таблиц,
+    риски и что изменено при доработке. Статусы утверждений голосующие видят в выжимке реестра."""
+    lead = (p.summary or "").strip()
+    if len(lead) > VOTE_LEAD_CHARS:
+        cut = lead[:VOTE_LEAD_CHARS]
+        lead = cut[:cut.rfind("\n\n")] if cut.rfind("\n\n") > VOTE_LEAD_CHARS // 2 else cut
+        lead += "\n…(full text omitted for voting; its tables and claims follow)"
+    lines = [f"### Proposal {label}: {p.title}", lead]
+    if p.reasoning:
+        lines.append(f"Reasoning: {p.reasoning[:800]}")
+    rest = digest(label, p, table_rows).split("\n", 1)
+    if len(rest) > 1:
+        lines.append(rest[1])
+    if p.risks:
+        lines.append("Risks: " + "; ".join(p.risks[:6]))
+    changes = getattr(p, "changes", "")
+    if changes:
+        lines.append(f"What the author changed after the evidence ledger: {str(changes)[:600]}")
+    added = getattr(p, "new_after_ledger", None) or []
+    if added:
+        lines.append("Added after the evidence ledger (UNVERIFIED): " + "; ".join(added))
+    return "\n".join(lines)
 
 
 VOTE_LEDGER_NOTE = ("A compact evidence digest follows (claim id, status, evidence ids, material seen). It is evidence about "
@@ -794,9 +930,11 @@ VOTE_LEDGER_NOTE = ("A compact evidence digest follows (claim id, status, eviden
 
 
 def vote(rhead: str, criteria: list[str], proposals: dict[str, Proposal], subq: list[str], req: list[str] | None,
-         section_vote: bool, ledger_digest: str = "") -> str:
+         section_vote: bool, ledger_digest: str = "", digests: bool = False) -> str:
     labels = ", ".join(proposals)
-    blocks = "\n\n".join(proposal_block(l, p) for l, p in proposals.items())
+    # голосование по выжимке: вывод, утверждения, таблицы, риски — без полного текста (13.11: голосование читало
+    # 1,35 млн токенов ради 16 тыс. ответа)
+    blocks = "\n\n".join((vote_digest(l, p) if digests else proposal_block(l, p)) for l, p in proposals.items())
     qids = ", ".join(f"Q{i}" for i in range(1, len(subq) + 1))
     sec = (f'\nAlso pick, for each subquestion ({qids}), which proposal covers it best with evidence — this chooses the '
            'backbone of that section of the final report, not the truth of facts: "best_by_subquestion".') if section_vote else ""
