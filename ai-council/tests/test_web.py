@@ -745,3 +745,20 @@ def test_user_can_forbid_split_for_one_request(client):
     assert "split_series" not in kinds and "done" in kinds  # одним заседанием, несмотря на длинный список
     obj = next(e for e in ev if e["type"] == "objects")
     assert obj["count"] == 23
+
+
+def test_light_summary_two_authors_whole_council_critiques_and_votes(client):
+    import json as _json
+    objs = ["Alphacorp Foods", "Betamax Nutrition"]
+    r = client.post("/api/series", json={
+        "title": "Лёгкая сводка", "task": "Проверь компании Alphacorp Foods и Betamax Nutrition",
+        "parts": [{"title": "A", "objects": objs[:1]}, {"title": "B", "objects": objs[1:]}],
+        "request": {"mode": "research", "mock": True, "members": ["a", "b", "c"], "chair": "a"},
+        "max_parallel": 2, "auto_summary": True})
+    v = _wait_series(client, r.json()["id"])
+    d = _json.loads((tmp_runs(client) / f"{v['summary']['session_id']}.json").read_text(encoding="utf-8"))
+    authors = set(d["authors"].values())
+    assert len(authors) == 2 and "a" in authors  # пишут председатель и лучший по частям
+    critics = {c.get("reviewer") or c.get("member") for c in d["critiques"]} if isinstance(d["critiques"], list) else set(d["critiques"])
+    assert {"a", "b", "c"} <= set(d["ballots"]) and len(critics) == 3  # критикуют и голосуют все трое
+    assert d["research"]["ledger"]["inherited_parts"] == [1, 2]

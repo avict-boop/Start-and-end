@@ -498,3 +498,10 @@ def test_cheaper_research_patches_caps_and_vote_digest():
     assert c.effort["proposal"] == {"high"} and "high" in c.effort["verdict"]  # варианты и итог — полная глубина
     full = sum(len(p.summary) for p in res.proposals.values())
     assert c.vote_chars < full  # голосующий видит выжимки, а не все полные тексты
+
+
+def test_chair_searches_at_verdict_only_when_ledger_has_gaps():
+    assert R.verdict_gaps({"claims": [{"id": "A-C1", "status": "confirmed", "critical": True}]}) == []
+    assert R.verdict_gaps({"claims": [{"id": "A-C2", "status": "unclear", "decisive": True}]}) == ["A-C2"]
+    assert R.verdict_gaps({"claims": [{"id": "A-C3", "status": "unclear"}]}) == []  # неважное — не повод искать
+    assert R.verdict_gaps({"claims": [], "objects": {"missing": ["Firm01"]}}) == ["object:Firm01"]

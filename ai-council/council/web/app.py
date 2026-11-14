@@ -1280,6 +1280,23 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         if t is None or t.done():
             series_tasks[series_id] = asyncio.create_task(run_series(series_id))
 
+    def summary_authors(datas: list[dict[str, Any]], chair: str, k: int) -> list[str]:
+        """Кто пишет сводку: председатель и лучшие по частям (чаще побеждали, выше в подсчёте голосов). 0 — все."""
+        if k <= 0:
+            return []
+        score: dict[str, float] = {}
+        for d in datas:
+            authors = d.get("authors") or {}
+            win = authors.get((d.get("verdict") or {}).get("winner") or "")
+            if win:
+                score[win] = score.get(win, 0) + 10
+            for i, row in enumerate(d.get("tally") or []):
+                name = authors.get(row.get("label", ""))
+                if name:
+                    score[name] = score.get(name, 0) + max(0, 5 - i)
+        others = sorted((n for n in score if n != chair), key=lambda n: -score[n])
+        return [chair] + others[:max(0, k - 1)] if others else []
+
     SUMMARY_TASK = """Сводный отчёт серии «{title}». Задание ниже проверялось по частям ({n} заседаний с одинаковыми
 настройками); итоги частей и их реестры проверенных утверждений приложены (файлы «chast-N.md»), а проверенные в
 частях утверждения уже стоят в общем реестре с номерами P1-…, P2-… и своими статусами.
@@ -1342,21 +1359,26 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         if not done:
             raise HTTPException(400, "нет ни одной готовой части")
         from ..attachments import MAX_DOC_CHARS, MAX_TOTAL_DOC_CHARS
-        atts, objects = [], []
+        atts, objects, datas = [], [], []
         room = min(MAX_DOC_CHARS, MAX_TOTAL_DOC_CHARS // len(done) - 200)  # поровну: ни одна часть не обрезается целиком
         for p, sid in done:
             d = await asyncio.to_thread(archive().load, sid)
+            datas.append(d)
             objects += [o for o in p.get("objects") or [] if o not in objects]
             atts.append(load_attachment(part_doc(p["n"], p["title"], p.get("objects") or [], d, room).encode("utf-8"),
                                         f"chast-{p['n']}.md"))
         question = SUMMARY_TASK.format(title=s["title"], n=len(done), count=len(objects),
                                        objects="\n".join(f"- {o}" for o in objects) or "—", task=s.get("task") or "")
         base_rs = dict((s["request"] or {}).get("research") or {})
+        authors = summary_authors(datas, (s["request"] or {}).get("chair") or base_config().chair,
+                                  int(base_rs.get("summary_authors", base_config().research.summary_authors)))
         rs = {**base_rs, "catalog": False, "facts_per_object": 1, "arbitration_claims": 10,
-              "summary_conflicts": True, "summary_recheck": bool(s.get("summary_recheck")),
+              "summary_conflicts": True, "summary_recheck": bool(s.get("summary_recheck")), "authors": authors,
               "max_claims": max(int(base_rs.get("max_claims") or 8), min(80, len(objects) + 3))}
         req = RunRequest(**{**s["request"], "question": question, "mode": "research", "research": rs,
-                            "research_words": 0, "web_search": []})
+                            "research_words": 0, "web_search": [],
+                            # председатель — один из двух авторов сводки
+                            **({"chair_proposes": True} if authors else {})})
         sid = await create_session(req, extra_atts=atts, spec_extra={"inherit": [[p["n"], x] for p, x in done],
                                                                      "objects": objects},
                                    request_extra={"series": {"id": series_id, "summary": True, "title": s["title"],

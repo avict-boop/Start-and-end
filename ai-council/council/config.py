@@ -76,6 +76,14 @@ class ResearchConfig(BaseModel):
     summary_conflicts: bool = True
     summary_recheck: bool = False
     summary_recheck_max: int = Field(default=20, ge=1, le=60)
+    # Сводка серии: варианты пишут столько авторов (председатель + лучшие по частям), критикует и голосует весь совет.
+    # Всё уже проверено в частях — пять полных черновиков сводки не нужны. 0 — пишут все
+    summary_authors: int = Field(default=2, ge=0, le=10)
+    # Кто пишет варианты (пусто — все участники); задаёт программа (сводка серии)
+    authors: list[str] = Field(default_factory=list)
+    # Поиск председателя на итоге (если у него включён поиск): gaps — только когда в реестре остались невыясненные
+    # важные утверждения или объекты без проверенных фактов; always — всегда; never — никогда
+    chair_search: Literal["gaps", "always", "never"] = "gaps"
     objects_per_part: int = Field(default=10, ge=3, le=40)
     max_evidence: int = Field(default=20, ge=5, le=40)  # источников в ответе поиска
     revision_digest: bool = True   # доработка по реестру и выжимкам чужих вариантов, а не по их полным текстам
@@ -305,7 +313,7 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
                     "section_vote", "fresh_scouts", "revision_search", "max_words", "shorten_long", "long_factor", "link_check",
                     "recheck_unclear", "post_revision_claims", "vote_ledger", "snippet_rule", "digest_table_rows",
                     "object_coverage", "facts_per_object", "catalog", "auto_split", "objects_per_part",
-                    "summary_conflicts", "summary_recheck", "summary_recheck_max")
+                    "summary_conflicts", "summary_recheck", "summary_recheck_max", "summary_authors", "authors", "chair_search")
 
 
 class OverrideError(ValueError):

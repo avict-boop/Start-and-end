@@ -108,6 +108,9 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
 
     # 1. Слепые предложения с утверждениями; у каждого автора своя линза
     proposers = [m for m in members if m.name != chair.name] if sess.chair_judge else members
+    if rc.authors:  # сводка серии: пишут только названные (председатель и лучший по частям); критикуют и голосуют все
+        named = [m for m in members if m.name in rc.authors]
+        proposers = named if len(named) >= 2 else proposers
     pool = list(lenses)
     sess.rng.shuffle(pool)
     lens_of = {m.name: (pool[i % len(pool)] if pool else "") for i, m in enumerate(proposers)}
@@ -340,6 +343,11 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
         decided = normalize_ideas(v.ideas, idea_ids, strict=strict)
         return v.model_copy(update={"winner": w, "deviation": deviation, "ideas": decided})
 
+    # поиск председателя на итоге — только когда есть что искать (дорого: итог с поиском читал до 658 тыс. токенов)
+    chair_web = bool(chair.web_search) and (rc.chair_search == "always" or (
+        rc.chair_search == "gaps" and R.verdict_gaps(ledger)))
+    if chair.web_search and not chair_web:
+        log.info("%sитог без поиска председателя: в реестре нет невыясненных важных пунктов", sess._tag)
     proposals_txt = "\n\n".join(
         R.proposal_block(l, p) + (f"\nChanges after critique: {p.changes}" if getattr(p, "changes", "") else "")
         + (f"\nAdded after the ledger (cannot be known): {'; '.join(p.new_after_ledger)}"
@@ -356,8 +364,8 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
             # проверка спорного при синтезе; найденное — не «известно» (его нет в реестре), новые утверждения итога
             # проверяет «Проверка новых утверждений»
             + (prompts.CHAIR_WEB_NOTE + " Facts you found yourself are not in the ledger: never put them into "
-               "\"known\" — keep them in the text, contested or unknown, with the URL." if chair.web_search else ""),
-            R.ResearchVerdict, check=check_verdict, max_tokens=sess.verdict_tokens(chair), web_search=chair.web_search,
+               "\"known\" — keep them in the text, contested or unknown, with the URL." if chair_web else ""),
+            R.ResearchVerdict, check=check_verdict, max_tokens=sess.verdict_tokens(chair), web_search=chair_web,
             meta={"labels": valid, "leader": leader, "ideas": idea_ids, "subquestions": len(subq),
                   "evidence_ok": sorted(R.confirmed_ids(ledger)),
                   "claims_ok": {e: c["id"] for c in reversed((ledger or {}).get("claims", []))  # первое утверждение источника

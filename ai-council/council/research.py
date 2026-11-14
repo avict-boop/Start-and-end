@@ -1590,6 +1590,16 @@ SETTLED = {"confirmed", "partially_confirmed", "refuted", "user_doc"}      # в 
 OPEN = {"unclear", "contested_in_sources", "search_unavailable", "not_checked"}  # в части не выяснено
 
 
+def verdict_gaps(ledger: dict[str, Any] | None) -> list[str]:
+    """Есть ли председателю что искать на итоге: важные (решающие или спорные) невыясненные утверждения и объекты
+    задания без проверенных фактов. Пусто — поиск на итоге не нужен."""
+    led = ledger or {}
+    out = [c["id"] for c in led.get("claims") or []
+           if c.get("status") in OPEN and (c.get("decisive") or c.get("critical")) and not c.get("duplicate_of")]
+    out += [f"object:{o}" for o in (led.get("objects") or {}).get("missing") or []]
+    return out
+
+
 def inherited_rows(parts: list[tuple[int, dict[str, Any]]]) -> list[tuple[str, int, dict[str, Any]]]:
     """Утверждения реестров частей с номерами, под которыми они будут в сводке (P2-A-C3)."""
     out = []

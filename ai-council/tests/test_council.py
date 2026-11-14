@@ -703,13 +703,21 @@ def test_chair_with_search_checks_at_verdict_only_to_verify():
             return await super().complete(model, messages, **kw)
 
     for mode in ("debate", "research"):
-        cfg = make_cfg(mode=mode, chair_proposes=False,
+        cfg = make_cfg(mode=mode, chair_proposes=False, research={"chair_search": "always"},
                        members=[{"name": n, "model": f"m/{n}", "web_search": n == "a"} for n in "abcd"])
         c = Spy()
         run(Council(cfg, c, seed=2).run("Вопрос?"))
         v = [x for x in c.seen if x[0] == "verdict"]
         assert v and all(w and "ONLY to verify" in t for _, _, w, t in v), mode
         assert not any(w for st, who, w, _ in c.seen if who == "a" and st in ("proposal", "revision"))
+    # исследование по умолчанию: в реестре нет невыясненного важного — итог пишется без поиска (дешевле)
+    cfg = make_cfg(mode="research", chair_proposes=False,
+                   members=[{"name": n, "model": f"m/{n}", "web_search": n == "a"} for n in "abcd"])
+    c = Spy()
+    res = run(Council(cfg, c, seed=2).run("Вопрос?"))
+    v = [x for x in c.seen if x[0] == "verdict"]
+    gaps = R_gaps(res)
+    assert v and all(w == bool(gaps) for _, _, w, _ in v)
 
 
 def test_order_is_reproducible_for_the_same_session_without_seed():
@@ -770,3 +778,8 @@ def test_unlimited_search_only_for_authors_and_estimate_grows():
     plain = estimate(make_cfg(chair_proposes=False), {f"m/{n}": Price(prompt=1e-6, completion=2e-6) for n in "abcd"},
                      mode="debate", rounds=1).low
     assert plain < lim < unl
+
+
+def R_gaps(res):
+    from council import research as R
+    return R.verdict_gaps((res.research or {}).get("ledger"))
