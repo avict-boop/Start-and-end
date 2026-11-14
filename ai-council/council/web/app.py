@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from ..client import OpenRouterClient, ProviderError
 from ..config import CouncilConfig, Mode, OverrideError, load_config, with_overrides
-from ..estimate import ModelCatalog, estimate, learn_lengths, parse_pricing, similar_actual, unknown_models, vision_map
+from ..estimate import max_out_map, ModelCatalog, estimate, learn_lengths, parse_pricing, similar_actual, unknown_models, vision_map
 from ..mock import MockClient
 from ..archive import MIME, Archive, available_formats, download_name, report_kind
 from ..attachments import (ACCEPT, MAX_FILE_BYTES, MAX_FILES, AttachmentError, assign_files, human_size,
@@ -901,7 +901,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                         journal.failures.clear()
                         cp.update(retry_failed=False)
                         log.info("заседание %s: сбоев к повтору — %d", sid, retried)
-                    pricing = None if sp.get("mock") else parse_pricing(await catalog.get() or [])
+                    models_all = None if sp.get("mock") else await catalog.get()
+                    pricing = None if sp.get("mock") else parse_pricing(models_all or [])
                     stage_out = await asyncio.to_thread(learn_lengths, runs_dir(cfg))
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
                                       seed=sp.get("seed"), journal=journal, labels=sp.get("labels"),
@@ -910,6 +911,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     st.council = council
                     council.thought_sink = st.add_thought
+                    council.model_max_out = max_out_map(models_all)  # потолок ответа моделей — по каталогу
                     council.allow_split = bool(sp.get("allow_split")) and not (sp.get("request") or {}).get("series")
                     # часть серии: свои объекты; сводка: реестры частей (общее с ботом — council/series.apply_spec)
                     await asyncio.to_thread(SR.apply_spec, council, sp, archive())

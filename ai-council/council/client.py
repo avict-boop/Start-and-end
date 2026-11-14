@@ -47,10 +47,13 @@ def _as_text(content: Any) -> str:
 class _Retryable(Exception):
     """Временная ошибка: стоит повторить запрос."""
 
-    def __init__(self, message: str, *, retry_after: float | None = None, credits: bool = False) -> None:
+    def __init__(self, message: str, *, retry_after: float | None = None, credits: bool = False,
+                 slow: bool = False, provider: str = "") -> None:
         super().__init__(message)
         self.retry_after = retry_after
         self.credits = credits  # OpenRouter зарезервировал баланс под другие идущие запросы
+        self.slow = slow  # ответ шёл слишком долго / модель замолчала — поставщик завис
+        self.provider = provider  # кто обслуживал запрос (у OpenRouter один и тот же модель — у разных поставщиков)
 
 
 CREDIT_RETRIES = 6          # сколько раз ждать освобождения резерва баланса (попытками не считается)
@@ -198,6 +201,10 @@ def _drop_unsupported(payload: dict[str, Any], model: str, err: str) -> str:
         payload["plugins"] = [{"id": "web"}]
         _NO_FEATURE["tools"].add(model)
         return "инструмент поиска (возврат к плагину)"
+    # выбор поставщика не принят или все быстрые исключены («no endpoints» при списке ignore) — как решит OpenRouter
+    if "provider" in payload and (("provider" in low and "sort" in low) or "ignore" in low or ("endpoint" in low and payload["provider"].get("ignore"))):
+        payload.pop("provider")  # все быстрые поставщики исключены или выбор не принят — как решит OpenRouter
+        return "выбор поставщика"
     if "response_format" in payload:  # причина не названа — сначала снимаем самое вероятное
         payload.pop("response_format")
         _NO_FEATURE["json"].add(model)
@@ -259,6 +266,10 @@ class OpenRouterClient:
         stream: bool = True,
     ) -> None:
         self.patience = 1.0  # повтор не ответивших — ждать во столько раз дольше (ставит сайт)
+        # Какого поставщика той же модели выбирает OpenRouter: throughput — самый быстрый по выдаче (модель и ответ те
+        # же, сервер другой), price — самый дешёвый, latency — быстрее всего начинает; "" — как решит OpenRouter
+        self.provider_sort = "throughput"
+        self.slow_limit = 2  # после стольких «завис» подряд — сбой (дальше «Повторить не ответивших»), а не 4 × 9 мин
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
         self.max_tokens_cap = max_tokens_cap
@@ -341,6 +352,8 @@ class OpenRouterClient:
                           "parameters": {"max_uses": int(web_fetch), "max_content_tokens": FETCH_TOKENS}})
         if tools:
             payload["tools"] = tools
+        if self.provider_sort:
+            payload["provider"] = {"sort": self.provider_sort}
         # OpenAI не принимает строгий JSON вместе с поиском («Web Search cannot be used with JSON mode») — не тратим
         # запрос с ошибкой (и не теряем строгий JSON у этой модели для запросов без поиска)
         openai_search = model.startswith("openai/") and any(t["type"] == "openrouter:web_search" for t in tools)
@@ -352,6 +365,7 @@ class OpenRouterClient:
         attempt = 0
         credit_waits = 0
         empty_runs = 0  # ответы, целиком ушедшие в скрытые рассуждения
+        slow_runs = 0  # попытки, на которых поставщик завис (слишком долго / замолчал)
         call_start = time.monotonic()
         while attempt < self.max_retries + 1:
             attempt += 1
@@ -382,6 +396,18 @@ class OpenRouterClient:
             except _Retryable as e:
                 last_error = str(e)
                 log.warning("HTTP ✗ %s попытка %d: %s (повтор)", model, attempt, e)
+                if e.slow:
+                    slow_runs += 1
+                    if slow_runs >= self.slow_limit:  # дважды завис — не держим совет ещё 2 × 9 минут
+                        last_error = (f"{e}; поставщики модели зависли {slow_runs} раза подряд — не ждём дальше "
+                                      "(«Повторить не ответивших» спросит её снова)")
+                        break
+                    if e.provider:  # следующая попытка — у другого поставщика той же модели
+                        prov = dict(payload.get("provider") or {})
+                        prov["ignore"] = sorted(set(prov.get("ignore") or []) | {e.provider})
+                        payload["provider"] = prov
+                        last_error = f"{e} — повтор у другого поставщика (не {e.provider})"
+                    wait = 0.0
                 if e.credits and credit_waits < CREDIT_RETRIES:
                     # Резерв баланса освободится, когда закончатся идущие запросы: ждём и пробуем снова,
                     # не тратя обычные попытки, и дальше шлём меньше запросов одновременно.
@@ -550,6 +576,7 @@ class OpenRouterClient:
         usage: dict[str, Any] = {}
         real_model = model
         gen_id = ""
+        provider = ""
         cites: list[str] = []
         last_report = 0.0
         phase = "thinking"
@@ -562,7 +589,8 @@ class OpenRouterClient:
             now = time.monotonic()
             # одна попытка: обычно до 9 минут, с поиском — до 18 (много поисков и чтение страниц)
             if now - started > (cap or self.timeout * 3):
-                raise _Retryable(f"ответ идёт слишком долго (более {int(cap or self.timeout * 3)} с)")
+                raise _Retryable(f"ответ идёт слишком долго (более {int(cap or self.timeout * 3)} с)", slow=True,
+                                 provider=provider)
             if chars + reasoning_chars > seen:
                 seen, moved = chars + reasoning_chars, now
             elif stall and seen and now - moved > STALL_S:
@@ -570,7 +598,8 @@ class OpenRouterClient:
                 # рассуждения не показывают: до первого слова у них молчание — норма, это не зависание
                 # (12.11 так chatgpt потерял критику и доработку: все 4 попытки обрывались на 150 с)
                 # сервер шлёт только «я жив», а модель ничего не пишет — провайдер завис: повтор, а не ожидание
-                raise _Retryable(f"модель ничего не присылает {int(now - moved)} с — повтор запроса")
+                raise _Retryable(f"модель ничего не присылает {int(now - moved)} с — повтор запроса", slow=True,
+                                 provider=provider)
             if not line or line.startswith(":"):  # «: OPENROUTER PROCESSING» — сервер жив, ответа ещё нет
                 continue
             if not line.startswith("data:"):
@@ -586,6 +615,7 @@ class OpenRouterClient:
                 self._raise_error(chunk["error"], model)
             real_model = chunk.get("model") or real_model
             gen_id = gen_id or str(chunk.get("id") or "")
+            provider = provider or str(chunk.get("provider") or "")
             if chunk.get("usage"):
                 usage = chunk["usage"]
             cites += _citations(chunk, {})

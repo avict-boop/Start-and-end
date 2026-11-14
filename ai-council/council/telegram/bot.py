@@ -20,7 +20,7 @@ from typing import Any
 from .. import series as SR
 from ..client import LLMClient, OpenRouterClient, ProviderError
 from ..config import CouncilConfig, OverrideError, load_config, with_overrides
-from ..estimate import ModelCatalog, estimate, learn_lengths, parse_pricing, similar_actual, unknown_models, vision_map
+from ..estimate import max_out_map, ModelCatalog, estimate, learn_lengths, parse_pricing, similar_actual, unknown_models, vision_map
 from ..mock import MockClient
 from ..archive import MIME, Archive, all_reports, available_formats, download_name, key_of
 from ..attachments import (MAX_FILE_BYTES, MAX_FILES, Attachment, AttachmentError, assign_files, limit_total,
@@ -1098,7 +1098,8 @@ class CouncilBot:
                     cp.update(status="running", reason="", message="")
                     atts = await asyncio.to_thread(cp.attachments)
                     journal = await asyncio.to_thread(Journal, cp.journal_path)
-                    pricing = None if sp.get("mock") else parse_pricing(await self.catalog.get() or [])
+                    models_all = None if sp.get("mock") else await self.catalog.get()
+                    pricing = None if sp.get("mock") else parse_pricing(models_all or [])
                     rdir = self.runs_dir
                     stage_out = await asyncio.to_thread(learn_lengths, rdir)
                     council = Council(cfg, client, on_event=on_event, vision=sp.get("vision") or {},
@@ -1107,6 +1108,7 @@ class CouncilBot:
                                       stage_out=stage_out, session_id=cp.id, shared_dir=rdir / "notes",
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     council_ref["c"] = council
+                    council.model_max_out = max_out_map(models_all)
                     # продолжение заседания серии с сайта: объекты части и реестры частей — как на сайте
                     await asyncio.to_thread(SR.apply_spec, council, sp, self.archive)
                     r = self.running.get(chat_id)

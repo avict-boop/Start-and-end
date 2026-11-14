@@ -294,6 +294,19 @@ class ModelCatalog:
 _LEARN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 
 
+LEARN_LIMIT_STAGES = ("proposal", "revision", "verdict")  # где модель пишет длинно и упирается в предел
+
+
+def max_out_map(models: list[dict[str, Any]] | None) -> dict[str, int]:
+    """Наибольшая длина ответа каждой модели по каталогу OpenRouter (выше поднимать предел нельзя)."""
+    out = {}
+    for m in models or []:
+        v = (m.get("top_provider") or {}).get("max_completion_tokens")
+        if m.get("id") and isinstance(v, (int, float)) and v > 0:
+            out[m["id"]] = int(v)
+    return out
+
+
 def learn_lengths(runs_dir: str | Any, limit: int = 30, *, compact: bool = False) -> dict[str, Any]:
     """Сколько токенов модели реально пишут на каждом этапе — по стенограммам последних заседаний.
 
@@ -315,6 +328,7 @@ def learn_lengths(runs_dir: str | Any, limit: int = 30, *, compact: bool = False
     if hit and hit[0] == stamp:
         return hit[1]
     per_stage: dict[str, list[float]] = {}
+    by_model: dict[str, dict[str, int]] = {}
     recent = []
     used = 0
     for p in files:
@@ -326,7 +340,10 @@ def learn_lengths(runs_dir: str | Any, limit: int = 30, *, compact: bool = False
         if not tr or bool((data.get("request") or {}).get("compact_proposals")) != compact:
             continue
         groups: dict[tuple[str, str], dict[str, float]] = {}
+        model_of: dict[str, str] = {}
         for e in tr:
+            if e.get("model"):
+                model_of[e.get("member", "")] = str(e["model"])
             g = groups.setdefault((e.get("member", ""), e.get("stage", "")), {"out": 0.0, "ok": 0, "labels": 0})
             toks = e.get("tokens") or [0, 0]
             g["out"] += float(toks[1] if len(toks) > 1 else 0)
@@ -335,9 +352,12 @@ def learn_lengths(runs_dir: str | Any, limit: int = 30, *, compact: bool = False
                 if e.get("stage") == "critique":
                     g["labels"] += len((e.get("parsed") or {}).get("reviews") or [])
         session_vals: dict[str, list[float]] = {}
-        for (_, stage), g in groups.items():
+        for (who, stage), g in groups.items():
             if not g["ok"] or not g["out"]:
                 continue
+            if stage in LEARN_LIMIT_STAGES and model_of.get(who):  # сколько модель пишет за ответ (с продолжениями)
+                per_model = by_model.setdefault(model_of[who], {})
+                per_model[stage] = max(per_model.get(stage, 0), int(g["out"] / g["ok"]))
             val = g["out"] / (g["labels"] if stage == "critique" and g["labels"] else g["ok"])
             session_vals.setdefault(stage, []).append(val)
         for stage, vals in session_vals.items():
@@ -348,6 +368,7 @@ def learn_lengths(runs_dir: str | Any, limit: int = 30, *, compact: bool = False
     out: dict[str, Any] = {stage: int(median(v)) for stage, v in per_stage.items() if v and stage in DEFAULT_OUT}
     out["sessions"] = used
     out["recent"] = recent
+    out["by_model"] = by_model
     _LEARN_CACHE[key] = (stamp, out)
     return out
 

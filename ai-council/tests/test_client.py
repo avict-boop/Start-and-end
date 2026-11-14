@@ -449,3 +449,47 @@ def test_streaming_passes_reasoning_text_for_live_view():
     said = "".join(e.get("thought") or "" for e in events)
     assert said == "хм, сравниваю варианты" and any(e.get("thought_hidden") for e in events)
     assert "хм" not in comp.text  # рассуждение — не ответ
+
+
+def test_fast_provider_and_quick_switch_when_provider_hangs():
+    bodies = []
+
+    import council.client as C
+
+    def handler(req):
+        body = json.loads(req.content)
+        bodies.append(body)
+        if len(bodies) == 1:  # первый поставщик «завис»: начал и замолчал
+            C.STALL_S = -1
+            return sse({"model": "x/y", "provider": "SlowCloud", "choices": [{"delta": {"reasoning": "хм"}}]})
+        C.STALL_S = 150
+        return sse({"model": "x/y", "provider": "FastCloud", "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]})
+
+    c = OpenRouterClient("k", transport=httpx.MockTransport(handler), retry_base_delay=0)
+    orig = C.STALL_S
+    try:
+        comp = asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100))
+    finally:
+        C.STALL_S = orig
+    assert comp.text == "ok"
+    assert bodies[0]["provider"] == {"sort": "throughput"}  # самый быстрый поставщик той же модели
+    assert bodies[1]["provider"]["ignore"] == ["SlowCloud"]  # повтор — у другого поставщика
+
+
+def test_two_hangs_in_a_row_fail_fast():
+    n = []
+
+    def handler(req):
+        n.append(1)
+        return sse({"model": "x/y", "provider": f"P{len(n)}", "choices": [{"delta": {"reasoning": "хм"}}]})
+
+    import council.client as C
+    c = OpenRouterClient("k", transport=httpx.MockTransport(handler), retry_base_delay=0, max_retries=3)
+    orig = C.STALL_S
+    C.STALL_S = -1
+    try:
+        with pytest.raises(C.ProviderError, match="зависли 2 раза"):
+            asyncio.run(c.complete("x/y", [], temperature=0, max_tokens=100))
+    finally:
+        C.STALL_S = orig
+    assert len(n) == 2  # а не 4 попытки по 9 минут

@@ -326,7 +326,7 @@ const RS_NAME = {
   arbitration_claims: "Утверждений на проверку поиском", missions: "Поисковых заданий (подтвердить / опровергнуть)",
   fresh_scouts: "Авторов с поиском уже в предложениях", max_words: "Длина варианта, слов", shorten_long: "Сокращать слишком длинные варианты",
   max_claims: "Утверждений в варианте", lenses: "Углы зрения авторов", catalog: "Каталог: проверки по числу объектов",
-  object_coverage: "Обязательный охват объектов задания", facts_per_object: "Фактов на объект", auto_split: "Председатель разбивает большой список", revision_patches: "Доработка правками", summary_authors: "Авторов сводки серии", chair_search: "Поиск председателя на итоге", vote_digest: "Голосование по выжимке", objects_per_part: "Объектов в части серии", section_vote: "Голосование по подвопросам",
+  object_coverage: "Обязательный охват объектов задания", facts_per_object: "Фактов на объект", auto_split: "Председатель разбивает большой список", revision_patches: "Доработка правками", summary_authors: "Авторов сводки серии", early_search_share: "Доля поиска параллельно с критикой", chair_search: "Поиск председателя на итоге", vote_digest: "Голосование по выжимке", objects_per_part: "Объектов в части серии", section_vote: "Голосование по подвопросам",
   revision_digest: "Доработка по выжимкам", revision_search: "Поиск и на доработке", long_factor: "«Слишком длинный» — во сколько раз", arbitration: "Арбитраж доказательств",
   link_check: "Проверка ссылок", recheck_unclear: "«Не удалось проверить» — второй поиск, до",
   post_revision_claims: "Новые утверждения после доработки — проверить, до",
@@ -1466,6 +1466,9 @@ function apply(s, ev) {
   s.at = ev.ts ? Math.min(ev.ts * 1000, Date.now()) : Date.now();
   switch (ev.type) {
     case "ping":
+      break;
+    case "early_search":
+      logAdd(s, `Проверка по источникам началась сразу: ${ev.count} ${plural(ev.count, "утверждение", "утверждения", "утверждений")} ищутся параллельно с критикой`, "k-ok");
       break;
     case "summary_checks":
       logAdd(s, `Сводка: проверенное в частях не перепроверяется (${ev.skipped}); противоречий между частями — ${ev.conflicts}${ev.recheck ? `, доуточнить — ${ev.recheck}` : ""}; новых утверждений — ${ev.new}`, "k-ok");

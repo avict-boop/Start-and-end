@@ -505,3 +505,32 @@ def test_chair_searches_at_verdict_only_when_ledger_has_gaps():
     assert R.verdict_gaps({"claims": [{"id": "A-C2", "status": "unclear", "decisive": True}]}) == ["A-C2"]
     assert R.verdict_gaps({"claims": [{"id": "A-C3", "status": "unclear"}]}) == []  # неважное — не повод искать
     assert R.verdict_gaps({"claims": [], "objects": {"missing": ["Firm01"]}}) == ["object:Firm01"]
+
+
+def test_search_starts_during_critique_and_critics_picks_are_added():
+    from council.mock import MockClient
+
+    class Order(MockClient):
+        def __init__(self):
+            super().__init__(delay=0.02)
+            self.log = []
+
+        async def complete(self, model, messages, **kw):
+            st = (kw.get("meta") or {}).get("stage")
+            self.log.append(("start", st))
+            out = await super().complete(model, messages, **kw)
+            self.log.append(("end", st))
+            return out
+
+    c = Order()
+    cfg = make_cfg(mode="research", research={"arbitration_claims": 10, "early_search_share": 0.7})
+    res = run(Council(cfg, c, seed=2).run("Каков рынок кофеен у вузов?"))
+    first_search = c.log.index(("start", "arbitration"))
+    last_critique = max(i for i, x in enumerate(c.log) if x == ("end", "critique"))
+    assert first_search < last_critique  # поиск идёт параллельно с критикой
+    led = res.research["ledger"]
+    assert 0 < len([x for x in led["claims"] if not x.get("duplicate_of")]) <= 10  # в пределах числа проверок
+    # без раннего поиска — как раньше: поиск после критики
+    c2 = Order()
+    run(Council(make_cfg(mode="research", research={"early_search_share": 0}), c2, seed=2).run("Каков рынок кофеен у вузов?"))
+    assert c2.log.index(("start", "arbitration")) > max(i for i, x in enumerate(c2.log) if x == ("end", "critique"))

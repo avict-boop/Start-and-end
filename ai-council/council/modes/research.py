@@ -157,6 +157,22 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
     def others(name: str) -> dict[str, Proposal]:
         return {l: p for l, p in proposals.items() if authors[l] != name}
 
+    # 2+3. Ранний поиск: часть утверждений, чей отбор от критики не зависит, уходит в поиск сразу — параллельно с
+    # критикой (сводка серии — нет: её отбор зависит от реестров частей)
+    early: list[dict[str, Any]] = []
+    early_task: asyncio.Task | None = None
+    n_early = int(rc.arbitration_claims * rc.early_search_share) if rc.arbitration and not sess.inherited else 0
+    if n_early:
+        early, _ = R.prepare_claims(  # type: ignore[arg-type]
+            proposals, {}, n_early, n_subq=len(subq), dedupe=rc.dedupe_claims, defer_private=rc.defer_private,
+            coverage_first=rc.coverage_first, check_decisive_private=rc.check_decisive_private, objects=objects,
+            facts_per_object=rc.facts_per_object)
+        if early:
+            sess._emit("early_search", count=len(early))
+            log.info("%sранний поиск: %d утверждений — параллельно с критикой", sess._tag, len(early))
+            early_task = asyncio.create_task(search(sess, R, refined, as_of, scope, early, rc, "arbitration",
+                                                    announce=False))
+
     # 2. Критика: оценки, спорные утверждения, пропущенные подвопросы
     sess._emit("stage", stage="critique", title="Критика и спорные утверждения")
     jobs = {}
@@ -172,7 +188,12 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
                                  meta={"labels": expected, "criteria": criteria,
                                        "claims": [c.id for l in expected for c in getattr(target[l], "claims", [])],
                                        **rmeta})
-    critiques: dict[str, CritiqueSet] = await sess._parallel("critique", jobs)
+    try:
+        critiques: dict[str, CritiqueSet] = await sess._parallel("critique", jobs)
+    except BaseException:
+        if early_task:  # заседание встало (пауза, нет кворума) — ранний поиск не продолжаем
+            early_task.cancel()
+        raise
 
     # 3. Арбитраж доказательств: поиск по утверждениям всех вариантов, два противоположных задания
     ledger: dict[str, Any] = {}
@@ -186,7 +207,34 @@ async def run(sess: Council, question: str, *, criteria: list[str] | None, conte
             check_decisive_private=rc.check_decisive_private, objects=objects, facts_per_object=rc.facts_per_object)
         if sess.inherited:  # сводка серии: проверенное в частях не перепроверяем; противоречия и пробелы — поиском
             selected = await summary_checks(sess, R, chair, selected, rc, rmeta)
-        if selected:
+        if early_task is not None:
+            # уже ищется: ранние; после критики — то, что добавили критики, в пределах того же числа проверок
+            done_ids = {c["id"] for c in early}
+            rest = [c for c in selected if c["id"] not in done_ids][:max(0, rc.arbitration_claims - len(early))]
+            selected = early + rest
+            try:  # пауза на границе этапа («Повторить не ответивших») — ранний поиск не оставляем работать в фоне
+                sess._emit("stage", stage="arbitration",
+                           title=f"Арбитраж доказательств: {len(selected)} утверждений ({len(early)} уже ищутся с "
+                                 f"критикой), поиск {sess.cfg.fact_check.model}",
+                           claims=[c["id"] for c in selected], model=sess.cfg.fact_check.model)
+            except BaseException:
+                early_task.cancel()
+                raise
+            try:
+                results = await early_task
+            except asyncio.CancelledError:
+                results = []
+            if rest:
+                results += await search(sess, R, refined, as_of, scope, rest, rc, "arbitration", announce=False)
+        if selected and early_task is not None:
+            ledger = make_ledger(sess, R, selected, results, rc, deferred)
+            unclear = [c for c in selected for x in ledger["claims"]
+                       if x["id"] == c["id"] and x["status"] == "unclear"][:rc.recheck_unclear]
+            if unclear:  # второй поиск — другими запросами
+                results += await search(sess, R, refined, as_of, scope, unclear, rc, "arbitration", recheck=True)
+                ledger = make_ledger(sess, R, selected, results, rc, deferred)
+            sess._emit("ledger", ledger=ledger)
+        elif selected:
             results = await search(sess, R, refined, as_of, scope, selected, rc, "arbitration")
             ledger = make_ledger(sess, R, selected, results, rc, deferred)
             unclear = [c for c in selected for x in ledger["claims"]
@@ -578,14 +626,14 @@ async def read_leads(sess: Council, R: Any, selected: list[dict[str, Any]]) -> d
 
 
 async def search(sess: Council, R: Any, question: str, as_of: str, scope: str, selected: list[dict[str, Any]], rc: Any,
-                  stage: str, *, recheck: bool = False, missions: int | None = None) -> list[Any]:
+                  stage: str, *, recheck: bool = False, missions: int | None = None, announce: bool = True) -> list[Any]:
     """Поисковые вызовы по пачкам утверждений: подтвердить и опровергнуть (второй поиск — другими запросами).
     Сбой поиска не прерывает исследование."""
     fc = sess.cfg.fact_check
     checker = MemberConfig(name=FACT_CHECKER, model=fc.model, max_tokens=max(fc.max_tokens, sess.cfg.max_tokens or 0),
                            temperature=0.1, reasoning_effort="none")
     sess.stats.setdefault(FACT_CHECKER, MemberStats())
-    if stage == "arbitration" and not recheck:
+    if stage == "arbitration" and not recheck and announce:
         sess._emit("stage", stage="arbitration",
                    title=f"Арбитраж доказательств: {len(selected)} утверждений, поиск {fc.model}",
                    claims=[c["id"] for c in selected], model=fc.model)

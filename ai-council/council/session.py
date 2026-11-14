@@ -170,6 +170,8 @@ class Council:
         """vision: модель -> умеет ли принимать картинки (из каталога OpenRouter); неизвестно — пробуем."""
         self.cfg = config
         self.client = client
+        if hasattr(client, "provider_sort"):  # какого поставщика той же модели выбирать (быстрый / дешёвый)
+            client.provider_sort = config.provider_sort
         self.on_event = on_event or (lambda *a, **k: None)
         if seed is None and session_id:
             # порядок меток и вариантов у судей — тот же при продолжении и «Доделать»: иначе запросы отличаются
@@ -190,6 +192,9 @@ class Council:
         self.pricing = pricing or {}  # модель -> estimate.Price (каталог OpenRouter): резерв по конкретному запросу
         # сколько токенов модели обычно пишут на этапе (по прошлым заседаниям) — резерв выхода без перестраховки
         self.stage_out = {k: v for k, v in (stage_out or {}).items() if isinstance(v, (int, float))}
+        # сколько каждая модель писала на длинных этапах в прошлых заседаниях; и её потолок по каталогу
+        self.model_out: dict[str, dict[str, int]] = dict((stage_out or {}).get("by_model") or {})
+        self.model_max_out: dict[str, int] = {}
         # общий учёт лимита ключа сайта и бота: остаток лимита и запросы всех идущих заседаний
         self.key_limit = key_limit
         self.shared = InFlight(shared_dir, session_id) if shared_dir and session_id else None
@@ -438,6 +443,8 @@ class Council:
                          meta: dict[str, Any], check: Callable[[T], T] | None, web_search: bool = False,
                          call_n: int = 0, max_tokens_override: int | None = None, web_fetch: int = 0) -> T:
         max_tokens = max_tokens_override or member.max_tokens or self.cfg.max_tokens
+        if stage in ("proposal", "revision", "verdict") and not member.max_tokens:
+            max_tokens = self.learned_limit(member, stage, max_tokens)
         # служебные этапы — с потолком: короче не станут (реальные ответы в разы меньше), а резерв на балансе меньше
         stage_cap = {"framing": self.cfg.framing_max_tokens, "critique": self.cfg.critique_max_tokens,
                      "vote": self.cfg.vote_max_tokens}.get(stage, 0)
@@ -745,6 +752,22 @@ class Council:
         """Председатель заметил, что вход обрезан или недоступен, — показать это пользователю."""
         for g in gaps[:5]:
             self._emit("warning", stage="framing", member=chair.name, text=f"во входе может не хватать: {g}")
+
+    LEARN_HEADROOM = 1.25
+
+    def learned_limit(self, member: MemberConfig, stage: str, base: int) -> int:
+        """Модель в прошлых заседаниях писала на этом этапе больше предела (и дописывала продолжениями) — сразу даём
+        место с запасом 25%, но не выше её потолка по каталогу. Потолок неизвестен — предел не поднимается."""
+        hist = (self.model_out.get(member.model) or {}).get(stage) or 0
+        ceiling = self.model_max_out.get(member.model) or 0
+        want = int(hist * self.LEARN_HEADROOM)
+        if not hist or not ceiling or want <= base:
+            return base
+        new = min(want, ceiling)
+        if new > base:
+            log.info("%sпредел ответа %s · %s: %d → %d (по истории модель пишет ≈%d токенов)",
+                     self._tag, member.name, stage, base, new, hist)
+        return max(base, new)
 
     def verdict_tokens(self, chair: MemberConfig) -> int | None:
         """Предел ответа председателя на итоге: длинный синтез одним ответом, без склеек из продолжений."""

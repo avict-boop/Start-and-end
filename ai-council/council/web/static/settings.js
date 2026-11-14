@@ -207,6 +207,10 @@ function renderSettings() {
           <input type="number" id="sSearchUses" data-k="search_uses" min="1" max="10" step="1" value="${d.search_uses ?? 3}" ${ro}><small class="hint">3 — обычный вопрос; 6–10 — широкий скрининг (20–30 компаний). «Без ограничения» — модель ищет, пока не сочтёт достаточным: полнее, но дольше и дороже (каждый поиск заново читает весь запрос; на одну попытку — до 18 минут). Председатель при итоге всё равно ищет не больше этого числа раз</small></div>
         <label class="field"><span>Результатов в каждом поиске</span><input type="number" data-k="search_results" min="1" max="10" step="1" value="${d.search_results ?? 5}" ${ro}><small class="hint">страниц на один поиск; всего за запрос — поисков × результатов</small></label>
       </div>
+      <label class="field" style="max-width:360px"><span>Поставщик модели в OpenRouter</span>
+        <select id="sProvSort" ${ro}>${[["throughput", "самый быстрый (рекомендуем)"], ["price", "самый дешёвый"], ["latency", "быстрее начинает отвечать"], ["", "как решит OpenRouter"]]
+          .map(([v, t]) => `<option value="${v}" ${(d.provider_sort ?? "throughput") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
+        <small class="hint">одну и ту же модель обслуживают разные серверы; скорость у них различается в разы, ответ — тот же. Завис один — следующая попытка идёт к другому</small></label>
       <label class="field" style="max-width:360px"><span>Глубина рассуждений на голосовании</span>
         <select id="sVoteReason" ${ro}>${[["", "как у участника"], ["none", "без рассуждений"], ["low", "низкая — дешевле (рекомендуем)"], ["medium", "средняя"], ["high", "высокая"]]
           .map(([v, t]) => `<option value="${v}" ${(d.vote_reasoning ?? "low") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
@@ -273,6 +277,7 @@ function renderSettings() {
       <div class="row2" style="margin-top:.6rem">
         <label class="field"><span>Поисковых заданий (подтвердить / опровергнуть)</span><input type="number" id="rMissions" data-rn="missions" min="1" max="2" value="${d.research.missions}" ${ro}></label>
         <label class="field"><span>Фактов на объект</span><input type="number" data-rn="facts_per_object" min="1" max="5" value="${d.research.facts_per_object ?? 1}" ${ro}><small class="hint">при охвате объектов: сколько разных фактов о каждом объекте проверять в первую очередь; «Каталог» считает проверки как объекты × это число</small></label>
+        <label class="field"><span>Доля поиска параллельно с критикой</span><input type="number" data-rn="early_search_share" min="0" max="1" step="0.1" value="${d.research.early_search_share ?? 0.7}" ${ro}><small class="hint">столько проверок (факты об объектах, по подвопросам) уходят в поиск сразу после вариантов, пока идёт критика; остальное — после неё (что выделили критики). 0 — весь поиск после критики</small></label>
         <label class="field"><span>Авторов сводки серии</span><input type="number" data-rn="summary_authors" min="0" max="10" value="${d.research.summary_authors ?? 2}" ${ro}><small class="hint">варианты сводки пишут председатель и лучшие по частям; критикует и голосует весь совет. 0 — пишут все (дороже в 2–3 раза)</small></label>
         <label class="field"><span>Поиск председателя на итоге</span>
           <select data-rs="chair_search" ${ro}>${[["gaps", "только при пробелах в реестре (рекомендуем)"], ["always", "всегда"], ["never", "никогда"]].map(([v, t]) => `<option value="${v}" ${(d.research.chair_search ?? "gaps") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
@@ -394,6 +399,7 @@ function bindSettings() {
   bindVal("fLeads", (t) => { const n = num(t.value) || 0; d.fact_check.lead_pages = n; d.fact_check.read_leads = n > 0; });
   bindVal("sVoteReason", (t) => { d.vote_reasoning = t.value; });
   bindVal("sCritReason", (t) => { d.critique_reasoning = t.value; });
+  bindVal("sProvSort", (t) => { d.provider_sort = t.value; });
   bindVal("sRevReason", (t) => { d.revision_reasoning = t.value; });
   bindVal("sEngine", (t) => { d.search_engine = t.value; });
   bindVal("sLogLevel", (t) => { d.log_level = t.value; });

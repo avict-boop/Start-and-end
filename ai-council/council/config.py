@@ -90,6 +90,10 @@ class ResearchConfig(BaseModel):
     # Доработка правками: автор присылает только изменённые блоки своего варианта (программа собирает новую версию),
     # а не переписывает его целиком. На 13.11 доработка — треть счёта исследования, почти всё — переписанный текст
     revision_patches: bool = True
+    # Поиск по утверждениям — параллельно с критикой: столько долей проверок (факты об объектах, по подвопросам, по
+    # авторам — их отбор от критики не зависит) уходит в поиск сразу после вариантов; остальное — после критики
+    # (утверждения, на которые указали критики). 0 — как раньше, весь поиск после критики
+    early_search_share: float = Field(default=0.7, ge=0.0, le=1.0)
     # Голосование по выжимке вариантов (главный вывод, утверждения, таблицы, риски, что изменено), а не по полным
     # текстам: ранжирование опирается на суть и реестр, полный текст читают критики и председатель
     vote_digest: bool = True
@@ -182,6 +186,9 @@ class CouncilConfig(BaseModel):
     # Потолок ответа на служебных этапах (только понижает общий предел и предел участника). OpenRouter на время
     # запроса откладывает на балансе деньги под весь предел: 60 000 на голосовании, где бюллетень ~3 000, лишь
     # раздувал резерв («баланс зарезервирован»). Упёрся в потолок — ответ дописывается продолжением. 0 — без потолка
+    # Какого поставщика модели выбирает OpenRouter: throughput — самый быстрый по выдаче (модель та же), price — самый
+    # дешёвый, latency — быстрее начинает отвечать, "" — как решит OpenRouter
+    provider_sort: Literal["throughput", "price", "latency", ""] = "throughput"
     framing_max_tokens: int = Field(default=24000, ge=0, le=128000)
     critique_max_tokens: int = Field(default=32000, ge=0, le=128000)
     vote_max_tokens: int = Field(default=12000, ge=0, le=128000)
@@ -315,7 +322,7 @@ def load_dotenv(path: str | Path = ".env") -> None:
 
 
 # какие настройки исследования можно менять для одного заседания (советник и «Параметры» вопроса)
-RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "max_claims", "revision_digest", "revision_patches", "vote_digest",
+RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "max_claims", "revision_digest", "revision_patches", "early_search_share", "vote_digest",
                     "section_vote", "fresh_scouts", "revision_search", "max_words", "shorten_long", "long_factor", "link_check",
                     "recheck_unclear", "post_revision_claims", "vote_ledger", "snippet_rule", "digest_table_rows",
                     "object_coverage", "facts_per_object", "catalog", "auto_split", "objects_per_part",
