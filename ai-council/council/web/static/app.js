@@ -524,6 +524,7 @@ function resetToggles() {
     $("researchNoLimit").checked = !config.research.words;
     $("researchWords").value = config.research.words || 1400;
     $("researchShorten").checked = !!config.research.shorten;
+    resetSplit();
     updateShortenHint();
     updateShortenHint();
   }
@@ -557,8 +558,10 @@ function payload() {
     compact: ["research", "creative", "evaluate"].includes(mode) ? false : $("compact").checked,
     research_words: mode === "research" ? (noLimit() ? 0 : Number($("researchWords").value) || null) : null,
     research_shorten: mode === "research" ? $("researchShorten").checked : null,
-    research: mode === "research" && Object.keys(researchTuned).length
-      ? Object.fromEntries(Object.entries(researchTuned).filter(([k]) => !["max_words", "shorten_long"].includes(k))) : null,
+    // «разбивать на части» передаётся всегда: этот запрос — как выбрано на экране, а не как в настройках
+    research: mode === "research"
+      ? { ...Object.fromEntries(Object.entries(researchTuned).filter(([k]) => !["max_words", "shorten_long", "auto_split"].includes(k))),
+          auto_split: $("researchSplit").checked } : null,
     budget: Number($("budget").value) || null,
     answer_size: $("answerSize").value,
     mock: $("mock").checked,
@@ -594,8 +597,18 @@ function applyLineup(r) {
   }
   if (r.research_shorten !== undefined) $("researchShorten").checked = !!r.research_shorten;
   researchTuned = { ...(r.research_overrides || {}) };
+  if (researchTuned.auto_split !== undefined) { $("researchSplit").checked = !!researchTuned.auto_split; delete researchTuned.auto_split; }
+  else resetSplit();
   renderResearchTuned();
   updateChairHint();
+}
+
+// «Разбивать большой список на части» — по умолчанию как в настройках, для этого запроса можно выключить
+function resetSplit() {
+  const ra = (config && config.research_all) || {};
+  $("researchSplit").checked = ra.auto_split !== false;
+  $("researchSplitHint").textContent = `Если в задании больше ${ra.objects_per_part || 10} объектов, председатель разобьёт его на серию частей, `
+    + "а совет сведёт их в один отчёт. Выключите, чтобы всё шло одним заседанием — даже если программа советует делить.";
 }
 
 // новая задача (не уточнение и не повтор) — состав из настроек; изменить его можно «Подобрать состав»
@@ -610,6 +623,7 @@ function resetLineup() {
   $("budget").value = config.budget;
   researchTuned = {};
   renderResearchTuned();
+  resetSplit();
   $("adviceBox").hidden = true;
   setMode(config.mode === "evaluate" ? "debate" : config.mode);
 }
@@ -877,7 +891,7 @@ $("keyStatus").addEventListener("click", () => {
 
 $("modeSeg").addEventListener("change", (e) => { if (e.target.name === "mode") setMode(e.target.value); });
 for (const id of ["question", "options", "criteria", "rounds", "budget", "context"]) $(id).addEventListener("input", formChanged);
-for (const id of ["mock", "compact", "factCheck", "chairProposes", "chair", "devil", "researchShorten", "researchWords"]) $(id).addEventListener("change", formChanged);
+for (const id of ["mock", "compact", "factCheck", "chairProposes", "chair", "devil", "researchShorten", "researchWords", "researchSplit"]) $(id).addEventListener("change", formChanged);
 $("researchNoLimit").addEventListener("change", () => { updateShortenHint(); formChanged(); });
 $("researchWords").addEventListener("input", () => { updateShortenHint(); updateParamsSummary(); });
 for (const id of ["chairProposes", "chair"]) $(id).addEventListener("change", updateChairHint);
@@ -930,12 +944,18 @@ $("form").addEventListener("submit", async (ev) => {
         if (e.series) warn += `<p class="warnbox">В задании ${e.series.objects} объектов — председатель, скорее всего, разобьёт его
           на ${e.series.parts} ${plural(e.series.parts, "часть", "части", "частей")} по ~${e.series.per_part} и совет сведёт их в один отчёт.
           Оценка выше — на одну часть; лимит $${e.budget} действует на каждую, вся серия — до $${e.series.budget_total}.
-          Посмотреть разбиение заранее — «Разбить на части…».</p>`;
+          Посмотреть разбиение заранее — «Разбить на части…».</p>
+          <label class="switch"><input id="noSplitNow" type="checkbox"><span class="sw" aria-hidden="true"></span>
+            <span><b>Не разбивать — одним заседанием</b><small>Все ${e.series.objects} объектов в одном заседании: на каждый объект меньше внимания и проверок, итог длиннее.</small></span></label>`;
         const go = await ask({ title: "Начать заседание?",
           html: `<p>Примерная стоимость: <b>$${e.low.toFixed(2)} – $${e.high.toFixed(2)}</b></p>
             <p class="muted">${esc(MODE_NAME[mode])} · ${p.members.length} ${plural(p.members.length, "модель", "модели", "моделей")} · лимит $${e.budget}</p>${warn}`,
           ok: "Начать" });
         if (!go) return;
+        if (e.series && document.getElementById("noSplitNow") && document.getElementById("noSplitNow").checked) {
+          $("researchSplit").checked = false;  // и на экране — чтобы «Повторить» и оценка совпадали с запуском
+          p.research = { ...(p.research || {}), auto_split: false };
+        }
       }
     }
     if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
@@ -3147,7 +3167,7 @@ function formSnapshot() {
   return { mode, members: selectedMembers(), chair: $("chair").value, devil: $("devil").value,
     lineup: { models: { ...lineup.models }, extra: lineup.extra.map((x) => ({ ...x })), web: new Set(lineup.web) },
     researchTuned: { ...researchTuned }, words: $("researchWords").value, shorten: $("researchShorten").checked,
-    noLimit: $("researchNoLimit").checked };
+    noLimit: $("researchNoLimit").checked, split: $("researchSplit").checked };
 }
 function restoreSnapshot(snap) {
   lineup = { models: { ...snap.lineup.models }, extra: snap.lineup.extra.map((x) => ({ ...x })), web: new Set(snap.lineup.web) };
@@ -3157,6 +3177,7 @@ function restoreSnapshot(snap) {
   $("chair").value = snap.chair; $("devil").value = snap.devil;
   researchTuned = { ...snap.researchTuned };
   $("researchWords").value = snap.words; $("researchShorten").checked = snap.shorten; $("researchNoLimit").checked = !!snap.noLimit;
+  if (snap.split !== undefined) $("researchSplit").checked = snap.split;
   updateShortenHint(); renderResearchTuned(); updateChairHint(); updateResetBtn(); formChanged();
 }
 
@@ -3193,6 +3214,7 @@ function applyAdvice(r) {
   if (mode === "research") {
     const rs = Object.fromEntries(rsOn.map((k) => [k, a.research_settings[k]]));
     if (rs.max_words) { $("researchWords").value = rs.max_words; $("researchNoLimit").checked = false; updateShortenHint(); }
+    if (rs.auto_split !== undefined) { $("researchSplit").checked = !!rs.auto_split; delete rs.auto_split; }  // тот же переключатель
     if (rs.fresh_scouts !== undefined) {  // «авторов с поиском» → те же «Свежие данные»: первые N авторов ищут
       const authors = freshAuthors();
       const keep = [...lineup.web].filter((x) => authors.includes(x));

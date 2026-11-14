@@ -731,3 +731,17 @@ def test_redo_of_summary_and_part_keeps_inherited_ledgers_and_objects(client):
     assert any(e["type"] == "done" for e in read_events(client, sid))
     led = _json.loads(f.read_text(encoding="utf-8"))["research"]["ledger"]
     assert led.get("inherited_parts") == [1, 2] and led["objects"]["total"] == 2
+
+
+def test_user_can_forbid_split_for_one_request(client):
+    q = _catalog_question(23)
+    base = {"question": q, "mode": "research", "mock": True, "members": ["a", "b", "c"], "chair": "a"}
+    assert client.post("/api/estimate", json=base).json()["series"]  # по умолчанию — предупреждение о серии
+    off = {**base, "research": {"auto_split": False}}
+    assert client.post("/api/estimate", json=off).json()["series"] is None
+    sid = client.post("/api/sessions", json=off).json()["id"]
+    ev = read_events(client, sid)
+    kinds = [e["type"] for e in ev]
+    assert "split_series" not in kinds and "done" in kinds  # одним заседанием, несмотря на длинный список
+    obj = next(e for e in ev if e["type"] == "objects")
+    assert obj["count"] == 23
