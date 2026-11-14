@@ -231,7 +231,8 @@ def test_research_settings_are_suggested_cleaned_and_applied_per_session():
     q = "Проведи актуальное исследование мирового рынка и найди производителей средств от гипергидроза, цены 2026. " * 20
     adv = A.finalize(A.rule_advice(q, "research", c, cands, {}, []), cands, c, "research")
     rs = adv.research_settings
-    assert rs["arbitration_claims"] == 25 and rs["fresh_scouts"] == 1 and "shorten_long" not in rs  # уже включено
+    # «сокращать» по умолчанию выключено (14.11) — совет советника его включить остаётся
+    assert rs["arbitration_claims"] == 25 and rs["fresh_scouts"] == 1 and rs.get("shorten_long") is True
     assert adv.research_cost["arbitration_claims"] > 0
     assert all(adv.research_why[k] for k in rs)
     raw = A.Advice(mode="research", research_settings={"arbitration_claims": 150, "missions": 1, "max_words": 1400,

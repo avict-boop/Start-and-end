@@ -289,7 +289,7 @@ def test_too_long_proposal_is_sent_back_when_enabled_and_length_is_per_session()
     res = run(Council(cfg, Wordy(delay=0), seed=3).run("Вопрос?"))
     assert all(n == 2 for n in Wordy.asks.values())  # каждого автора попросили сократить один раз
     assert all(len(p.summary.split()) < 600 for p in res.initial_proposals.values())
-    assert make_cfg(mode="research").research.shorten_long  # по рекомендации аудита — включено по умолчанию
+    assert not make_cfg(mode="research").research.shorten_long  # 14.11: выключено — сокращение = полный новый ответ
 
 
 def test_dead_links_do_not_confirm_and_are_reported():

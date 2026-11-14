@@ -291,7 +291,7 @@ def test_research_length_is_set_per_question_and_compact_ignored(client):
     req = client.post(f"/api/sessions/{sid}/repeat").json()["request"]
     assert req["research_words"] == 2200 and req["research_shorten"] is False and req["compact_proposals"] is False
     cfg = client.get("/api/config").json()["research"]
-    assert cfg["words"] == 1400 and cfg["shorten"] is True  # общие настройки не изменились
+    assert cfg["words"] == 1400 and cfg["shorten"] is False  # общие настройки не изменились (по умолчанию — не сокращать)
 
 
 def test_rating_and_pilot_table(client):

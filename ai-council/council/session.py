@@ -438,6 +438,11 @@ class Council:
                          meta: dict[str, Any], check: Callable[[T], T] | None, web_search: bool = False,
                          call_n: int = 0, max_tokens_override: int | None = None, web_fetch: int = 0) -> T:
         max_tokens = max_tokens_override or member.max_tokens or self.cfg.max_tokens
+        # служебные этапы — с потолком: короче не станут (реальные ответы в разы меньше), а резерв на балансе меньше
+        stage_cap = {"framing": self.cfg.framing_max_tokens, "critique": self.cfg.critique_max_tokens,
+                     "vote": self.cfg.vote_max_tokens}.get(stage, 0)
+        if stage_cap and not max_tokens_override:
+            max_tokens = min(max_tokens, stage_cap)
         temperature = member.temperature if member.temperature is not None else self.cfg.temperature
         if stage in self.stage_temperature:
             temperature = max(temperature, self.stage_temperature[stage])

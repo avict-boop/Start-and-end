@@ -783,3 +783,25 @@ def test_unlimited_search_only_for_authors_and_estimate_grows():
 def R_gaps(res):
     from council import research as R
     return R.verdict_gaps((res.research or {}).get("ledger"))
+
+
+def test_stage_output_caps_lower_only_service_stages():
+    from council.mock import MockClient
+
+    class Spy(MockClient):
+        def __init__(self):
+            super().__init__(delay=0)
+            self.mt: dict[str, set] = {}
+
+        async def complete(self, model, messages, **kw):
+            st = (kw.get("meta") or {}).get("stage")
+            self.mt.setdefault(st, set()).add(kw.get("max_tokens"))
+            return await super().complete(model, messages, **kw)
+
+    c = Spy()
+    run(Council(make_cfg(max_tokens=60000, max_tokens_cap=64000), c, seed=1).run("Вопрос?"))
+    assert c.mt["vote"] == {12000} and c.mt["critique"] == {32000} and c.mt["framing"] == {24000}
+    assert c.mt["proposal"] == {60000}  # варианты — с общим пределом
+    c2 = Spy()  # предел участника меньше потолка — остаётся меньший
+    run(Council(make_cfg(max_tokens=8000), c2, seed=1).run("Вопрос?"))
+    assert c2.mt["critique"] == {8000} and c2.mt["vote"] == {8000}
