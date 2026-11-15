@@ -30,7 +30,8 @@ self.addEventListener("fetch", (e) => {
   if (req.mode === "navigate") {
     // страница — всегда свежая с сервера; без сети — сохранённая оболочка или короткое объяснение
     e.respondWith(fetch(req).then((r) => {
-      if (r.ok && url.pathname === "/") { const copy = r.clone(); caches.open(CACHE).then((c) => c.put("/", copy)); }
+      // сохраняем только саму программу — не страницу входа, на которую сервер перенаправил бы после выхода
+      if (r.ok && !r.redirected && url.pathname === "/") { const copy = r.clone(); caches.open(CACHE).then((c) => c.put("/", copy)); }
       return r;
     }).catch(() => caches.match("/").then((r) => r || new Response(OFFLINE, { headers: { "Content-Type": "text/html; charset=utf-8" } }))));
     return;
@@ -39,7 +40,8 @@ self.addEventListener("fetch", (e) => {
     // файлы оформления и скрипты — из кэша (у них версия в адресе), в фоне — обновление
     e.respondWith(caches.open(CACHE).then((c) => c.match(req).then((hit) => {
       const net = fetch(req).then((r) => { if (r.ok) c.put(req, r.clone()); return r; });
-      return hit || net;
+      if (hit) { net.catch(() => {}); return hit; }  // без сети — из кэша, фоновое обновление молча не удалось
+      return net;
     })));
   }
 });

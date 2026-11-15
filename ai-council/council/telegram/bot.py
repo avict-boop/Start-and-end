@@ -181,7 +181,8 @@ class Progress:
             self.stage, self.stage_title = d["stage"], d["title"]
             if d["stage"] == "proposal":
                 self.chair_judge = d.get("chair_proposes") is False
-            who = (["факт-чек"] if d["stage"] == "factcheck"
+            who = (list(d["members"]) if d.get("members")  # «Отбор»: кто реально работает на этапе (разведчики)
+                   else ["факт-чек"] if d["stage"] in ("factcheck", "screen")
                    else [self.chair] if d["stage"] in ("framing", "verdict")
                    else [m for m in self.members if m != self.chair]
                    if d["stage"] in ("proposal", "revision") and self.chair_judge else self.members)

@@ -153,8 +153,8 @@ function renderSelLive(s) {
   box.innerHTML = `<h2>Таблица заполняется</h2>
     <p class="muted small">Готово ${done} из ${s.selObjs.length}. Д — документ, С — сайт компании, В — вторичный, ? — цитата не найдена,
       «спор» — источники расходятся (решит совет), ⚖ — решено советом. Наведите на ячейку — цитата.</p>
-    <div class="table-wrap"><table class="sel-table sel-wide${Object.keys(rank).length ? "" : " sel-live"}"><thead><tr>${Object.keys(rank).length ? "<th>№</th>" : ""}<th>Объект</th>${attrs.map((a) => `<th title="${esc(a.name)}">${esc(selShort(a.name))}</th>`).join("")}</tr></thead><tbody>
-    ${[...s.selObjs].sort((x, y) => (rank[x.id] || 999) - (rank[y.id] || 999)).map((o) => `<tr class="${busy[o.id] ? "sel-busy" : ""}">${Object.keys(rank).length ? `<td>${rank[o.id] || ""}</td>` : ""}
+    <div class="table-wrap"><table class="sel-table sel-wide sel-live"><thead><tr><th>Объект</th>${attrs.map((a) => `<th title="${esc(a.name)}">${esc(selShort(a.name))}</th>`).join("")}</tr></thead><tbody>
+    ${[...s.selObjs].sort((x, y) => (rank[x.id] || 999) - (rank[y.id] || 999)).map((o) => `<tr class="${busy[o.id] ? "sel-busy" : ""}">
       <td><b>${esc(o.name)}</b>${busy[o.id] ? ' <span class="muted small">заполняется…</span>' : !cells[o.id] ? ' <span class="muted small">в очереди</span>' : ""}</td>
       ${attrs.map((a) => td(o.id, a)).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
@@ -220,7 +220,7 @@ function renderReview(s) {
           ${x.merged ? '<span class="badge plain">склеено</span>' : ""}${x.seed ? '<span class="badge plain">ваш список</span>' : ""}
           ${scr ? `<span class="badge ${scr[0]}">${scr[1]}</span>` : ""}
           <small class="muted">${[x.website ? esc(x.website) : "", x.location ? esc(x.location) : "",
-            (x.models || []).length ? `нашли ${x.models.length} ${plural(x.models.length, "модель", "модели", "моделей")}: ${esc(x.models.join(", "))}`
+            (x.models || []).length ? `нашли ${x.models.length} ${plural(x.models.length, "источник", "источника", "источников")}: ${esc(x.models.map((m) => memberName(s, m)).join(", "))}`
               : (x.angles || []).length ? `найден ${x.angles.length} ${plural(x.angles.length, "раз", "раза", "раз")}` : ""].filter(Boolean).join(" · ")}</small>
           ${x.screen && x.screen.reason ? `<small class="muted">${esc(x.screen.reason)}</small>` : x.quote ? `<small class="muted">«${esc(x.quote.slice(0, 160))}»</small>` : ""}</span></label>`;
       }).join("")}</div>

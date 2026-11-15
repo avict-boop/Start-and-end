@@ -414,6 +414,14 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
             objects=[{"id": e["id"], "name": e["name"]} for e in shortlist])
 
     # 4. Подробное заполнение
+    # страница, общая для трёх и более объектов, — список или каталог (выставка, реестр), а не страница завода:
+    # её не считаем «уже найденной страницей объекта»
+    freq: dict[str, int] = {}
+    for e in shortlist:
+        for u in {e.get("url") or "", *(e.get("urls") or [])}:
+            if u:
+                freq[u] = freq.get(u, 0) + 1
+    c.list_urls = {u for u, k in freq.items() if k >= 3}
     fillers = pick_fillers(c)
     c._emit("stage", stage="fill", title=f"Заполнение таблицы: {len(shortlist)} {_obj_word(len(shortlist))} × "
                                           f"{len(attrs)} признаков; читают {', '.join(m.name for m in fillers)}")
@@ -790,7 +798,9 @@ async def fill_object(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribu
     c._emit("object_filling", object=e["id"], name=e["name"])
     src = S.ObjectSources()
     # страницы, найденные при поиске кандидатов и отсеве, уже известны: поиск источников ищет только недостающие
-    known = list(dict.fromkeys(u for u in [e.get("url") or "", *(e.get("urls") or [])] if u.startswith(("http://", "https://"))))
+    shared = getattr(c, "list_urls", set())
+    known = list(dict.fromkeys(u for u in [e.get("url") or "", *(e.get("urls") or [])]
+                               if u.startswith(("http://", "https://")) and u not in shared))
     need = max(0, sc.pages_per_object - len(known))
     if need:
         try:
@@ -832,6 +842,8 @@ async def fill_object(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribu
         # цитатой из документа или с сайта компании (или не найдены). Всё подтверждено — второе не нужно
         r1 = (await asyncio.gather(c._ask(first, "fill", S.fill_prompt(frame, e, attrs, texts), S.ObjectCells, meta=meta),
                                    return_exceptions=True))[0]
+        if isinstance(r1, (BudgetExceeded, OutOfCredits)):  # бюджет или баланс — второе прочтение не начинаем
+            raise r1
         got_all.append((first.name, r1))
         firm: set[str] = set()
         if not isinstance(r1, BaseException):
@@ -841,10 +853,12 @@ async def fill_object(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribu
                 v = verify_option(c, x, first.name, e, pages, a) if x is not None else {}
                 if v.get("found") and v.get("kind") in ("document", "official"):
                     firm.add(a.id)
-        todo = [a for a in attrs if a.scorable and a.id not in firm]
+        # первое прочтение не удалось — второе читает всё (иначе признаки «для сведения» остались бы без значения)
+        todo = attrs if isinstance(r1, BaseException) else [a for a in attrs if a.scorable and a.id not in firm]
         if todo:
             m2 = rest[0]
-            r2 = (await asyncio.gather(c._ask(m2, "fill", S.fill_prompt(frame, e, attrs, texts, only=[a.id for a in todo]),
+            only = None if len(todo) == len(attrs) else [a.id for a in todo]
+            r2 = (await asyncio.gather(c._ask(m2, "fill", S.fill_prompt(frame, e, attrs, texts, only=only),
                                               S.ObjectCells, meta=meta), return_exceptions=True))[0]
             got_all.append((m2.name, r2))
         else:
@@ -1007,7 +1021,9 @@ def neutral_disputes(attrs: list[S.Attribute], rows: dict[str, dict[str, Any]], 
     """Спорные ячейки, от которых выбор не зависит: при любом из спорных значений (и без значения) первая группа —
     те же объекты, а лидер тот же (если первая группа — все объекты, то и весь порядок тот же). Такие ячейки совет не
     судит: в таблице — оба значения с пометкой «спорно, на выбор не влияет». Отмечает их и возвращает (объект, признак)."""
-    table = {oid: row["cells"] for oid, row in rows.items()}
+    # объекты без единого значения в ранг не идут (их уберут перед рангом) — и здесь не считаются
+    table = {oid: row["cells"] for oid, row in rows.items()
+             if any(cell.get("status") not in (None, "none") for cell in row["cells"].values())}
     n = len(table)
     k = min(top_n or n, n)
 
@@ -1019,6 +1035,8 @@ def neutral_disputes(attrs: list[S.Attribute], rows: dict[str, dict[str, Any]], 
     out = []
     by_id = {a.id: a for a in attrs}
     for oid, row in rows.items():
+        if oid not in table:
+            continue
         for aid, cell in list(row["cells"].items()):
             a = by_id.get(aid)
             if a is None or cell.get("status") != "disputed" or not a.scorable:

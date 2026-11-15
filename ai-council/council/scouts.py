@@ -18,7 +18,8 @@ PROVIDERS: dict[str, tuple[str, tuple[str, ...]]] = {
     "anthropic": ("Anthropic", ("haiku",)),
     "x-ai": ("xAI", ("mini", "fast")),
 }
-SKIP = re.compile(r"image|audio|tts|realtime|embed|transcri|vision-only|nano|lite-preview|:free|:beta|deep-research|codex|code")
+# не берём: картинки и звук, «облегчённые» (lite, nano — слабее в поиске), особые поисковые и кодовые модели, бесплатные
+SKIP = re.compile(r"image|audio|tts|realtime|embed|transcri|vision-only|nano|lite|search|:free|:beta|deep-research|codex|code")
 MAX_PROMPT_PRICE = 1.5e-6  # дороже $1,5 за 1M входа — уже не «младшая» модель
 
 
