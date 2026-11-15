@@ -218,7 +218,7 @@ function renderReview(s) {
     body = (rv.gate === "candidates" && comp.share != null ? `<p class="small">Полнота списка ≈ <b>${Math.round(comp.share * 100)}%</b> (найдено ${comp.found}, оценка всего ~${comp.estimate}): `
       + (comp.share >= 0.75 ? "разные направления поиска часто находят одних и тех же — список близок к полному." : "многих нашло только одно направление — вероятно, есть ещё; добавьте известных вам.") + "</p>" : "")
       + `<p class="muted small">${rv.gate === "candidates" ? "Снимите галочку у лишних; склеенные дубли отмечены «склеено»." : "Галочка — проверять подробно. Исключённые при отсеве можно вернуть."}
-        <button type="button" class="link small" id="rvAll">все</button> · <button type="button" class="link small" id="rvNone">никого</button></p>
+        ${rv.gate === "shortlist" ? `<button type="button" class="link small" id="rvSug">как предложено (${short.size})</button> · ` : ""}<button type="button" class="link small" id="rvAll">отметить всех (${items.length})</button> · <button type="button" class="link small" id="rvNone">снять все</button></p>
       <div class="sel-review-list">${items.map((x) => {
         const scr = x.screen ? sc[x.screen.result] : null;
         return `<label class="sel-item"><input type="checkbox" data-id="${esc(x.id)}" ${rv.gate === "candidates" || short.has(x.id) ? "checked" : ""}>
@@ -245,7 +245,19 @@ function renderReview(s) {
       + (sug && n > sug ? ` · <span class="warn-text">больше предложенного (${sug})</span>` : "") : ""}`;
   };
   const all = (on) => { box.querySelectorAll("input[data-id]").forEach((i) => { i.checked = on; }); cnt(); };
-  if ($("rvAll")) $("rvAll").addEventListener("click", () => all(true));
+  if ($("rvAll")) $("rvAll").addEventListener("click", () => {
+    // на коротком списке «все» — это все найденные на подробную проверку: дорого, поэтому спрашиваем
+    const sug = ((rv.payload || {}).shortlist || []).length;
+    const n = box.querySelectorAll("input[data-id]").length;
+    if (rv.gate === "shortlist" && n > sug && !confirm(`Отправить на подробную проверку всех ${n}, а не ${sug} предложенных?\n`
+      + `Это ≈ $${(n * 0.08).toFixed(0)}–${(n * 0.25).toFixed(0)} и ≈ ${Math.round(n * 0.6)} мин.`)) return;
+    all(true);
+  });
+  if ($("rvSug")) $("rvSug").addEventListener("click", () => {
+    const sug = new Set((rv.payload || {}).shortlist || []);
+    box.querySelectorAll("input[data-id]").forEach((i) => { i.checked = sug.has(i.dataset.id); });
+    cnt();
+  });
   if ($("rvNone")) $("rvNone").addEventListener("click", () => all(false));
   $("rvGo").addEventListener("click", () => sendReview(s, rv));
   box.querySelectorAll("input[data-id]").forEach((i) => i.addEventListener("change", cnt));
