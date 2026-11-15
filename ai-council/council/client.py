@@ -472,6 +472,11 @@ class OpenRouterClient:
                     wait = 0.0  # повторяем сразу (причина уйдёт в событие retry)
                 else:
                     last_error = f"пустой ответ модели (finish_reason={finish}, лимит {limit} токенов)"
+                    # обрыв с ошибкой при своём поиске модели (так бывает у Gemini): повтор — через Exa, поиск не теряем
+                    ws = next((t for t in payload.get("tools") or [] if t.get("type") == "openrouter:web_search"), None)
+                    if finish == "error" and ws and (ws.get("parameters") or {}).get("engine") not in ("exa",):
+                        ws.setdefault("parameters", {})["engine"] = "exa"
+                        last_error += " — повтор с поиском через Exa"
                 log.warning("%s: %s", model, last_error)
                 continue
             if empty_runs and payload.get("reasoning"):

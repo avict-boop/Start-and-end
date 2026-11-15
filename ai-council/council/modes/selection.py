@@ -336,6 +336,11 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         thread=c.history, chair_proposed=False, requirements=c.requirements, selection=sel)
 
 
+def _word(n: int, one: str, few: str, many: str) -> str:
+    n = abs(n) % 100
+    return one if n % 10 == 1 and n != 11 else few if 2 <= n % 10 <= 4 and not 12 <= n <= 14 else many
+
+
 def _obj_word(n: int) -> str:
     n = abs(n) % 100
     return "объект" if n % 10 == 1 and n != 11 else "объекта" if 2 <= n % 10 <= 4 and not 12 <= n <= 14 else "объектов"
@@ -430,13 +435,23 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
                 break
         known = [e["name"] for e in S.merge_candidates(found)] if rnd else []
         c._emit("stage", stage="discover", title=f"Поиск кандидатов{' — ещё круг' if rnd else ''}: "
-                                                 f"{len(angles)} направлений × {len(hunters)} "
+                                                 f"{len(angles)} {_word(len(angles), 'направление', 'направления', 'направлений')} × {len(hunters)} "
                                                  f"{'модель' if len(hunters) == 1 else 'моделей' if len(hunters) > 4 else 'модели'}"
-                                                 f" ({', '.join(m.name for m in hunters)})")
+                                                 f" ({', '.join(m.name for m in hunters)})",
+                members=[m.name for m in hunters])
         plan = [(a, m) for a in angles for m in hunters]
-        jobs = [c._ask(m, "discover", S.discover_prompt(frame, a, sc.per_angle, known), S.Candidates,
-                       meta={**META, "angle": a}, web_search=True) for a, m in plan]
-        got = await asyncio.gather(*jobs, return_exceptions=True)
+        left = {m.name: len(angles) for m in hunters}
+
+        async def hunt(a: str, m: MemberConfig) -> Any:
+            try:
+                return await c._ask(m, "discover", S.discover_prompt(frame, a, sc.per_angle, known), S.Candidates,
+                                    meta={**META, "angle": a}, web_search=True)
+            finally:
+                left[m.name] -= 1
+                if not left[m.name]:
+                    c._emit("member_done", stage="discover", member=m.name)
+
+        got = await asyncio.gather(*(hunt(a, m) for a, m in plan), return_exceptions=True)
         for (a, m), r in zip(plan, got):
             if isinstance(r, (BudgetExceeded, OutOfCredits)):
                 raise r

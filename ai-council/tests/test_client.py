@@ -493,3 +493,21 @@ def test_two_hangs_in_a_row_fail_fast():
     finally:
         C.STALL_S = orig
     assert len(n) == 2  # а не 4 попытки по 9 минут
+
+
+def test_search_error_falls_back_to_exa(_fresh_features):
+    """Gemini со своим поиском обрывается (finish_reason=error, пусто) — повтор ищет через Exa."""
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        if len(seen) == 1:
+            return httpx.Response(200, json={"choices": [{"message": {"content": ""}, "finish_reason": "error"}],
+                                             "usage": {"prompt_tokens": 10, "completion_tokens": 0, "cost": 0.001}})
+        return httpx.Response(200, json=ok_body('{"a":1}'))
+
+    comp = asyncio.run(make(handler).complete("google/gemini-x", [], temperature=0, max_tokens=100, web_search=True,
+                                              search_engine="native"))
+    assert comp.text == '{"a":1}'
+    eng = [next(t for t in b["tools"] if t["type"] == "openrouter:web_search")["parameters"].get("engine") for b in seen]
+    assert eng == ["native", "exa"]

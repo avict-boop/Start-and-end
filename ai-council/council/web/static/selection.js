@@ -108,7 +108,7 @@ function renderSelLive(s) {
   box.innerHTML = `<h2>Таблица заполняется</h2>
     <p class="muted small">Готово ${done} из ${s.selObjs.length}. Д — документ, С — сайт компании, В — вторичный, ? — цитата не найдена,
       «спор» — источники расходятся (решит совет), ⚖ — решено советом. Наведите на ячейку — цитата.</p>
-    <div class="table-wrap"><table class="sel-table"><thead><tr>${Object.keys(rank).length ? "<th>№</th>" : ""}<th>Объект</th>${attrs.map((a) => `<th title="${esc(a.name)}">${esc(selShort(a.name))}</th>`).join("")}</tr></thead><tbody>
+    <div class="table-wrap"><table class="sel-table sel-wide${Object.keys(rank).length ? "" : " sel-live"}"><thead><tr>${Object.keys(rank).length ? "<th>№</th>" : ""}<th>Объект</th>${attrs.map((a) => `<th title="${esc(a.name)}">${esc(selShort(a.name))}</th>`).join("")}</tr></thead><tbody>
     ${[...s.selObjs].sort((x, y) => (rank[x.id] || 999) - (rank[y.id] || 999)).map((o) => `<tr class="${busy[o.id] ? "sel-busy" : ""}">${Object.keys(rank).length ? `<td>${rank[o.id] || ""}</td>` : ""}
       <td><b>${esc(o.name)}</b>${busy[o.id] ? ' <span class="muted small">заполняется…</span>' : !cells[o.id] ? ' <span class="muted small">в очереди</span>' : ""}</td>
       ${attrs.map((a) => td(o.id, a)).join("")}</tr>`).join("")}</tbody></table></div>`;
@@ -161,7 +161,7 @@ function renderReview(s) {
       <label class="field"><span>Добавить своих (по одному в строке)</span><textarea id="rvAdd" rows="3"></textarea></label>`;
   }
   box.innerHTML = `<h3>${esc(SEL_GATE_TITLE[rv.gate] || "Проверьте")}</h3>${body}
-    <div class="paused-row"><button type="button" class="primary" id="rvGo">▶ Продолжить с этим</button></div>`;
+    <div class="paused-row"><button type="button" class="primary" id="rvGo">Продолжить с этим</button></div>`;
   const all = (on) => box.querySelectorAll("input[data-id]").forEach((i) => { i.checked = on; });
   if ($("rvAll")) $("rvAll").addEventListener("click", () => all(true));
   if ($("rvNone")) $("rvNone").addEventListener("click", () => all(false));
@@ -236,8 +236,8 @@ function selDraw(id) {
       <input type="range" min="0" max="10" step="1" value="${st.weights[a.id] ?? a.weight}" data-wa="${esc(a.id)}"><b>${st.weights[a.id] ?? a.weight}</b></label>`).join("")}
       <label class="switch"><input type="checkbox" id="selTrust" ${st.trust !== false ? "checked" : ""}><span class="sw" aria-hidden="true"></span>
         <span>Учитывать надёжность источника</span></label></div>
-    <div class="sel-actions"><a class="btn small" id="selXlsx" href="#">⬇ Excel с этими весами</a>
-      <button type="button" class="btn small" id="selProject">📦 Создать проект закупки</button>
+    <div class="sel-actions"><a class="btn small" id="selXlsx" href="#"><svg class="ic" aria-hidden="true"><use href="#i-dl"/></svg>Excel с этими весами</a>
+      <button type="button" class="btn small" id="selProject"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>Создать проект закупки</button>
       <button type="button" class="link small" id="selReset">Веса как в заседании</button></div>
     <div id="selTableBox"></div>
     <div id="selCellBox" class="sel-cellbox" hidden></div>`;
@@ -269,7 +269,7 @@ function selTable(id) {
   };
   const top = d.top_n || (d.ranking || []).length;
   const w = st.weights;
-  $("selTableBox").innerHTML = `<div class="table-wrap"><table class="sel-table"><thead><tr><th>№</th><th>Объект</th><th>Балл</th>${attrs.map((a) => `<th title="${esc(a.name)}">${esc(selShort(a.name))}${a.scorable_kind ? ` <span class="muted small">×${w[a.id] ?? a.weight}</span>` : ""}</th>`).join("")}</tr></thead>
+  $("selTableBox").innerHTML = `<div class="table-wrap"><table class="sel-table sel-wide"><thead><tr><th>№</th><th>Объект</th><th>Балл</th>${attrs.map((a) => `<th title="${esc(a.name)}">${esc(selShort(a.name))}${a.scorable_kind ? ` <span class="muted small">×${w[a.id] ?? a.weight}</span>` : ""}</th>`).join("")}</tr></thead>
     <tbody>${(d.ranking || []).map((r) => `<tr class="${r.rank <= top ? "sel-top" : ""}"><td>${r.rank}${r.rank <= top ? " ✓" : ""}</td>
       <td><b>${esc(names[r.object] || r.object)}</b></td><td>${String(r.score).replace(".", ",")}</td>${attrs.map((a) => cell(r.object, a)).join("")}</tr>`).join("")}</tbody></table></div>
     ${(d.voi || []).length ? `<h4>Что выяснить, чтобы выбор не поменялся неожиданно</h4><ul>${d.voi.map((v) => `<li>${esc(names[v.object] || v.object)}: ${esc(v.text)}</li>`).join("")}</ul>` : ""}

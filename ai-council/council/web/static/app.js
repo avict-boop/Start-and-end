@@ -2,7 +2,11 @@
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const money = (x) => (x == null ? "—" : `$${Number(x).toFixed(4)}`);
+const money = (x) => {
+  if (x == null) return "—";
+  const n = Number(x), a = Math.abs(n);
+  return `$${a >= 0.1 || a === 0 ? n.toFixed(2) : a >= 0.01 ? n.toFixed(3) : n.toFixed(4)}`;
+};
 
 const STAGES = [
   ["framing", "Уточняем задачу"],
@@ -187,6 +191,7 @@ function inline(s) {
   const hold = (html) => { keep.push(html); return `\u0001${keep.length - 1}\u0001`; };
   let t = String(s ?? "")
     .replace(/`([^`]+)`/g, (_, c) => hold(`<code>${esc(c)}</code>`))
+    .replace(/\[([^\]]+)\]\(<(https?:\/\/[^>\s]+)>\)/g, (_, txt, u) => hold(linkHtml(u, /^https?:\/\/\S+$/.test(txt.trim()) ? shortUrl(txt.trim()) : txt)))
     .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, txt, u) => hold(linkHtml(u, /^https?:\/\/\S+$/.test(txt.trim()) ? shortUrl(txt.trim()) : txt)))
     .replace(/https?:\/\/[^\s<>()"'`«»]+[^\s<>()"'`«».,;:!?]/g, (u) => hold(linkHtml(u, shortUrl(u))));
   t = esc(t)
@@ -247,14 +252,14 @@ function md(src) {
       out.push(build(0, 0).html);
       continue;
     }
-    if (/^>\s?/.test(line)) {
+    if (/^\s*>\s?/.test(line)) {
       const q = [];
-      while (i < lines.length && /^>\s?/.test(lines[i])) q.push(lines[i++].replace(/^>\s?/, ""));
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ""));
       out.push(`<blockquote>${q.map(inline).join("<br>")}</blockquote>`);
       continue;
     }
     const para = [];
-    while (i < lines.length && lines[i].trim() && !listRe.test(lines[i]) && !/^(#{1,6}\s|>|\u0000)/.test(lines[i])
+    while (i < lines.length && lines[i].trim() && !listRe.test(lines[i]) && !/^(#{1,6}\s|\s*>|\u0000)/.test(lines[i])
            && !/^\s*\|/.test(lines[i])) para.push(lines[i++]);
     if (!para.length) { out.push(`<p>${inline(lines[i++])}</p>`); continue; }
     out.push(`<p>${para.map(inline).join("<br>")}</p>`);
@@ -1022,10 +1027,13 @@ async function loadPaused() {
   const b = $("pausedBanner");
   b.hidden = !items.length;
   if (!items.length) return;
-  b.innerHTML = `<b>${items.length === 1 ? "Есть приостановленное заседание" : `Приостановленных заседаний: ${items.length}`}</b> — `
-    + "уже полученные ответы сохранены, его можно продолжить без повторной оплаты:"
-    + `<ul class="paused-list">${items.slice(0, 5).map((it) => `<li><a href="#/s/${encodeURIComponent(it.id)}">${esc(shortTitle(it.question, 90))}</a>`
-      + ` <span class="muted small">· ${esc(it.reason_text)} · потрачено ${money(it.spent)}</span></li>`).join("")}</ul>`;
+  const shown = items.slice(0, 3);
+  b.innerHTML = `<b>${items.length === 1 ? "Можно продолжить заседание" : `Можно продолжить: ${items.length} ${plural(items.length, "заседание", "заседания", "заседаний")}`}</b>`
+    + ` <span class="muted small">— полученные ответы сохранены, повторно не оплачиваются</span>`
+    + `<ul class="paused-list">${shown.map((it) => `<li><a href="#/s/${encodeURIComponent(it.id)}" title="${esc(shortTitle(it.question, 300))}">`
+      + `<span class="pq">${esc(shortTitle(it.question, 90))}</span><span class="pm">${esc(it.reason_text)} · потрачено ${money(it.spent)}</span>`
+      + `<span class="pgo">Открыть →</span></a></li>`).join("")}</ul>`
+    + (items.length > shown.length ? `<p class="paused-more"><a href="#/archive">Ещё ${items.length - shown.length} — в архиве</a></p>` : "");
 }
 
 function goHome() {
@@ -1156,7 +1164,7 @@ async function loadArchive() {
       <div class="arc-q" data-open="${esc(it.id)}" tabindex="0" role="link" title="${esc(shortTitle(it.question, 300))}">${status}${esc(shortTitle(it.question))}</div>
       <div class="arc-actions">${dl}${del}</div>
       ${done && it.winner && it.unacceptable ? `<div class="arc-win">⛔ Ни один вариант не подходит <span class="muted">· лидер сравнения — ${esc(it.winner)}</span></div>` : ""}
-      ${done && it.winner && it.mode === "selection" ? `<div class="arc-win">🏆 ${esc(it.winner_title)}</div>` : ""}
+      ${done && it.winner && it.mode === "selection" ? `<div class="arc-win"><svg class="ic" aria-hidden="true"><use href="#i-mark"/></svg>${esc(it.winner_title)}</div>` : ""}
       ${done && it.winner && !it.unacceptable && it.mode !== "selection" ? `<div class="arc-win"><span class="lbl" style="width:24px;height:24px;font-size:.78rem;margin-right:.35rem;vertical-align:-2px">${esc(it.winner)}</span>${esc(it.winner_title)} <span class="muted">· ${esc(it.winner_author)}</span></div>` : ""}
       <div class="arc-meta">${meta}</div>
     </article>`;
@@ -1583,7 +1591,8 @@ function apply(s, ev) {
       s.stageTitle[ev.stage] = ev.title;
       if (ev.stage === "proposal") s.chairJudge = ev.chair_proposes === false;
       // председатель без своего варианта не участвует в предложениях и доработке
-      const who = ev.stage === "factcheck" || ["discover", "screen"].includes(ev.stage) ? ["факт-чек"]
+      const who = (ev.members || []).length ? ev.members
+        : ev.stage === "factcheck" || ["discover", "screen"].includes(ev.stage) ? ["факт-чек"]
         : ["framing", "verdict"].includes(ev.stage) ? [s.chair].filter(Boolean)
         : ["proposal", "revision"].includes(ev.stage) && s.chairJudge ? s.members.filter((m) => m !== s.chair) : s.members;
       s.work = Object.fromEntries(who.map((n) => [n, "work"]));
@@ -2265,7 +2274,11 @@ function renderVerdict(s) {
   if (tie) warns.push(`Варианты ${s.coLeaders.join(", ")} набрали одинаково — по голосам их не различить${s.coLeaders.includes(v.winner) ? `; председатель выбрал ${v.winner}` : ""}.`);
   $("vAgreeWarn").hidden = !warns.length;
   $("vAgreeWarn").innerHTML = warns.map(esc).join("<br>");
-  $("vAnswer").innerHTML = md(v.final_answer);
+  const selCut = s.mode === "selection" ? String(v.final_answer || "").search(/^#{2,4}\s+Ранг[\s(]/m) : -1;
+  $("vAnswer").innerHTML = md(selCut > 0 ? v.final_answer.slice(0, selCut) : v.final_answer);
+  $("vSelFull").hidden = selCut <= 0;
+  $("vSelFull").innerHTML = selCut > 0 ? `<summary><svg class="ic" aria-hidden="true"><use href="#i-chev"/></svg>Полный отчёт
+      <small>ранг, устойчивость, карточки объектов с источниками и цитатами</small></summary><div class="md answer">${md(v.final_answer.slice(selCut))}</div>` : "";
   renderResearch(s);
   renderSelection(s);
 
@@ -2653,7 +2666,7 @@ async function openStats() {
   const dur = (s) => (s >= 60 ? `${Math.floor(s / 60)} мин ${Math.round(s % 60)} с` : `${Math.round(s)} с`);
   const kpi = (v, l) => `<div class="kpi"><div class="kv">${v}</div><div class="kl">${l}</div></div>`;
   const maxCost = Math.max(...d.months.map((m) => m.cost), 0.0001);
-  const monthName = (m) => { const [y, mm] = m.split("-"); return new Date(+y, +mm - 1, 1).toLocaleDateString("ru-RU", { month: "short", year: "2-digit" }); };
+  const monthName = (m) => { const [y, mm] = m.split("-"); const t = new Date(+y, +mm - 1, 1).toLocaleDateString("ru-RU", { month: "long" }); return `${t[0].toUpperCase()}${t.slice(1)} ${y}`; };
   const pct = (x) => (x == null ? "—" : `${Math.round(x * 100)}%`);
   $("statsBody").innerHTML = `
     <div class="kpis">

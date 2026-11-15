@@ -5,6 +5,10 @@
 const PR_STATUS = { new: "не писали", sent: "запрос отправлен", replied: "ответил", declined: "отказался", paused: "отложен" };
 let prCurrent = null;
 
+// дата ISO → «15.11.2026 08:43» по времени браузера
+const prDate = (iso) => { const d = new Date(iso || ""); return isNaN(d) ? String(iso || "").slice(0, 16).replace("T", " ")
+  : d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }); };
+
 const prMock = () => !(typeof config !== "undefined" && config && config.has_key);
 
 async function openProjects() {
@@ -16,9 +20,10 @@ async function openProjects() {
   box.innerHTML = '<p class="muted">Загружаю…</p>';
   try {
     const d = await api("/api/projects");
-    box.innerHTML = d.items.length ? `<table class="sel-table"><thead><tr><th>Проект</th><th>Поставщиков</th><th>Ответили</th><th>Предупреждения</th><th>Изменён</th></tr></thead><tbody>
-      ${d.items.map((p) => `<tr><td><a href="#/projects/${encodeURIComponent(p.id)}">${esc(p.title)}</a></td><td>${p.suppliers}</td><td>${p.replied}</td>
-        <td>${p.alerts ? `<span class="badge warn">${p.alerts}</span>` : "—"}</td><td class="muted small">${esc((p.updated || "").slice(0, 16).replace("T", " "))}</td></tr>`).join("")}</tbody></table>`
+    box.innerHTML = d.items.length ? `<div class="proj-list">${d.items.map((p) => `<a class="proj-row" href="#/projects/${encodeURIComponent(p.id)}">
+        <b>${esc(p.title)}</b>
+        <span class="muted small">${p.suppliers} ${plural(p.suppliers, "поставщик", "поставщика", "поставщиков")} · ответили ${p.replied} · изменён ${esc(prDate(p.updated))}</span>
+        ${p.alerts ? `<span class="badge warn" title="Предупреждения: истекающие документы, чужое юрлицо и т. п.">${p.alerts} ${plural(p.alerts, "предупреждение", "предупреждения", "предупреждений")}</span>` : '<span class="badge ok">без предупреждений</span>'}</a>`).join("")}</div>`
       : '<p class="muted">Проектов пока нет. Проект создаётся из итога «Отбора»: кнопка «Создать проект закупки» под таблицей.</p>';
   } catch (e) { box.innerHTML = `<p class="error">${esc(e.message)}</p>`; }
 }
@@ -56,14 +61,15 @@ function prDraw() {
     const docs = (s.documents || []).map((d) => `<li><b>${esc(d.kind || "документ")}</b> ${esc(d.number || "")}${d.holder ? ` · на ${esc(d.holder)}` : ""}${d.valid_until ? ` · до ${esc(d.valid_until)}` : ""}
       ${(d.flags || []).map((f) => `<span class="badge ${/истёк|другое/.test(f) ? "bad" : "warn"}">${esc(f)}</span>`).join(" ")}</li>`).join("");
     const reps = (s.replies || []).slice().reverse().map((r) => `<details><summary>${esc((r.at || "").slice(0, 16).replace("T", " "))} · ${esc(r.source)} — ${esc(r.summary || "")}</summary>
-      ${(r.items || []).length ? `<table class="sel-table"><thead><tr><th>SKU</th><th>Цена</th><th>За что</th><th>MOQ</th><th>Incoterms</th><th>Срок</th><th>Условия</th></tr></thead><tbody>
-        ${r.items.map((i) => `<tr><td>${esc(i.sku)}</td><td>${esc(i.price)} ${esc(i.currency)}</td><td>${esc(i.unit)}</td><td>${esc(i.moq)}</td><td>${esc(i.incoterms)}</td><td>${esc(i.lead_time)}</td><td>${esc(i.note)}</td></tr>`).join("")}</tbody></table>` : ""}
+      ${(r.items || []).length ? `<div class="table-wrap"><table class="sel-table"><thead><tr><th>SKU</th><th>Цена</th><th>За что</th><th>MOQ</th><th>Incoterms</th><th>Срок</th><th>Условия</th></tr></thead><tbody>
+        ${r.items.map((i) => `<tr><td>${esc(i.sku)}</td><td>${esc(i.price)} ${esc(i.currency)}</td><td>${esc(i.unit)}</td><td>${esc(i.moq)}</td><td>${esc(i.incoterms)}</td><td>${esc(i.lead_time)}</td><td>${esc(i.note)}</td></tr>`).join("")}</tbody></table></div>` : ""}
       ${(r.questions || []).length ? `<p class="small"><b>Не ответили / спросили:</b> ${r.questions.map(esc).join("; ")}</p>` : ""}</details>`).join("");
     const cells = Object.entries(s.cells || {}).slice(0, 8).map(([k, c]) => `${esc(k)}: ${esc(c.value)}`).join(" · ");
     const mail = (s.contact || "").match(/[\w.+-]+@[\w-]+\.[\w.-]+/);
     const le = s.letter_en, lz = s.letter_zh;
     return `<article class="card proj-sup" data-sup="${esc(s.id)}">
-      <header><h3>${s.rank ? `${s.rank}. ` : ""}${esc(s.name)}</h3><span class="muted small">${s.score != null ? `балл ${String(s.score).replace(".", ",")}` : ""}${s.website ? ` · ${esc(s.website)}` : ""}</span></header>
+      <header><h3>${s.rank ? `${s.rank}. ` : ""}${esc(s.name)}</h3><span class="muted small">${s.score != null ? `балл ${String(s.score).replace(".", ",")}` : ""}${s.website ? ` · ${esc(s.website.replace(/^https?:\/\//, ""))}` : ""}</span>
+        <span class="badge ${{ replied: "ok", declined: "bad", sent: "plain", paused: "plain" }[s.status] || "warn"}">${esc(PR_STATUS[s.status] || s.status || "")}</span></header>
       ${cells ? `<p class="muted small">${cells}</p>` : ""}
       <div class="row2"><label class="field"><span>Статус</span><select data-f="status">${Object.entries(PR_STATUS).map(([k, t]) => `<option value="${k}" ${s.status === k ? "selected" : ""}>${t}</option>`).join("")}</select>
         ${s.sent_at ? `<small class="hint">запрос отправлен ${esc(s.sent_at.slice(0, 10))}</small>` : ""}</label>
@@ -75,17 +81,17 @@ function prDraw() {
         <div class="proj-letter"><b>中文:</b> ${esc(lz.subject)}<pre>${esc(lz.body)}</pre><button type="button" class="link small" data-copy="zh">копировать</button></div></details>` : ""}
       <details ${(s.replies || []).length ? "" : "open"}><summary><b>Ответ завода</b> — вставьте письмо или приложите прайс, PDF, фото сертификата</summary>
         <textarea data-f="reply" rows="4" placeholder="Текст ответа (любой язык)"></textarea>
-        <input type="file" data-f="files" multiple>
-        <button type="button" class="secondary" data-act="reply">Разобрать ответ</button> <span class="muted small">цены по SKU и документы; около $0,01–0,05</span></details>
+        <div class="file-pick"><input type="file" data-f="files" multiple aria-label="Файлы ответа: прайс, PDF, фото сертификата"></div>
+        <div class="sel-actions"><button type="button" class="secondary" data-act="reply">Разобрать ответ</button> <span class="muted small">цены по SKU и документы; около $0,01–0,05</span></div></details>
       ${reps ? `<h4>Ответы</h4>${reps}` : ""}
       ${docs ? `<h4>Документы</h4><ul>${docs}</ul>` : ""}
       <div class="sel-actions"><button type="button" class="link small" data-act="save">Сохранить</button> · <button type="button" class="link small danger" data-act="remove">убрать из проекта</button></div>
     </article>`;
   };
   const cmp = (p.compare || []).map((c) => `<h4>${esc(c.sku)}</h4>${c.comparable ? "" : '<p class="muted small">Единицы цены у поставщиков разные — сравните вручную.</p>'}
-    <table class="sel-table"><thead><tr><th>Поставщик</th><th>Цена</th><th>В ${esc(c.base_currency)}</th><th>За что</th><th>MOQ</th><th>Incoterms</th><th>Срок</th></tr></thead><tbody>
-    ${c.rows.map((r) => `<tr class="${r.best ? "sel-top" : ""}"><td>${r.best ? "✓ " : ""}${esc(r.name)}</td><td>${esc(r.price)} ${esc(r.currency)}</td><td>${r.base != null ? r.base : "—"}</td>
-      <td>${esc(r.unit)}</td><td>${esc(r.moq)}</td><td>${esc(r.incoterms)}</td><td>${esc(r.lead_time)}</td></tr>`).join("")}</tbody></table>`).join("");
+    <div class="table-wrap"><table class="sel-table"><thead><tr><th>Поставщик</th><th>Цена</th><th>В ${esc(c.base_currency)}</th><th>За что</th><th>MOQ</th><th>Incoterms</th><th>Срок</th></tr></thead><tbody>
+    ${c.rows.map((r) => `<tr class="${r.best ? "sel-top" : ""}"><td>${esc(r.name)}${r.best ? ' <span class="badge ok">дешевле всех</span>' : ""}</td><td>${esc(r.price)} ${esc(r.currency)}</td><td>${r.base != null ? r.base : "—"}</td>
+      <td>${esc(r.unit)}</td><td>${esc(r.moq)}</td><td>${esc(r.incoterms)}</td><td>${esc(r.lead_time)}</td></tr>`).join("")}</tbody></table></div>`).join("");
   const diff = p.recheck_diff;
   $("projBody").innerHTML = `
     ${(p.alerts || []).length ? `<div class="alert warn"><b>Внимание:</b><ul>${p.alerts.map((a) => `<li>${esc(a.text)}</li>`).join("")}</ul></div>` : ""}
@@ -114,7 +120,7 @@ function prDraw() {
       <p class="muted small">Новый «Отбор» по поставщикам проекта с теми же признаками; когда закончится — здесь будет, что изменилось.</p>
       <button type="button" class="secondary" id="prRecheck">Перепроверить таблицу</button>
       ${(p.rechecks || []).length ? `<p class="small">Последняя: <a href="#/s/${encodeURIComponent(p.rechecks[p.rechecks.length - 1].session)}">заседание от ${esc(p.rechecks[p.rechecks.length - 1].at.slice(0, 10))}</a>${p.recheck_done ? "" : " — ещё идёт или не завершено"}</p>` : ""}
-      ${diff ? (diff.length ? `<table class="sel-table"><thead><tr><th>Поставщик</th><th>Признак</th><th>Было</th><th>Стало</th></tr></thead><tbody>${diff.map((x) => `<tr><td>${esc(x.supplier)}</td><td>${esc(x.attr)}</td><td>${esc(x.old || "—")}</td><td>${esc(x.new || "—")}${/^https?:\/\//i.test(x.url || "") ? ` <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : ""}</td></tr>`).join("")}</tbody></table>` : '<p class="small">Изменений нет.</p>') : ""}
+      ${diff ? (diff.length ? `<div class="table-wrap"><table class="sel-table"><thead><tr><th>Поставщик</th><th>Признак</th><th>Было</th><th>Стало</th></tr></thead><tbody>${diff.map((x) => `<tr><td>${esc(x.supplier)}</td><td>${esc(x.attr)}</td><td>${esc(x.old || "—")}</td><td>${esc(x.new || "—")}${/^https?:\/\//i.test(x.url || "") ? ` <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : ""}</td></tr>`).join("")}</tbody></table></div>` : '<p class="small">Изменений нет.</p>') : ""}
     </section>
     <p><button type="button" class="link small danger" id="prDelete">Удалить проект</button></p>`;
   prBind();
