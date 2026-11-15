@@ -1048,6 +1048,13 @@ details[open] > summary .params-edit { visibility: hidden; }
 .sel-wide.sel-live th:nth-child(1), .sel-wide.sel-live td:nth-child(1) { position: sticky; left: 0; z-index: 1;
   background: var(--surface); min-width: 10rem; max-width: 14rem; box-shadow: 1px 0 0 var(--line); }
 .sel-wide.sel-live th:nth-child(2), .sel-wide.sel-live td:nth-child(2) { position: static; box-shadow: none; min-width: 8.5rem; }
+.sel-live .sel-state { display: block; font-size: .78rem; font-weight: 400; color: var(--accent); }
+.sel-wide.sel-live tr.sel-queue td { position: static; background: var(--surface-2); min-width: 0; max-width: none; }
+.sel-live tr.sel-queue summary { cursor: pointer; font-weight: 600; }
+@media (max-width: 640px) {
+  .sel-wide.sel-live th:nth-child(1), .sel-wide.sel-live td:nth-child(1) { min-width: 7.5rem; max-width: 9.5rem; font-size: .84rem; }
+  .sel-wide.sel-live th, .sel-wide.sel-live td { min-width: 7rem; max-width: 12rem; font-size: .82rem; }
+}
 /* таблицы в тексте итога с 6+ колонками — тоже шириной по содержимому, с прокруткой */
 .answer table:has(th:nth-child(6)) { width: max-content; min-width: 100%; }
 .answer table:has(th:nth-child(6)) th, .answer table:has(th:nth-child(6)) td { min-width: 7rem; max-width: 16rem; }

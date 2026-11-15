@@ -150,13 +150,19 @@ function renderSelLive(s) {
     const v = `${c.value}${c.unit && !c.value.includes(c.unit) ? ` ${c.unit}` : ""}`;
     return `<td title="${esc(word)}${c.quote ? ` — «${esc(c.quote)}»` : ""}">${esc(v.length > 40 ? v.slice(0, 38) + "…" : v)} <span class="badge ${k}">${mark}</span>${c.ruled ? " ⚖" : ""}</td>`;
   };
+  // сверху — что заполняется сейчас, затем заполненные; очередь — одной строкой (150 пустых строк заслоняли бы работу)
+  const byRank = (x, y) => (rank[x.id] || 999) - (rank[y.id] || 999);
+  const rows = [...s.selObjs.filter((o) => busy[o.id]), ...s.selObjs.filter((o) => !busy[o.id] && cells[o.id]).sort(byRank)];
+  const queued = s.selObjs.filter((o) => !busy[o.id] && !cells[o.id]);
   box.innerHTML = `<h2>Таблица заполняется</h2>
-    <p class="muted small">Готово ${done} из ${s.selObjs.length}. Д — документ, С — сайт компании, В — вторичный, ? — цитата не найдена,
+    <p class="muted small">Готово ${done} из ${s.selObjs.length}${Object.keys(busy).length ? ` · сейчас ${Object.keys(busy).length}` : ""}. Д — документ, С — сайт компании, В — вторичный, ? — цитата не найдена,
       «спор» — источники расходятся (решит совет), ⚖ — решено советом. Наведите на ячейку — цитата.</p>
     <div class="table-wrap"><table class="sel-table sel-wide sel-live"><thead><tr><th>Объект</th>${attrs.map((a) => `<th title="${esc(a.name)}">${esc(selShort(a.name))}</th>`).join("")}</tr></thead><tbody>
-    ${[...s.selObjs].sort((x, y) => (rank[x.id] || 999) - (rank[y.id] || 999)).map((o) => `<tr class="${busy[o.id] ? "sel-busy" : ""}">
-      <td><b>${esc(o.name)}</b>${busy[o.id] ? ' <span class="muted small">заполняется…</span>' : !cells[o.id] ? ' <span class="muted small">в очереди</span>' : ""}</td>
-      ${attrs.map((a) => td(o.id, a)).join("")}</tr>`).join("")}</tbody></table></div>`;
+    ${rows.map((o) => `<tr class="${busy[o.id] ? "sel-busy" : ""}">
+      <td><b>${esc(o.name)}</b>${busy[o.id] ? '<span class="sel-state">заполняется…</span>' : ""}</td>
+      ${attrs.map((a) => td(o.id, a)).join("")}</tr>`).join("")}
+    ${queued.length ? `<tr class="sel-queue"><td colspan="${attrs.length + 1}"><details><summary>В очереди ещё ${queued.length}</summary>
+      <p class="muted small">${queued.map((o) => esc(o.name)).join(" · ")}</p></details></td></tr>` : ""}</tbody></table></div>`;
 }
 
 /* ---------------------------------------------------------------- остановки «проверьте список» */
@@ -224,14 +230,26 @@ function renderReview(s) {
               : (x.angles || []).length ? `найден ${x.angles.length} ${plural(x.angles.length, "раз", "раза", "раз")}` : ""].filter(Boolean).join(" · ")}</small>
           ${x.screen && x.screen.reason ? `<small class="muted">${esc(x.screen.reason)}</small>` : x.quote ? `<small class="muted">«${esc(x.quote.slice(0, 160))}»</small>` : ""}</span></label>`;
       }).join("")}</div>
+      <p class="small" id="rvCount" aria-live="polite"></p>
       <label class="field"><span>Добавить своих (по одному в строке)</span><textarea id="rvAdd" rows="3"></textarea></label>`;
   }
   box.innerHTML = `<h3>${esc(SEL_GATE_TITLE[rv.gate] || "Проверьте")}</h3>${body}
     <div class="paused-row"><button type="button" class="primary" id="rvGo">Продолжить с этим</button></div>`;
-  const all = (on) => box.querySelectorAll("input[data-id]").forEach((i) => { i.checked = on; });
+  // короткий список: сколько выбрано и во что это обойдётся — 150 объектов на подробную проверку легко выбрать «все»
+  const cnt = () => {
+    const el = $("rvCount");
+    if (!el) return;
+    const n = box.querySelectorAll("input[data-id]:checked").length;
+    const sug = ((rv.payload || {}).shortlist || []).length;
+    el.innerHTML = `Выбрано <b>${n}</b>${rv.gate === "shortlist" ? ` · подробная проверка ≈ $${(n * 0.08).toFixed(1)}–${(n * 0.25).toFixed(1)}, ≈ ${Math.max(1, Math.round(n * 0.6))} мин`
+      + (sug && n > sug ? ` · <span class="warn-text">больше предложенного (${sug})</span>` : "") : ""}`;
+  };
+  const all = (on) => { box.querySelectorAll("input[data-id]").forEach((i) => { i.checked = on; }); cnt(); };
   if ($("rvAll")) $("rvAll").addEventListener("click", () => all(true));
   if ($("rvNone")) $("rvNone").addEventListener("click", () => all(false));
   $("rvGo").addEventListener("click", () => sendReview(s, rv));
+  box.querySelectorAll("input[data-id]").forEach((i) => i.addEventListener("change", cnt));
+  cnt();
   if (rv.gate === "frame") {
     const upd = () => {
       const rows = [...box.querySelectorAll("tr[data-attr]")];
