@@ -21,6 +21,9 @@ from .links import plain
 from .schemas import to_list, to_text
 from .session import CouncilError
 
+CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
 # ---------------------------------------------------------------------------------------------------- схемы
 
 Kind = Literal["number", "text", "bool", "list", "date"]
@@ -246,6 +249,14 @@ class Cell(BaseModel):
     def _t(cls, v: Any) -> str:
         return _txt(v)
 
+    @field_validator("value", "unit", "note")
+    @classmethod
+    def _clean(cls, v: str) -> str:
+        """Без разметки: модель иногда присылает значение заголовками и жирным («### annual **bottles:**»)."""
+        v = re.sub(r"(?m)^\s*#+\s*", "", v)
+        v = re.sub(r"\*\*|__|`", "", v)
+        return re.sub(r"\s+", " ", v).strip()
+
 
 class Source(BaseModel):
     url: str
@@ -429,6 +440,11 @@ def site_of(url: str) -> str:
     return d
 
 
+def _name_key_ok(n: str) -> bool:
+    """Имя годится для склейки: латиница и кириллица — от 3 знаков, иероглифы — от 2 (仙乐 после «健康科技股份有限公司»)."""
+    return len(n) >= (2 if CJK.search(n) else 3)
+
+
 def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None = None) -> list[dict[str, Any]]:
     """Склейка дублей: одно и то же имя (без форм собственности), имя-псевдоним или один сайт компании — один объект.
     found — (направление поиска, кандидат). seeds — объекты, которые дал человек (направление «ваш список»)."""
@@ -455,7 +471,7 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
     by_key: dict[str, int] = {}
     for i, it in enumerate(items):
         c = it["c"]
-        keys = {f"n:{norm_name(x)}" for x in [c.name, c.local_name, *c.aliases] if len(norm_name(x)) >= 3}
+        keys = {f"n:{norm_name(x)}" for x in [c.name, c.local_name, *c.aliases] if _name_key_ok(norm_name(x))}
         site = site_of(c.website) or ""
         if site:
             keys.add(f"d:{site}")
@@ -579,6 +595,43 @@ def _num(raw: str, decimal_comma: bool = False) -> float | None:
         return None
 
 
+UNIT_KIND = [
+    ("money", r"юан|yuan|rmb|cny|¥|\$|usd|руб|rub|eur|€|元|долл|dollar"),
+    ("mass", r"тонн|\bт\b|\btons?\b|\bt/|吨|\bкг\b|\bkg\b|килограмм"),
+    ("volume", r"литр|\bл\b|\blit|升|\bm3\b|м3|куб"),
+    ("area", r"м²|м2|\bm2\b|sq\.? ?m|平方米|кв\.? ?м|акр|\bmu\b|亩"),
+    ("count", r"капсул|таблет|\bшт|pcs|pieces|units?\b|粒|片|袋|盒|瓶|упак|\bуп\b|bottle|флакон|\bcaps|tablet|softgel|"
+              r"саше|sachet|стик|stick|пакет|доз|dose|件"),
+]
+UNIT_PERIOD = [("day", r"сут|в день|/день|per day|/day|daily|日产|每天|每日|/日"),
+               ("month", r"в месяц|/мес|per month|/month|monthly|每月|月产"),
+               ("half", r"полугод|half[- ]year|半年"),
+               ("year", r"в год|/год|годов|per year|/year|annual|yearly|年产|/年|每年|p\.?a\.?")]
+
+
+def unit_class(text: str) -> tuple[str | None, str | None]:
+    """Вид величины (штуки, тонны, деньги, объём, площадь) и период (сутки, месяц, полугодие, год) по тексту
+    значения и единицы. Не распознано — None."""
+    t = (text or "").lower()
+    kind = next((k for k, pat in UNIT_KIND if re.search(pat, t)), None)
+    period = next((k for k, pat in UNIT_PERIOD if re.search(pat, t)), None)
+    return kind, period
+
+
+def comparable(attr: "Attribute", cell: dict[str, Any]) -> bool:
+    """Число ячейки можно сравнивать с другими в колонке: вид величины и период — как у признака (если оба
+    распознаны). «120 млн юаней/год» в колонке «млн капсул/год» или «1 亿粒/сутки» — несопоставимо."""
+    if attr.kind != "number":
+        return True
+    want = unit_class(f"{attr.unit} {attr.name}")
+    got = unit_class(f"{cell.get('value', '')} {cell.get('unit', '')}")
+    if want[0] and got[0] and want[0] != got[0]:
+        return False
+    if want[1] and got[1] and want[1] != got[1]:
+        return False
+    return True
+
+
 def number_of(cell: dict[str, Any]) -> float | None:
     return parse_number(f"{cell.get('value', '')} {cell.get('unit', '')}".strip())
 
@@ -665,9 +718,6 @@ def find_quote(text: str, quote: str) -> int:
     if len(ok) >= 0.8 * len(chunks) and len(chunks) >= 2 and max(ok) - min(ok) < len(q2) * 3:
         return max(0, text.find(chunks[hits.index(ok[0])][:6]))
     return -1
-
-
-CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
 
 
 def numbers_in(text: str) -> list[float]:
@@ -785,8 +835,33 @@ def resolve_cell(attr: Attribute, options: list[dict[str, Any]]) -> dict[str, An
     opts = [o for o in options if (o.get("value") or "").strip()]
     if not opts:
         return {"status": "none", "value": "", "options": options}
+    if attr.kind == "bool":  # «True», «true», «да — заявлен собственный завод…» → «да» / «нет»
+        for o in opts:
+            b = parse_bool(o["value"])
+            if b is not None:
+                o["value"] = "да" if b else "нет"
     verified = [o for o in opts if o.get("found")]
     pool = verified or opts
+    rank = {"document": 0, "official": 1, "secondary": 2}
+    if attr.kind in ("text", "list"):
+        # текст и списки не спорят: разные слова об одном и том же — не противоречие. Текст — лучший источник;
+        # список — объединение пунктов (из проверенных вариантов, а если таких нет — из всех)
+        best = sorted(pool, key=lambda o: (rank.get(o.get("kind", ""), 3), -len(o.get("quote") or "")))[0]
+        value = best["value"]
+        if attr.kind == "list":
+            items: list[str] = []
+            seen: set[str] = set()
+            for o in sorted(pool, key=lambda o: rank.get(o.get("kind", ""), 3)):
+                for it in list_items(o["value"]):
+                    k = plain(it)
+                    if k and k not in seen:
+                        seen.add(k)
+                        items.append(it)
+            value = ", ".join(items)[:600]
+        return {"status": best.get("kind", "secondary") if verified else "unverified", "value": value,
+                "unit": best.get("unit", ""), "as_of": best.get("as_of", ""), "url": best.get("url", ""),
+                "quote": best.get("quote", ""), "context": best.get("context", ""),
+                "agree": len(pool), "of": len(opts), "options": opts, "merged": attr.kind == "list" and len(pool) > 1}
     groups: list[list[dict[str, Any]]] = []
     for o in pool:
         for g in groups:
@@ -798,7 +873,6 @@ def resolve_cell(attr: Attribute, options: list[dict[str, Any]]) -> dict[str, An
     if len(groups) > 1:
         return {"status": "disputed", "value": "", "options": opts}
     g = groups[0]
-    rank = {"document": 0, "official": 1, "secondary": 2}
     best = sorted(g, key=lambda o: rank.get(o.get("kind", ""), 3))[0]
     status = best.get("kind", "secondary") if verified else "unverified"
     return {"status": status, "value": best["value"], "unit": best.get("unit", ""), "as_of": best.get("as_of", ""),
@@ -813,8 +887,8 @@ def _cell_value(attr: Attribute, cell: dict[str, Any]) -> Any:
     if not cell or cell.get("status") in (None, "none", "disputed") or not (cell.get("value") or "").strip():
         return None
     v = cell["value"]
-    if attr.kind == "number":
-        return parse_number(f"{v} {cell.get('unit', '')}")
+    if attr.kind == "number":  # другая величина или период («млн юаней», «в сутки») в ранг не идёт
+        return parse_number(f"{v} {cell.get('unit', '')}") if comparable(attr, cell) else None
     if attr.kind == "date":
         return parse_date(v)
     if attr.kind == "bool":
@@ -917,7 +991,7 @@ def sensitivity(attrs: list[Attribute], table: dict[str, dict[str, dict[str, Any
             if da == db:
                 continue
             w = (sa - sb) / (db - da)  # sa + w·da = sb + w·db
-            if 0 <= w <= 10 and abs(w - w0[k]) > 0.05:
+            if 0 <= w <= 10 and abs(w - w0[k]) >= 1:  # перестановка от изменения веса на десятые — не новость
                 out.append({"attr": k, "weight": round(w, 2), "now": w0[k], "a": a, "b": b,
                             "text": f"при весе «{_aname(attrs, k)}» {_fmt_w(w)} (сейчас {_fmt_w(w0[k])}) "
                                     f"{names.get(b, b)} обгонит {names.get(a, a)}"})
@@ -1119,12 +1193,40 @@ Attributes:
 
 Rules: every value must come from a page below; "quote" is copied VERBATIM from that page (10–40 words, same
 language, no translation) and "url" is that page. Convert nothing in the quote; put the converted value in "value"
-and the unit in "unit" (e.g. 25亿粒 → value "2500", unit "млн капсул/год"; keep both if unsure). Say what the number is
+and the unit in "unit" (e.g. 25亿粒 → value "2500", unit "млн капсул/год"). Numbers: "value" is ONE number in the
+attribute's unit and period; if the source gives another measure (money instead of pieces, tonnes, per day instead of
+per year) — copy it as is and write that unit exactly ("млн юаней/год", "шт/сутки"): the program will not mix it in.
+Yes/no attributes: "value" is "да" or "нет". Lists: short items separated by commas. Say what the number is
 (capacity vs actual output, which year) in "note". Not on the pages → omit the attribute. Do not guess.
 
 {body}
 
 Return JSON: {{"cells": [{{"attr": "A1", "value": "", "unit": "", "as_of": "", "url": "", "quote": "", "note": ""}}]}}"""
+
+
+def disputes_prompt(frame: SelectionFrame, work: list[tuple[dict[str, Any], list[tuple[Attribute, list[dict[str, Any]]]]]]
+                    ) -> str:
+    """Споры нескольких объектов одним запросом: ключ ячейки — «O3:A2»."""
+    blocks = []
+    for obj, disputes in work:
+        for a, opts in disputes:
+            lines = []
+            for j, o in enumerate(opts):
+                tag = "quote FOUND on the page" if o.get("found") else "quote NOT found on the page"
+                lines.append(f"  ({chr(97 + j)}) {o.get('value')} {o.get('unit', '')} — by {o.get('by')}; {o.get('kind', '')}; "
+                             f"{tag}; {o.get('url', '')}\n      quote: «{o.get('quote', '')[:300]}»"
+                             + (f"\n      page around it: «{o.get('context', '')[:400]}»" if o.get("context") else "")
+                             + (f"\n      note: {o['note']}" if o.get("note") else ""))
+            blocks.append(f"{obj['id']}:{a.id} — {obj['name']} — «{a.name}» ({a.kind}{', ' + a.unit if a.unit else ''}):\n"
+                          + "\n".join(lines))
+    return f"""Disputed cells in a selection study. Two models and a search read the sources and disagree.
+Study: {frame.refined_question}
+
+{chr(10).join(blocks)}
+
+For each cell choose the option that the evidence supports best (prefer a quote FOUND on a primary page; mind
+capacity vs output, units 万/亿, the period (per day / per year), the year, the legal entity), or "none" if no option is
+supported. Return JSON: {{"items": [{{"key": "O3:A1", "choice": "a", "reason": "one line"}}]}}"""
 
 
 def dispute_prompt(frame: SelectionFrame, obj: dict[str, Any], disputes: list[tuple[Attribute, list[dict[str, Any]]]]) -> str:
@@ -1178,13 +1280,14 @@ def esc(s: Any) -> str:
     return str(s or "").replace("|", "∣").replace("\n", " ").strip()
 
 
-def cell_text(c: dict[str, Any], short: bool = False) -> str:
+def cell_text(c: dict[str, Any], short: bool = False, attr: "Attribute | None" = None) -> str:
     if not c or c.get("status") in (None, "none"):
         return "—"
+    odd = " ≠" if attr is not None and not comparable(attr, c) else ""
     v = f"{c.get('value', '')}{(' ' + c['unit']) if c.get('unit') and c['unit'] not in c.get('value', '') else ''}"
     if short and len(v) > 60:
         v = v[:57] + "…"
-    return f"{esc(v)} ({STATUS_MARK.get(c.get('status', ''), '?')})"
+    return f"{esc(v)} ({STATUS_MARK.get(c.get('status', ''), '?')}){odd}"
 
 
 def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
@@ -1208,8 +1311,11 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
                + "---|" * len(scored) + "\n" +
                "\n".join(f"| {r['rank']}{' ✓' if r['rank'] <= top_n else ''} | {esc(names.get(r['object']))} | "
                          f"{str(r['score']).replace('.', ',')} | "
-                         + " | ".join(cell_text(table[r["object"]].get(a.id) or {}, True) for a in scored) + " |"
-                         for r in rank))
+                         + " | ".join(cell_text(table[r["object"]].get(a.id) or {}, True, a) for a in scored) + " |"
+                         for r in rank)
+               + ("\n\n≠ — величина или период несопоставимы с единицей признака (деньги вместо штук, в сутки вместо "
+                  "в год): в ранг не идёт." if any(not comparable(a, table[r["object"]].get(a.id) or {})
+                                                   for r in rank for a in scored if a.kind == "number") else ""))
     if sel.get("voi"):
         out.append("### Что выяснить, чтобы выбор не поменялся неожиданно\n\n"
                    + "\n".join(f"- {esc(names.get(v['object']))}: {v['text']}" for v in sel["voi"]))
@@ -1250,6 +1356,9 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
     out.append("### Карточки объектов\n\nУ каждого значения — источник и дословная цитата; программа нашла её на "
                "скачанной странице (копия хранится). Д — документ, С — сайт компании, В — вторичный, ? — цитата не "
                "найдена.\n\n" + "\n\n".join(cards))
+    if sel.get("unchecked"):
+        out.append("### Не удалось проверить\n\nПо этим объектам не нашлось ни одного значения (сайт не открылся, "
+                   "поиск ничего не вернул) — в ранг они не вошли:\n\n" + "\n".join(f"- {esc(x['name'])}" for x in sel["unchecked"]))
     if sel.get("excluded"):
         out.append("### Исключены при отсеве\n\n" + "\n".join(f"- {esc(x['name'])}: {esc(x['reason'])}"
                                                              for x in sel["excluded"]))

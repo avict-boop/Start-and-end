@@ -98,8 +98,11 @@ def test_ranking_weights_trust_and_sensitivity():
     # без мощности первым идёт тот, у кого GMP подтверждён документом
     r2 = S.ranking(attrs, t, weights={"A1": 0})
     assert r2[0]["object"] in ("O1", "O3") and r2[-1]["object"] == "O2"
+    # перестановка от изменения веса на десятые — не показывается; на единицы — показывается
+    assert S.sensitivity(attrs, t, {"O1": "Первый", "O2": "Второй", "O3": "Третий"}) == []
+    attrs[1] = attrs[1].model_copy(update={"weight": 1})
     sens = S.sensitivity(attrs, t, {"O1": "Первый", "O2": "Второй", "O3": "Третий"})
-    assert any(x["a"] == "O2" and x["b"] == "O3" and x["attr"] == "A2" for x in sens)
+    assert any(x["a"] == "O2" and x["b"] == "O3" and x["attr"] == "A2" and x["weight"] > 3 for x in sens)
 
 
 def test_value_of_information_names_cells_that_change_the_first_group():
@@ -288,3 +291,27 @@ def test_unknown_engine_falls_back_to_exa_not_off():
     payload = {"tools": [{"type": "openrouter:web_search", "parameters": {"engine": "parallel"}}]}
     what = _drop_unsupported(payload, "m/x", "HTTP 400: invalid engine 'parallel' for web search")
     assert what.startswith("поисковик") and payload["tools"][0]["parameters"]["engine"] == "exa"
+
+
+def test_units_text_lists_and_short_chinese_names():
+    cap = S.Attribute(id="A1", name="Мощность", kind="number", unit="млн капсул/год", weight=5, better="high")
+    assert S.comparable(cap, {"value": "2500", "unit": "млн капсул/год"})
+    assert not S.comparable(cap, {"value": "120", "unit": "млн юаней/год"})        # деньги
+    assert not S.comparable(cap, {"value": "1 亿粒", "unit": "粒/сутки"})           # в сутки
+    assert not S.comparable(cap, {"value": "40000", "unit": "тонн/год"})            # тонны
+    t = {"O1": {"A1": {"status": "official", "value": "2500", "unit": "млн капсул/год"}},
+         "O2": {"A1": {"status": "official", "value": "120", "unit": "млн юаней/год"}}}
+    r = {x["object"]: x["score"] for x in S.ranking([cap], t)}
+    assert r["O1"] > 0 and r["O2"] == 0                                               # несопоставимое — не в ранг
+    txt = S.Attribute(id="A2", name="Сертификаты", kind="text")
+    o = lambda v, k, f=True: {"value": v, "kind": k, "found": f, "quote": v, "url": "u"}  # noqa: E731
+    assert S.resolve_cell(txt, [o("NSF GMP; ISO 22000", "official"), o("ISO 22000, HACCP", "document")])["status"] == "document"
+    lst = S.Attribute(id="A3", name="Формы", kind="list")
+    c = S.resolve_cell(lst, [o("softgel, таблетки", "official"), o("таблетки; порошки", "official")])
+    assert c["status"] == "official" and c["value"] == "softgel, таблетки, порошки"
+    b = S.Attribute(id="A4", name="OEM", kind="bool")
+    assert S.resolve_cell(b, [o("True", "official"), o("да — работает под СТМ", "official")])["value"] == "да"
+    assert S.Cell(attr="A1", value="### annual **bottles:** 17000000").value == "annual bottles: 17000000"
+    ents = S.merge_candidates([("a", S.Candidate(name="仙乐健康科技股份有限公司")),
+                               ("b", S.Candidate(name="Sirio Pharma Co., Ltd.", aliases=["仙乐健康"]))])
+    assert len(ents) == 1

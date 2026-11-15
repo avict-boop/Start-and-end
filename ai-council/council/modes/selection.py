@@ -283,6 +283,11 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         await resolve_disputes(c, frame, attrs, shortlist, rows, fillers)
 
     # 6. Решение: ранг, устойчивость, что выяснить — расчётом; вывод председателя
+    # объекты, о которых не нашлось ни одного значения, — не в ранг (иначе стоят последними с нулём, как «худшие»)
+    unchecked = [{"id": e["id"], "name": e["name"]} for e in shortlist if e["id"] in rows
+                 and not any(cell.get("status") not in (None, "none") for cell in rows[e["id"]]["cells"].values())]
+    for x in unchecked:
+        rows.pop(x["id"], None)
     objects = [e for e in shortlist if e["id"] in rows]
     table = {oid: rows[oid]["cells"] for oid in rows}
     names = {e["id"]: e["name"] for e in objects}
@@ -292,7 +297,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     voi = S.value_of_information(attrs, table, names, top_n, use_trust=sc.use_trust)
     sel = {"frame": frame.model_dump(), "start": start, "attributes": [a.model_dump() for a in attrs],
            "objects": objects, "table": table, "ranking": rank, "top_n": top_n, "sensitivity": sens, "voi": voi,
-           "excluded": excluded, "candidates": len(entities), "discovery": found_meta,
+           "excluded": excluded, "unchecked": unchecked, "candidates": len(entities), "discovery": found_meta,
            "fillers": [m.name for m in fillers], "sources": sources_used(c, table, rows),
            "stats": cell_stats(table), "settings": sc.model_dump()}
     c._emit("ranked", ranking=rank[:30], names=names, top_n=top_n, stats=sel["stats"])
@@ -613,23 +618,35 @@ async def resolve_disputes(c: Council, frame: S.SelectionFrame, attrs: list[S.At
                                             f"решают {', '.join(m.name for m in judges)}")
     chair = c.cfg.chair
 
-    async def one(oid: str, ds: list[tuple[S.Attribute, list[dict[str, Any]]]]) -> None:
-        prompt = S.dispute_prompt(frame, by_id[oid], ds)
-        jobs = {m.name: c._ask(m, "dispute", prompt, S.Rulings, meta={**META, "object": oid}) for m in judges}
+    async def batch(part: list[tuple[str, list[tuple[S.Attribute, list[dict[str, Any]]]]]]) -> None:
+        """Споры нескольких объектов — одним запросом к каждому судье (раньше — по запросу на объект)."""
+        prompt = S.disputes_prompt(frame, [(by_id[oid], ds) for oid, ds in part])
+        jobs = {m.name: c._ask(m, "dispute", prompt, S.Rulings, meta={**META, "objects": [oid for oid, _ in part]})
+                for m in judges}
         got = await asyncio.gather(*jobs.values(), return_exceptions=True)
-        votes: dict[str, dict[str, tuple[str, str]]] = {}
+        votes: dict[str, dict[str, dict[str, tuple[str, str]]]] = {}
         for name, r in zip(jobs, got):
             if isinstance(r, (BudgetExceeded, OutOfCredits)):
                 raise r
             if isinstance(r, BaseException):
                 if not _soft(r):
                     raise r
-                c.stats.setdefault(name, MemberStats()).failures.append(f"dispute {oid}: {r}")
+                c.stats.setdefault(name, MemberStats()).failures.append(f"dispute: {r}")
                 continue
             for it in r.items:
-                a = S.match_attr(it.key, [x for x, _ in ds])
+                key = it.key.strip()
+                oid, _, ak = key.partition(":") if ":" in key else (part[0][0] if len(part) == 1 else "", "", key)
+                ds = next((d for o, d in part if o == oid.strip()), None)
+                if ds is None:
+                    continue
+                a = S.match_attr(ak.strip(), [x for x, _ in ds])
                 if a:
-                    votes.setdefault(a.id, {})[name] = (_choice(it.choice), it.reason)
+                    votes.setdefault(oid.strip(), {}).setdefault(a.id, {})[name] = (_choice(it.choice), it.reason)
+        for oid, ds in part:
+            await one(oid, ds, votes.get(oid) or {})
+
+    async def one(oid: str, ds: list[tuple[S.Attribute, list[dict[str, Any]]]],
+                  votes: dict[str, dict[str, tuple[str, str]]]) -> None:
         for a, opts in ds:
             v = votes.get(a.id) or {}
             tally: dict[str, int] = {}
@@ -653,7 +670,8 @@ async def resolve_disputes(c: Council, frame: S.SelectionFrame, attrs: list[S.At
             rows[oid]["cells"][a.id] = cell
         c._emit("object_ruled", object=oid, cells=live_cells({a.id: rows[oid]["cells"][a.id] for a, _ in ds}))
 
-    res = await asyncio.gather(*(one(oid, ds) for oid, ds in work), return_exceptions=True)
+    size = 6  # объектов в одном запросе к судье
+    res = await asyncio.gather(*(batch(work[i:i + size]) for i in range(0, len(work), size)), return_exceptions=True)
     for r in res:
         if isinstance(r, BaseException):
             raise r

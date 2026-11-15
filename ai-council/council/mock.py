@@ -321,7 +321,7 @@ def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[st
                   "quote": f"gmp certificate valid until 202{6 + i % 3}-0{i % 9 + 1}-15"}]
         return {"cells": cells}
     if stage == "dispute":
-        keys = _re.findall(r"^(A\d+) «", text, _re.M)
+        keys = _re.findall(r"^(O\d+:A\d+) — ", text, _re.M) or _re.findall(r"^(A\d+) «", text, _re.M)
         return {"items": [{"key": k, "choice": "a", "reason": "цитата на странице отчёта (демо)"} for k in keys]}
     if stage == "conclusion":
         return {"summary": "**Демо-вывод.** Первым идёт завод с наибольшей подтверждённой мощностью; у остальных "
