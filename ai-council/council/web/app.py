@@ -352,6 +352,18 @@ def _ru_plural(n: int, one: str, few: str, many: str) -> str:
     return one if n % 10 == 1 and n != 11 else few if 2 <= n % 10 <= 4 and not 12 <= n <= 14 else many
 
 
+def disposition(name: str, inline: bool = False) -> str:
+    """Content-Disposition с именем файла: латинский запасной вариант (его берут старые и мобильные браузеры, иначе
+    файл сохраняется как «download») и полное имя по-русски (filename*)."""
+    from urllib.parse import quote
+    stem, dot, ext = name.rpartition(".")
+    ascii_stem = re.sub(r"[^A-Za-z0-9._-]+", "-", stem if dot else name).strip("-.")
+    ascii_name = f"{ascii_stem or 'council-report'}{('.' + ext) if dot else ''}"
+    if ascii_stem and not re.search(r"[A-Za-z]", ascii_stem):  # от имени остались одни цифры — добавить смысл
+        ascii_name = f"{ascii_stem}-council-report{('.' + ext) if dot else ''}"
+    return f"{'inline' if inline else 'attachment'}; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"
+
+
 def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: str | None = None) -> FastAPI:
     config_path = Path(config_path)
     @asynccontextmanager
@@ -692,9 +704,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         inline = mime.startswith("image/") or mime == "application/pdf"
         # «песочница»: картинка (в том числе SVG со скриптом) или PDF из вложения не выполнит код от имени сайта
-        return FileResponse(path, media_type=mime, filename=path.name.split("-", 1)[-1],
-                            content_disposition_type="inline" if inline else "attachment",
-                            headers={"Content-Security-Policy": "sandbox", "X-Content-Type-Options": "nosniff"})
+        return FileResponse(path, media_type=mime,
+                            headers={"Content-Disposition": disposition(path.name.split("-", 1)[-1], inline),
+                                     "Content-Security-Policy": "sandbox", "X-Content-Type-Options": "nosniff"})
 
     def find_file(sid: str, ext: str) -> Path:
         if not ID_RE.match(sid):
@@ -1868,8 +1880,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         except RuntimeError as e:
             raise HTTPException(500, f"не удалось создать отчёт: {e}") from e
         inline = format == "pdf" and not download
-        return FileResponse(path, media_type=MIME[format], filename=download_name(sid, kind),
-                            content_disposition_type="inline" if inline else "attachment")
+        return FileResponse(path, media_type=MIME[format],
+                            headers={"Content-Disposition": disposition(download_name(sid, kind), inline)})
 
     def report_toolbar(sid: str, summary: bool = False, decision: bool = False) -> str:
         from urllib.parse import quote

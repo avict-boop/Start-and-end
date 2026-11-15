@@ -171,3 +171,50 @@ function pwaNotify(title, body, tag, url) {
   set();
 })();
 
+/* Отчёты на телефоне. В установленном приложении ссылка «в новой вкладке» открывается в отдельном окне браузера, у
+   которого на iPhone свои cookie — вместо отчёта там страница входа. Поэтому на телефоне файл скачивается внутри
+   приложения (с его входом) и отдаётся системе: «Сохранить в Файлы», открыть в Word, PDF-просмотрщике, переслать. */
+function pwaShouldIntercept(a) {
+  if (!a || !a.href) return false;
+  const u = new URL(a.href, location.href);
+  if (u.origin !== location.origin || !/^\/api\/sessions\/[^/]+\/(report|selection\.xlsx|files\/)/.test(u.pathname)) return false;
+  if (u.searchParams.get("format") === "html") return PWA.standalone;  // HTML-отчёт: в приложении — в том же окне
+  return PWA.standalone || PWA.ios || /android/i.test(navigator.userAgent);
+}
+
+function fileNameFrom(resp, fallback) {
+  const cd = resp.headers.get("content-disposition") || "";
+  const star = cd.match(/filename\*=UTF-8''([^;]+)/i);
+  if (star) { try { return decodeURIComponent(star[1]); } catch { /* испорченное имя */ } }
+  const plain = cd.match(/filename="?([^";]+)"?/i);
+  return plain ? plain[1] : fallback;
+}
+
+async function pwaDownload(a) {
+  const u = new URL(a.href, location.href);
+  if (u.searchParams.get("format") === "html") { location.href = u.href; return; }
+  toast("Готовлю файл…");
+  const resp = await fetch(u.href, { credentials: "same-origin" });
+  if (!resp.ok) { toast(resp.status === 401 || resp.redirected ? "Войдите заново и повторите" : `Не скачалось: HTTP ${resp.status}`); return; }
+  const blob = await resp.blob();
+  const name = fileNameFrom(resp, "report");
+  const file = new File([blob], name, { type: blob.type || "application/octet-stream" });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: name }); return; }
+    catch (e) { if (e && e.name === "AbortError") return; }  // закрыл меню — ничего не делаем
+  }
+  const url = URL.createObjectURL(blob);  // нет «Поделиться» — обычное сохранение файла
+  const tmp = Object.assign(document.createElement("a"), { href: url, download: name });
+  document.body.appendChild(tmp);
+  tmp.click();
+  tmp.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest("a[href]");
+  if (!pwaShouldIntercept(a) || e.defaultPrevented || e.button || e.metaKey || e.ctrlKey) return;
+  e.preventDefault();
+  if (typeof closeMenus === "function") closeMenus();
+  pwaDownload(a).catch((err) => toast(`Не скачалось: ${err.message || err}`));
+}, true);
