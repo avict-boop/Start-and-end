@@ -39,6 +39,7 @@ REASON_TEXT = {
     "error": "сбой",
     "interrupted": "прервано перезапуском программы (например, при обновлении)",
     "retry": "остановлено после этапа, чтобы повторить модели, которые не ответили",
+    "review": "ждёт вашей проверки (режим «Отбор»)",
 }
 
 
@@ -339,7 +340,7 @@ class Checkpoint:
         return {"id": self.id, "question": s.get("question", ""), "mode": s.get("mode", ""), "status": state,
                 "reason": reason, "reason_text": REASON_TEXT.get(reason, reason), "message": s.get("message", ""),
                 "spent": round(float(s.get("spent") or 0) or self.spent_from_journal(), 4), "budget": self.budget,
-                "stage": s.get("stage", ""),
+                "stage": s.get("stage", ""), "review": s.get("review") if reason == "review" else None,
                 "origin": s.get("origin", ""), "chat_id": s.get("chat_id"), "mock": bool(s.get("mock")),
                 "created": s.get("created"), "updated": s.get("updated"), "resumes": s.get("resumes", 0),
                 "members": [m.get("name") for m in s.get("config", {}).get("members", [])
@@ -354,6 +355,9 @@ def classify(exc: BaseException) -> tuple[str, str]:
     from .session import StagePause
     if isinstance(exc, StagePause):
         return "retry", str(exc)
+    from .selection import ReviewNeeded
+    if isinstance(exc, ReviewNeeded):
+        return "review", str(exc)
     if isinstance(exc, BudgetExceeded):
         return "budget", str(exc)
     if isinstance(exc, KeyLimit):

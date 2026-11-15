@@ -40,6 +40,11 @@ class MockClient:
             raise ProviderError(f"{model}: имитация недоступности")
         stage = meta.get("stage")
         who = meta.get("member", model)
+        if meta.get("selection"):
+            text = str((messages[-1] or {}).get("content") or "") if messages else ""
+            out = _selection(str(stage), str(who), meta, text)
+            return Completion(text=json.dumps(out, ensure_ascii=False), prompt_tokens=900, completion_tokens=250,
+                              cost=0.001, model=model)
         if meta.get("research"):
             out = _research(stage, who, meta)
             text = str((messages[-1] or {}).get("content") or "") if messages else ""
@@ -225,4 +230,96 @@ def _research(stage: str, who: str, meta: dict[str, Any]) -> dict[str, Any]:
                 "dissent": ["один участник считает риск сезонности недооценённым"], "risks": ["цифры спроса не проверены на месте"],
                 "deviation": "",
                 "ideas": [{"id": i, "decision": "included", "reason": "учтено в разделе Q3 (демо)"} for i in meta.get("ideas") or []]}
+    return {}
+
+
+# ---------------------------------------------------------------------------------------------- режим «Отбор» (демо)
+
+def demo_page(url: str) -> str:
+    """Текст демо-страницы завода N (адрес plantN.example.com): на нём лежат цитаты, которые «находят» модели."""
+    import re as _re
+    m = _re.search(r"plant(\d+)", url)
+    if not m:
+        return ""
+    i = int(m.group(1))
+    forms = "capsules, tablets" + (", powders" if i % 2 else "")
+    return (f"demo plant {i} — contract manufacturer (oem/odm) of dietary supplements. annual capacity 年产软胶囊{10 * i}亿粒. "
+            f"forms: {forms}. gmp certificate valid until 202{6 + i % 3}-0{i % 9 + 1}-15. "
+            f"demo plant {i} annual capacity was expanded in 2024.")
+
+
+async def mock_pages(urls: list[str], *, texts: bool = False, **kw: Any) -> dict[str, dict[str, Any]]:
+    """Скачивание страниц в демо: демо-заводы — свои тексты, остальное «не открылось»."""
+    out = {}
+    for u in urls:
+        t = demo_page(u)
+        out[u] = {"status": "ok", "code": 200, "text": t} if t else {"status": "error", "code": None}
+    return out
+
+
+def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[str, Any]:
+    import re as _re
+    if stage == "framing":
+        from .splitter import heuristic_objects
+        return {"refined_question": "Отбор контрактных производителей (демо)", "object_kind": "контрактный производитель",
+                "inclusion": ["сам производит", "работает по контракту (OEM/ODM)"], "exclusion": ["перепродавец"],
+                "attributes": [
+                    {"name": "Производитель по контракту", "kind": "bool", "weight": 0, "better": "yes", "screen": True,
+                     "knockout": "нет", "keywords": ["oem", "odm", "contract manufacturer"]},
+                    {"name": "Мощность софтгелей", "kind": "number", "unit": "млн капсул/год", "weight": 5,
+                     "better": "high", "keywords": ["产能", "capacity", "亿粒"], "evidence": "отчёт или сайт"},
+                    {"name": "Формы выпуска", "kind": "list", "weight": 3, "wanted": ["capsules", "tablets", "powders"],
+                     "keywords": ["forms"], "screen": True, "knockout": "нет капсул"},
+                    {"name": "Сертификат GMP действует до", "kind": "date", "weight": 2, "better": "newer",
+                     "keywords": ["gmp", "valid until"]},
+                    {"name": "Примечание", "kind": "text", "weight": 0}],
+                "angles": ["демо: участники выставки", "демо: биржевые отчёты", "демо: реестр сертификатов"],
+                "objects": heuristic_objects(text.split("Objects named in the task")[-1]) if "Objects named in the task"
+                in text else [], "shortlist": 0, "top_n": 3}
+    if stage == "angles":
+        return {"angles": ["демо: поиск на китайском", "демо: отраслевой рейтинг"]}
+    if stage == "discover":
+        h = _h(str(meta.get("angle", "")))
+        ids = sorted({(h >> (k * 3)) % 8 + 1 for k in range(4)})
+        return {"items": [{"name": f"Demo Plant {i}", "local_name": f"演示工厂{i}", "website": f"https://plant{i}.example.com",
+                           "url": f"https://plant{i}.example.com/about",
+                           "quote": f"demo plant {i} — contract manufacturer (oem/odm)", "location": "Китай"} for i in ids]}
+    if stage == "screen":
+        names = _re.findall(r"^- (.+?)(?: \(| — site|$)", text.split("Objects:")[-1], _re.M)
+        rows = []
+        for n in names:
+            i = int((_re.search(r"(\d+)", n) or [0, 0])[1] or 0) if _re.search(r"(\d+)", n) else 0
+            bad = i == 8
+            rows.append({"object": n, "checks": [
+                {"attr": "A1", "verdict": "fail" if bad else "pass", "value": "перепродавец" if bad else "да",
+                 "url": f"https://plant{i}.example.com/about", "quote": f"demo plant {i}"},
+                {"attr": "A3", "verdict": "pass", "value": "capsules"}]})
+        return {"rows": rows}
+    m = _re.search(r"Object: (.+?) \(also", text)
+    name = m.group(1) if m else "Demo Plant 1"
+    i = int((_re.search(r"(\d+)", name) or _re.search(r"(1)", "1")).group(1))
+    site = f"https://plant{i}.example.com"
+    if stage == "sources":
+        return {"website": site, "sources": [{"url": f"{site}/annual.pdf", "title": "Годовой отчёт", "kind": "document"},
+                                             {"url": f"{site}/about", "title": "О компании", "kind": "official"}],
+                "cells": [{"attr": "A2", "value": "500", "unit": "млн капсул/год", "url": f"{site}/about",
+                           "quote": f"demo plant {i} annual capacity was expanded in 2024"} if i == 3 else  # демо-спор
+                          {"attr": "A2", "value": str(1000 * i), "unit": "млн капсул/год", "url": f"{site}/about",
+                           "quote": f"年产软胶囊{10 * i}亿粒"}]}
+    if stage == "fill":
+        forms = "capsules, tablets" + (", powders" if i % 2 else "")
+        cells = [{"attr": "A1", "value": "да", "url": f"{site}/about", "quote": f"demo plant {i} — contract manufacturer"},
+                 {"attr": "A2", "value": str(1000 * i), "unit": "млн капсул/год", "url": f"{site}/about",
+                  "quote": f"年产软胶囊{10 * i}亿粒", "note": "мощность, не выпуск"},
+                 {"attr": "A3", "value": forms, "url": f"{site}/about", "quote": f"forms: {forms}"},
+                 {"attr": "A4", "value": f"202{6 + i % 3}-0{i % 9 + 1}-15", "url": f"{site}/about",
+                  "quote": "gmp certificate valid until"}]
+        return {"cells": cells}
+    if stage == "dispute":
+        keys = _re.findall(r"^(A\d+) «", text, _re.M)
+        return {"items": [{"key": k, "choice": "a", "reason": "цитата на странице отчёта (демо)"} for k in keys]}
+    if stage == "verdict":
+        return {"summary": "**Демо-вывод.** Первым идёт завод с наибольшей подтверждённой мощностью; у остальных "
+                           "часть ячеек не подтверждена.", "next_steps": ["Запросить сертификаты с номерами (демо)"],
+                "risks": ["Демо-данные"]}
     return {}

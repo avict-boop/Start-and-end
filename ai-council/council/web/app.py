@@ -144,6 +144,7 @@ class RunRequest(BaseModel):
     research_words: int | None = Field(default=None, ge=0, le=5000)  # 0 — без ограничения длины  # длина варианта исследования
     research_shorten: bool | None = None  # возвращать слишком длинные варианты на сокращение
     research: dict[str, Any] | None = None  # другие настройки исследования на это заседание (из рекомендации)
+    selection: dict[str, Any] | None = None  # настройки «Отбора» на это заседание (с чего начать, сколько проверять…)
     # состав на это заседание («Подобрать состав»): другая модель у участника, новые участники, поиск у участников
     models: dict[str, str] | None = None
     extra_members: list[dict[str, str]] | None = None
@@ -164,6 +165,16 @@ class RunRequest(BaseModel):
     def clean_criteria(self) -> list[str] | None:
         c = [x.strip() for x in (self.criteria or []) if x.strip()]
         return c or None
+
+
+class ReviewRequest(BaseModel):
+    gate: Literal["frame", "candidates", "shortlist"]
+    decision: dict[str, Any] = Field(default_factory=dict)
+
+
+class RankRequest(BaseModel):
+    weights: dict[str, float] | None = None
+    use_trust: bool | None = None
 
 
 class SeriesPart(BaseModel):
@@ -399,7 +410,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                   research=({**(req.research or {}), "fresh_scouts": 0} if req.web_search is not None
                                             else req.research) if req.mode == "research" else None,
                                   models=req.models, extra_members=req.extra_members, web_search=req.web_search,
-                                  answer_size=req.answer_size)
+                                  answer_size=req.answer_size,
+                                  selection=req.selection if req.mode == "selection" else None)
         except OverrideError as e:
             raise HTTPException(400, str(e)) from e
 
@@ -819,6 +831,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                    "compact_proposals": cfg.compact_proposals, "mock": req.mock, "answer_size": cfg.answer_size,
                    **({"research_words": cfg.research.max_words, "research_shorten": cfg.research.shorten_long,
                        "research_overrides": req.research or {}} if mode == "research" else {}),
+                   **({"selection_overrides": req.selection or {}} if mode == "selection" else {}),
                    "models": {m.name: m.model for m in cfg.active_members},
                    "extra_members": req.extra_members or [],
                    "web_search": [m.name for m in cfg.active_members if m.web_search], **request_extra}
@@ -918,6 +931,13 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     council.thought_sink = st.add_thought
                     council.model_max_out = max_out_map(models_all)  # потолок ответа моделей — по каталогу
                     council.allow_split = bool(sp.get("allow_split")) and not (sp.get("request") or {}).get("series")
+                    # «Отбор»: остановки «проверьте список» и решения по ним, копии страниц, демо-страницы
+                    council.review_enabled = True
+                    council.review_decisions = dict(sp.get("review_decisions") or {})
+                    council.snapshot_dir = runs_dir(cfg) / "sources"
+                    if sp.get("mock"):
+                        from ..mock import mock_pages
+                        council.link_checker = mock_pages
                     # часть серии: свои объекты; сводка: реестры частей (общее с ботом — council/series.apply_spec)
                     await asyncio.to_thread(SR.apply_spec, council, sp, archive())
                     if journal.replayable or journal.loose:
@@ -973,6 +993,9 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                         log.exception("заседание %s упало", sid)
                         message = f"внутренняя ошибка: {e!r}"
                     spent = council.total_cost if council else 0.0
+                    from ..selection import ReviewNeeded
+                    if isinstance(e, ReviewNeeded):  # «Отбор» ждёт проверки списка: что показать на странице
+                        cp.update(review={"gate": e.gate, "payload": jsonable(e.payload)})
                     cp.update(status="paused", reason=reason, message=message, spent=round(spent, 6),
                               config={**cp.spec["config"], "max_cost_usd": council.budget if council else cp.budget},
                               budget_at_pause=(council.budget if council else cp.budget) if reason == "budget" else 0)
@@ -1053,6 +1076,59 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         st.retry_planned = on
         log.info("заседание %s: повтор не ответивших %s", sid, "после этапа" if on else "отменён")
         return {"ok": True, "planned": on}
+
+    @app.post("/api/sessions/{sid}/review")
+    async def review(sid: str, body: ReviewRequest) -> dict[str, Any]:
+        """«Отбор»: человек проверил список (признаки, кандидатов, короткий список) — решение запоминается в
+        «паспорте» заседания, и оно продолжается: всё оплаченное — из журнала, дальше — по этому решению."""
+        cp = await asyncio.to_thread(Checkpoint.load, runs_dir(base_config()), sid)
+        if cp is None:
+            raise HTTPException(404, "заседание не найдено или уже завершено")
+        rv = cp.spec.get("review") or {}
+        if cp.spec.get("reason") != "review" or rv.get("gate") != body.gate:
+            raise HTTPException(409, "заседание не ждёт этой проверки")
+        decisions = {**(cp.spec.get("review_decisions") or {}), body.gate: body.decision}
+        cp.update(review_decisions=decisions, review=None)
+        log.info("заседание %s: проверка «%s» — решение принято", sid, body.gate)
+        return await resume_session(sid)
+
+    @app.post("/api/sessions/{sid}/selection/rank")
+    async def selection_rank(sid: str, body: RankRequest) -> dict[str, Any]:
+        """«Отбор»: пересчитать ранг готового заседания с другими весами — без моделей и без денег."""
+        from ..modes.selection import rerank
+        d = await asyncio.to_thread(archive().load, sid)
+        if not d or not d.get("selection"):
+            raise HTTPException(404, "это не заседание «Отбора»")
+        return jsonable(rerank(d["selection"], body.weights, body.use_trust))
+
+    @app.get("/api/sessions/{sid}/selection.xlsx")
+    async def selection_xlsx(sid: str, weights: str = "") -> Response:
+        """Таблица отбора в Excel: ранг, полная таблица со статусами, карточки (источник и цитата), исключённые."""
+        from ..reports.xlsx import selection_xlsx as build
+        d = await asyncio.to_thread(archive().load, sid)
+        if not d or not d.get("selection"):
+            raise HTTPException(404, "это не заседание «Отбора»")
+        w = {}
+        for part in filter(None, weights.split(",")):
+            k, _, v = part.partition(":")
+            try:
+                w[k] = float(v)
+            except ValueError:
+                continue
+        data = await asyncio.to_thread(build, d, w or None)
+        return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f'attachment; filename="{sid[:60]}.xlsx"'})
+
+    @app.get("/api/sources/{key}")
+    async def source_copy(key: str) -> dict[str, Any]:
+        """Копия скачанной страницы («Отбор»): текст, адрес и когда скачана."""
+        import gzip
+        if not re.fullmatch(r"[0-9a-f]{16}", key):
+            raise HTTPException(400, "неверный номер копии")
+        f = runs_dir(base_config()) / "sources" / f"{key}.json.gz"
+        if not f.is_file():
+            raise HTTPException(404, "копии нет (удалена по пределу папки или страница не скачивалась)")
+        return await asyncio.to_thread(lambda: json.loads(gzip.decompress(f.read_bytes())))
 
     async def resume_session(sid: str, budget_in: float | None = None, retry_failed: bool = False) -> dict[str, Any]:
         st = runs.get(sid)

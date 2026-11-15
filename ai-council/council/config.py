@@ -9,7 +9,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-Mode = Literal["quick", "debate", "evaluate", "research", "creative"]
+Mode = Literal["quick", "debate", "evaluate", "research", "creative", "selection"]
 Effort = Literal["none", "low", "medium", "high"]
 
 
@@ -151,6 +151,46 @@ class ResearchConfig(BaseModel):
             raise ValueError("длина варианта: 0 (без ограничения) или от 300 слов")
         return v
 
+class SelectionConfig(BaseModel):
+    """Режим «Отбор»: таблица «объекты × признаки», в каждой ячейке — значение, источник и дословная цитата,
+    которую программа сама находит на скачанной странице. Совет обсуждает только спорные ячейки."""
+
+    # С чего начать: find — найти кандидатов с нуля; check — только проверить список из задания; extend — список
+    # из задания плюс поиск тех, кого в нём нет; auto — есть список (3+ объектов) → check, нет → find
+    start: Literal["auto", "find", "check", "extend"] = "auto"
+    max_attributes: int = Field(default=12, ge=3, le=20)       # признаков в таблице не больше
+    # Поиск кандидатов: направлений в первом круге, кандидатов на направление, кругов (второй — новые направления,
+    # если список по оценке «повторных поимок» полон меньше чем на saturation), предел списка
+    angles: int = Field(default=6, ge=2, le=10)
+    per_angle: int = Field(default=25, ge=5, le=60)
+    rounds: int = Field(default=2, ge=1, le=3)
+    saturation: float = Field(default=0.75, ge=0.3, le=1.0)
+    max_candidates: int = Field(default=150, ge=10, le=400)
+    # Отсев: короткая проверка признаков отсева у всех кандидатов (пачками по screen_batch)
+    screen: bool = True
+    screen_batch: int = Field(default=5, ge=1, le=15)
+    # Сколько проверять подробно: 0 — всех прошедших отсев и сомнительных (не больше max_deep) или сколько сказано
+    # в задании; первая группа (на переговоры) — top_n, 0 — как в задании или все
+    shortlist: int = Field(default=0, ge=0, le=200)
+    max_deep: int = Field(default=40, ge=3, le=200)
+    top_n: int = Field(default=0, ge=0, le=100)
+    # Заполнение: две модели независимо читают скачанные страницы; пусто — две самые дешёвые из участников
+    # (кроме председателя). Спорное решают judges участников (председатель — среди них)
+    fillers: list[str] = Field(default_factory=list)
+    judges: int = Field(default=3, ge=1, le=7)
+    pages_per_object: int = Field(default=6, ge=1, le=15)       # сколько страниц скачивать на объект
+    page_chars: int = Field(default=9000, ge=2000, le=60000)    # сколько знаков страницы отдавать модели (отрывки)
+    object_chars: int = Field(default=36000, ge=5000, le=200000)  # всего на объект
+    parallel: int = Field(default=4, ge=1, le=10)               # объектов одновременно
+    search_model: str = ""                                     # модель поиска; пусто — модель проверки фактов
+    # Где заседание останавливается и ждёт вашей проверки (только на сайте): frame — признаки и веса,
+    # candidates — найденные кандидаты, shortlist — короткий список после отсева
+    review: list[Literal["frame", "candidates", "shortlist"]] = Field(default_factory=lambda: ["candidates", "shortlist"])
+    use_trust: bool = True          # в ранге учитывать надёжность источника (документ > сайт > вторичный)
+    snapshots: bool = True          # хранить копии скачанных страниц (текст) — «копия источника» в отчёте
+    snapshot_mb: int = Field(default=300, ge=10, le=10000)      # предел папки копий; старые удаляются
+
+
 class AdvisorConfig(BaseModel):
     """«Подобрать состав»: рекомендация моделей и режима под вопрос."""
 
@@ -267,6 +307,7 @@ class CouncilConfig(BaseModel):
     branding: BrandingConfig = Field(default_factory=BrandingConfig)
     fact_check: FactCheckConfig = Field(default_factory=FactCheckConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
+    selection: SelectionConfig = Field(default_factory=SelectionConfig)
     advisor: AdvisorConfig = Field(default_factory=AdvisorConfig)
     transcribe_model: str = "google/gemini-2.5-flash"  # модель OpenRouter для расшифровки голосовых
     members: list[MemberConfig]
@@ -329,6 +370,12 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
                     "summary_conflicts", "summary_recheck", "summary_recheck_max", "summary_authors", "authors", "chair_search")
 
 
+SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
+                     "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
+                     "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",
+                     "use_trust", "snapshots")
+
+
 class OverrideError(ValueError):
     """Некорректные пользовательские настройки заседания."""
 
@@ -350,6 +397,7 @@ def with_overrides(
     extra_members: list[dict[str, str]] | None = None,
     web_search: list[str] | None = None,
     answer_size: str | None = None,
+    selection: dict[str, Any] | None = None,
 ) -> CouncilConfig:
     """Возвращает копию конфига с выбранными участниками/ролями/бюджетом, проверяя результат."""
     from pydantic import ValidationError
@@ -413,6 +461,10 @@ def with_overrides(
         if k not in RESEARCH_TUNABLE:
             raise OverrideError(f"эту настройку исследования нельзя менять для заседания: {k}")
         data["research"][k] = val
+    for k, val in (selection or {}).items():  # настройки «Отбора» на это заседание
+        if k not in SELECTION_TUNABLE:
+            raise OverrideError(f"эту настройку отбора нельзя менять для заседания: {k}")
+        data["selection"][k] = val
     try:
         return CouncilConfig.model_validate(data)
     except ValidationError as e:

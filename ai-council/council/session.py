@@ -102,6 +102,7 @@ class SessionResult:
     coverage: dict[str, int] | None = None                            # сколько раз сравнивались пары
     ideas: list[dict[str, Any]] = field(default_factory=list)         # идеи «стоит сохранить» и решение по ним
     research: dict[str, Any] = field(default_factory=dict)           # режим «Исследование»: рамки, реестр, подвопросы
+    selection: dict[str, Any] = field(default_factory=dict)          # режим «Отбор»: признаки, таблица, ранг
 
     @property
     def total_cost(self) -> float:
@@ -143,6 +144,7 @@ class SessionResult:
             "coverage": self.coverage,
             "ideas": self.ideas,
             "research": self.research,
+            "selection": self.selection,
             "transcript": self.transcript,
         }
 
@@ -218,6 +220,12 @@ class Council:
         # остановиться перед следующим этапом (повторить не ответивших) — ставит сайт по кнопке
         self.pause_at_stage = False
         # объекты, заданные программой (часть серии — только свои, сводка — все); иначе их находит постановка задачи
+        # режим «Отбор»: остановки «проверьте список» (ставит сайт), решения человека по ним (из запроса),
+        # папка копий скачанных страниц, сведения о страницах (когда скачана, открылась ли)
+        self.review_enabled = False
+        self.review_decisions: dict[str, Any] = {}
+        self.snapshot_dir: Any = None
+        self.page_meta: dict[str, dict[str, Any]] = {}
         self.fixed_objects: list[str] = []  # текст страниц, скачанных программой (ссылки авторов) — по адресу
         self._replaying = False
         self.forced_labels = dict(labels or {})
@@ -408,6 +416,9 @@ class Council:
         elif stage == "arbitration":
             from . import research
             system = research.ARBITRATION_SYSTEM.format(language=self.cfg.language)
+        elif stage in ("discover", "screen", "sources"):
+            from . import selection
+            system = selection.SEARCH_SYSTEM.format(language=self.cfg.language)
         else:
             # Одна и та же для участника на всех этапах: провайдеры кэшируют одинаковое начало запроса
             # (системная инструкция + вложения + вопрос), и повторное чтение стоит дешевле.
@@ -986,6 +997,9 @@ class Council:
         common = {"criteria": criteria, "context": context, "followup_of": followup_of, "started": started, "t0": t0}
         if mode == "research":
             return await self._run_research(question, **common)
+        if mode == "selection":
+            from .modes import selection
+            return await selection.run(self, question, **common)
         if mode == "evaluate":
             return await evaluate.run(self, question, options=options or [], **common)
         if mode == "quick":

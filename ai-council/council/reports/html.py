@@ -365,6 +365,19 @@ def _first_places(v: View, label: str) -> tuple[int, int, int | None]:
 
 
 def _keyfacts(v: View, *, full: bool) -> str:
+    if v.is_selection:  # «Отбор»: кто первый в ранге, сколько объектов, сколько ячеек подтверждено цитатой
+        f = v.selection_facts
+        n = len(v.members)
+        row = (f'<tr><td class="dec-cell"><div class="k">Первый в ранге</div><div class="v"><span class="dec-mark"></span>'
+               f'{_e(f["first"])}</div></td><td><div class="k">Объектов</div><div class="v">{_e(f["objects"])}</div></td>'
+               f'<td><div class="k">Ячейки таблицы</div><div class="v">{_e(f["cells"])}</div></td>'
+               f'<td><div class="k">Совет</div><div class="v">{n} {_plural(n, "модель", "модели", "моделей")}</div>'
+               f'<div class="s">{_e(v.mode)}</div></td></tr>')
+        if full:
+            row += (f'<tr><td><div class="k">Дата</div><div class="v">{_e(v.date)}</div></td>'
+                    f'<td><div class="k">Длительность</div><div class="v">{_e(v.duration)}</div></td>'
+                    f'<td><div class="k">Стоимость</div><div class="v">${v.cost:.2f}</div></td><td></td></tr>')
+        return f'<table class="keyfacts" role="presentation"><tbody>{row}</tbody></table>'
     w = v.winner
     if w:
         who = "ваш вариант" if v.author(w) == "пользователь" else f"предложил {_e(v.author(w))}"
@@ -433,12 +446,14 @@ def _card(v: View) -> str:
 
 def _decision(v: View, *, first: bool = True) -> str:
     vd = v.verdict
-    return (f'<section class="decision" id="verdict"><h2 class="{"first" if first else ""}"><span class="mark"></span>{"Итог исследования" if v.is_research else "Решение совета"}</h2>'
+    return (f'<section class="decision" id="verdict"><h2 class="{"first" if first else ""}"><span class="mark"></span>{"Итог исследования" if v.is_research else "Итог отбора" if v.is_selection else "Решение совета"}</h2>'
             f'{_callouts(v)}{_card(v)}<div class="answer md">{md_to_html(vd.get("final_answer", ""))}</div></section>')
 
 
 def _rationale(v: View) -> str:
     vd = v.verdict
+    if v.is_selection:  # вывод и риски — уже в итоге отбора
+        return ""
     if not (vd.get("why") or vd.get("risks") or vd.get("dissent")):
         return ""
     parts = ['<section id="why"><h2>Обоснование</h2>']
@@ -850,8 +865,8 @@ def _request(v: View, *, images: bool) -> str:
 
 
 def _toc(v: View) -> str:
-    items = [("verdict", "Итог исследования" if v.is_research else "Решение совета", "")]
-    if any(v.verdict.get(k) for k in ("why", "risks", "dissent")):
+    items = [("verdict", "Итог исследования" if v.is_research else "Итог отбора" if v.is_selection else "Решение совета", "")]
+    if any(v.verdict.get(k) for k in ("why", "risks", "dissent")) and not v.is_selection:
         items.append(("why", "Обоснование", ""))
     if v.is_research:
         items.insert(1, ("kcu", "Известно, спорно, неизвестно", ""))
@@ -910,7 +925,8 @@ def render_html(view: View, *, toolbar: str = "", summary: bool = False, decisio
     if summary:
         parts += [_request(v, images=False), f'<p class="muted small" style="margin-top:12pt">{SUMMARY_NOTE}</p></main>']
         return _document(v, "".join(parts), toolbar)
-    parts.append(_voting(v))
+    if not v.is_selection:  # у «Отбора» нет голосования
+        parts.append(_voting(v))
     if v.proposals:
         parts.append('<section id="proposals"><h2>Варианты</h2>'
                      + "".join(_proposal(v, l, p) for l, p in v.proposals.items()) + "</section>")

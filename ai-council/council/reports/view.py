@@ -13,9 +13,12 @@ from typing import Any
 
 import markdown as _markdown
 
-MODE_NAME = {"debate": "Дебаты", "quick": "Быстрый", "evaluate": "Оценка вариантов", "research": "Исследование", "creative": "Креатив"}
+MODE_NAME = {"debate": "Дебаты", "quick": "Быстрый", "evaluate": "Оценка вариантов", "research": "Исследование", "creative": "Креатив",
+             "selection": "Отбор"}
 STAGE_NAME = {"framing": "Постановка", "proposal": "Предложения", "critique": "Критика",
-              "revision": "Доработка", "vote": "Голосование", "verdict": "Вердикт", "arbitration": "Арбитраж доказательств", "recheck": "Проверка новых утверждений"}
+              "revision": "Доработка", "vote": "Голосование", "verdict": "Вердикт", "arbitration": "Арбитраж доказательств", "recheck": "Проверка новых утверждений",
+              "discover": "Поиск кандидатов", "angles": "Новые направления поиска", "screen": "Отсев",
+              "sources": "Поиск источников", "fill": "Заполнение таблицы", "dispute": "Разбор спорного"}
 
 
 @dataclass
@@ -325,6 +328,24 @@ class View:
         if (s or {}).get("reasoning_off"):
             bits.append("рассуждения выключены")
         return ", ".join(bits)
+
+    @property
+    def is_selection(self) -> bool:
+        return self.d.get("mode") == "selection" and bool(self.d.get("selection"))
+
+    @property
+    def selection_facts(self) -> dict[str, str]:
+        """Шапка отчёта «Отбора»: кто первый, сколько объектов и ячеек подтверждено."""
+        sel = self.d.get("selection") or {}
+        names = {o["id"]: o["name"] for o in sel.get("objects") or []}
+        rank = sel.get("ranking") or []
+        st = sel.get("stats") or {}
+        ok = sum(st.get(k, 0) for k in ("document", "official", "secondary"))
+        total = st.get("total") or 0
+        return {"first": names.get(rank[0]["object"], "—") if rank else "—",
+                "objects": f"{len(rank)} (кандидатов было {sel.get('candidates', len(rank))})",
+                "cells": f"{ok} из {total} подтверждено цитатой" + (f", из них документом {st.get('document', 0)}"
+                                                                    if st.get("document") else "")}
 
     @property
     def is_research(self) -> bool:

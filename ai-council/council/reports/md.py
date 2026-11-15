@@ -62,6 +62,10 @@ def _head(v: View, kind: str) -> list[str]:
 
 
 def _keyfacts(v: View) -> list[str]:
+    if v.is_selection:
+        f = v.selection_facts
+        return ["| Первый в ранге | Объектов | Ячейки таблицы | Совет |", "|---|---|---|---|",
+                f"| **{_cell(f['first'])}** | {f['objects']} | {f['cells']} | {len(v.members)} моделей, {_cell(v.mode)} |", ""]
     w = v.winner
     a = v.agreement
     row = next((r for r in v.tally if r.get("label") == w), {}) if w else {}
@@ -103,6 +107,8 @@ def _callouts(v: View) -> list[str]:
 
 def _rationale(v: View) -> list[str]:
     vd = v.verdict
+    if v.is_selection:  # вывод и риски — уже в итоге отбора
+        return []
     if not (vd.get("why") or vd.get("risks") or vd.get("dissent")):
         return []
     out = ["## Обоснование", ""]
@@ -256,6 +262,32 @@ def _request(v: View, summary: bool) -> list[str]:
     return out
 
 
+def _costs(v: View) -> list[str]:
+    out: list[str] = []
+    out += ["## Участники и расходы", "", "| Участник | Обращений | Токены (вход / выход) | Стоимость |", "|---|---|---|---|"]
+    for name, s in v.stats.items():
+        s = s or {}
+        note = v.think_note(s)
+        out.append(f"| {name}{f' ({note})' if note else ''} | {s.get('calls', 0)} | {s.get('prompt_tokens', 0)} / {s.get('completion_tokens', 0)} "
+                   f"| ${float(s.get('cost', 0)):.4f} |")
+    out.append(f"| **Итого** | | | **${v.cost:.4f}** |")
+    fails = v.failures()
+    if fails:
+        out += ["", "### Сбои", "", "| Участник | Этап | Что случилось |", "|---|---|---|"]
+        out += [f"| {n} | {st} | {_cell(err)} |" for n, st, err in fails]
+    if v.cache_line:
+        out += ["", f"*{v.cache_line}.*"]
+    sc = v.stage_costs
+    if sc["stages"]:
+        out += ["", "### Расходы по этапам", "", "| Этап | Обращений (из них повторы и продолжения) | Вход из кэша | Стоимость | Доля |",
+                "|---|---|---|---|---|"]
+        out += [f"| {r['stage_name']} | {r['requests']} ({r['extra']}) | {r['cache_share']:.0%} | ${r['cost']:.4f} | {r['share']:.0%} |"
+                for r in sc["stages"]]
+        if sc["extra_cost"]:
+            out += ["", f"*На повторы и продолжения ушло ${sc['extra_cost']:.4f}.*"]
+    return out
+
+
 def render_decision_md(view: View) -> str:
     """Только решение совета: сам ответ, без вопроса."""
     from . import brand
@@ -273,7 +305,8 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
     v = view
     w = v.winner
     out = _head(v, "summary" if summary else "full") + _keyfacts(v)
-    out += [f"## {'Итог исследования' if v.is_research else 'Решение совета'}", "", *_callouts(v), *_card(v),
+    out += [f"## {'Итог исследования' if v.is_research else 'Итог отбора' if v.is_selection else 'Решение совета'}", "",
+            *_callouts(v), *_card(v),
             demote(v.verdict.get("final_answer", ""), 3), ""]
     out += _kcu(v) + _rationale(v) + _ideas(v) + _sources(v, full=not summary) + _facts(v)
     if summary:
@@ -282,6 +315,9 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
                 "критикой и голосованием скачивается отдельно.*"]
         return "\n".join(out).rstrip() + "\n"
 
+    if v.is_selection:  # голосования и вариантов у «Отбора» нет — таблица и карточки уже в итоге
+        out += _costs(v) + [""] + _request(v, False)
+        return "\n".join(out).rstrip() + "\n"
     out += ["## Голосование", ""]
     if v.tally:
         out += ["| Место | Вариант | Автор | Первых мест | Балл |", "|---|---|---|---|---|"]
@@ -365,26 +401,6 @@ def render_md(view: View, summary: bool = False, decision: bool = False) -> str:
         out.append("| **Среднее** | " + " | ".join("" if x is None else f"**{x:.1f}**" for x in avgs) + " |")
         out.append("")
 
-    out += ["## Участники и расходы", "", "| Участник | Обращений | Токены (вход / выход) | Стоимость |", "|---|---|---|---|"]
-    for name, s in v.stats.items():
-        s = s or {}
-        note = v.think_note(s)
-        out.append(f"| {name}{f' ({note})' if note else ''} | {s.get('calls', 0)} | {s.get('prompt_tokens', 0)} / {s.get('completion_tokens', 0)} "
-                   f"| ${float(s.get('cost', 0)):.4f} |")
-    out.append(f"| **Итого** | | | **${v.cost:.4f}** |")
-    fails = v.failures()
-    if fails:
-        out += ["", "### Сбои", "", "| Участник | Этап | Что случилось |", "|---|---|---|"]
-        out += [f"| {n} | {st} | {_cell(err)} |" for n, st, err in fails]
-    if v.cache_line:
-        out += ["", f"*{v.cache_line}.*"]
-    sc = v.stage_costs
-    if sc["stages"]:
-        out += ["", "### Расходы по этапам", "", "| Этап | Обращений (из них повторы и продолжения) | Вход из кэша | Стоимость | Доля |",
-                "|---|---|---|---|---|"]
-        out += [f"| {r['stage_name']} | {r['requests']} ({r['extra']}) | {r['cache_share']:.0%} | ${r['cost']:.4f} | {r['share']:.0%} |"
-                for r in sc["stages"]]
-        if sc["extra_cost"]:
-            out += ["", f"*На повторы и продолжения ушло ${sc['extra_cost']:.4f}.*"]
+    out += _costs(v)
     out += [""] + _request(v, False)
     return "\n".join(out).rstrip() + "\n"

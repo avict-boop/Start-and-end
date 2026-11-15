@@ -794,6 +794,20 @@ class _Report:
             c.add_paragraph(value, style="Council Value")
             if sub:
                 c.add_paragraph(sub, style="Council Meta")
+        if v.is_selection:  # «Отбор»: первый в ранге, объекты, подтверждённые ячейки
+            f = v.selection_facts
+            n = len(v.members)
+            cell(t.cell(0, 0), "ПЕРВЫЙ В РАНГЕ", f"◆ {f['first']}")
+            _cell_shade(t.cell(0, 0), self.theme["dec_soft"])
+            cell(t.cell(0, 1), "ОБЪЕКТОВ", f["objects"])
+            cell(t.cell(0, 2), "ЯЧЕЙКИ ТАБЛИЦЫ", f["cells"])
+            cell(t.cell(0, 3), "СОВЕТ", f"{n} {_plural(n, 'модель', 'модели', 'моделей')}", v.mode)
+            if full:
+                cell(t.cell(1, 0), "ДАТА", v.date)
+                cell(t.cell(1, 1), "ДЛИТЕЛЬНОСТЬ", v.duration)
+                cell(t.cell(1, 2), "СТОИМОСТЬ", f"${v.cost:.2f}")
+            self.doc.add_paragraph().paragraph_format.space_after = Pt(2)
+            return
         if w:
             who = "ваш вариант" if v.author(w) == "пользователь" else f"предложил {v.author(w)}"
             if v.unacceptable:
@@ -827,12 +841,13 @@ class _Report:
 
     def toc(self) -> None:
         v = self.v
-        entries = [("Итог исследования" if v.is_research else "Решение совета", "verdict", 1)]
+        entries = [("Итог исследования" if v.is_research else "Итог отбора" if v.is_selection else "Решение совета",
+                    "verdict", 1)]
         if v.is_research:
             entries.append(("Известно, спорно, неизвестно", "kcu", 1))
             if v.subquestions:
                 entries.append(("Рамки и подвопросы", "scope", 1))
-        if any(v.verdict.get(k) for k in ("why", "risks", "dissent")):
+        if any(v.verdict.get(k) for k in ("why", "risks", "dissent")) and not v.is_selection:
             entries.append(("Обоснование", "why", 1))
         if v.ideas:
             entries.append(("Что взято из других вариантов", "ideas", 1))
@@ -857,7 +872,7 @@ class _Report:
         h = self.h("", 1, "verdict")
         r = h.add_run("◆  ")
         r.font.color.rgb = RGBColor.from_string(self.theme["dec"])
-        h.add_run("Итог исследования" if v.is_research else "Решение совета")
+        h.add_run("Итог исследования" if v.is_research else "Итог отбора" if v.is_selection else "Решение совета")
         if v.unacceptable:
             self.callout("Ни один вариант не подходит", "; ".join(v.unacceptable), "bad")
         if v.tie_line:
@@ -882,6 +897,8 @@ class _Report:
 
     def rationale(self) -> None:
         vd = self.v.verdict
+        if self.v.is_selection:  # вывод и риски — уже в итоге отбора
+            return
         if not (vd.get("why") or vd.get("risks") or vd.get("dissent")):
             return
         self.h("Обоснование", 1, "why")
@@ -1443,7 +1460,8 @@ def render_docx(view: View, summary: bool = False, decision: bool = False) -> by
         rep.request(images=False)
         rep.meta(SUMMARY_NOTE)
         return rep.save()
-    rep.voting()
+    if not v.is_selection:  # у «Отбора» нет голосования
+        rep.voting()
     rep.proposals()
     rep.critique()
     rep.members()
