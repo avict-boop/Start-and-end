@@ -15,6 +15,7 @@ const SEL_STAGE = {
 };
 // ссылки приходят от моделей и поиска: в href — только http(s), иначе «javascript:…» выполнился бы по нажатию
 const selUrl = (u) => (/^https?:\/\//i.test(String(u || "")) ? String(u) : "");
+const SEL_KIND = { number: "число", bool: "да/нет", list: "список", date: "дата", text: "текст" };
 const SEL_GATE_TITLE = { frame: "Проверьте признаки и веса", candidates: "Проверьте найденных кандидатов",
   shortlist: "Утвердите короткий список" };
 
@@ -82,10 +83,12 @@ function renderReview(s) {
   if (rv.gate === "frame") {
     const attrs = (pl.frame || {}).attributes || [];
     body = `<p class="muted small">Снимите галочку — признак уберётся; вес 0 — только для сведения; «отсев» — короткая проверка у всех кандидатов.</p>
-      <table class="sel-review"><thead><tr><th></th><th>Признак</th><th>Тип</th><th>Вес</th><th>Отсев</th></tr></thead><tbody>
-      ${attrs.map((a) => `<tr><td><input type="checkbox" data-keep="${esc(a.id)}" checked></td><td>${esc(a.name)}${a.unit ? ` <span class="muted">(${esc(a.unit)})</span>` : ""}</td>
-        <td class="muted small">${esc(a.kind)}</td><td><input type="number" min="0" max="10" step="1" value="${Number(a.weight)}" data-w="${esc(a.id)}" class="sel-w"></td>
-        <td><input type="checkbox" data-screen="${esc(a.id)}" ${a.screen ? "checked" : ""}></td></tr>`).join("")}</tbody></table>
+      <div class="table-wrap"><table class="sel-review"><thead><tr><th class="c-chk" title="Оставить признак">✓</th><th>Признак</th><th class="c-kind">Тип</th><th class="c-w">Вес</th><th class="c-scr">Отсев</th></tr></thead><tbody>
+      ${attrs.map((a) => `<tr><td class="c-chk"><input type="checkbox" data-keep="${esc(a.id)}" checked aria-label="Оставить «${esc(a.name)}»"></td>
+        <td><div>${esc(a.name)}</div><div class="muted small"><span class="kind-inline">${esc(SEL_KIND[a.kind] || a.kind)}${a.unit ? " · " : ""}</span>${a.unit ? `единица: ${esc(a.unit)}` : ""}${a.evidence ? `<span class="hide-sm">${a.unit ? " · " : ""}доказательство: ${esc(a.evidence)}</span>` : ""}</div></td>
+        <td class="c-kind muted small">${esc(SEL_KIND[a.kind] || a.kind)}</td>
+        <td class="c-w"><input type="number" min="0" max="10" step="1" value="${Number(a.weight)}" data-w="${esc(a.id)}" class="sel-w" aria-label="Вес «${esc(a.name)}»"></td>
+        <td class="c-scr"><input type="checkbox" data-screen="${esc(a.id)}" ${a.screen ? "checked" : ""} aria-label="Отсев по «${esc(a.name)}»"></td></tr>`).join("")}</tbody></table></div>
       <label class="field"><span>Добавить признаки (через запятую)</span><input id="rvAddAttr" type="text" placeholder="например: MOQ, срок изготовления"></label>`;
   } else {
     const items = pl.items || [];

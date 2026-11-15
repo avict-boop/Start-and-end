@@ -996,8 +996,13 @@ details[open] > summary .params-edit { visibility: hidden; }
 .sel-review-box { margin-top: .8rem; }
 .sel-review-box h3 { margin: .2rem 0 .4rem; }
 .sel-review { border-collapse: collapse; width: 100%; font-size: .92rem; }
-.sel-review td, .sel-review th { padding: .25rem .4rem; border-bottom: 1px solid var(--line); text-align: left; }
-.sel-review .sel-w { width: 4.2rem; }
+.sel-review td, .sel-review th { padding: .4rem .5rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.sel-review th { white-space: nowrap; font-weight: 650; }
+.sel-review .c-chk, .sel-review .c-scr { width: 3.2rem; text-align: center; }
+.sel-review .c-kind { width: 5.5rem; white-space: nowrap; }
+.sel-review .c-w { width: 5.5rem; }
+.sel-review .sel-w { width: 4.5rem; }
+.sel-review input[type="checkbox"] { width: 1.15rem; height: 1.15rem; }
 .sel-review-list { max-height: 26rem; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: .3rem .5rem; background: var(--surface); }
 .sel-item { display: flex; gap: .55rem; align-items: flex-start; padding: .35rem 0; border-bottom: 1px solid var(--line); }
 .sel-item:last-child { border-bottom: 0; }
@@ -1031,3 +1036,13 @@ details[open] > summary .params-edit { visibility: hidden; }
 @media (max-width: 640px) { .row3 { grid-template-columns: 1fr; } }
 .link.danger { color: var(--bad); }
 .bad-input { outline: 2px solid var(--bad); outline-offset: 1px; }
+.sel-review .kind-inline { display: none; }
+@media (max-width: 640px) {
+  .sel-review .c-kind { display: none; }
+  .sel-review .kind-inline { display: inline; }
+  .sel-review td, .sel-review th { padding: .35rem .3rem; }
+  .sel-review .c-chk, .sel-review .c-scr { width: 2.2rem; }
+  .sel-review .c-w { width: 3.8rem; }
+  .sel-review .sel-w { width: 3.4rem; }
+  .sel-review td:nth-child(2) { word-break: normal; overflow-wrap: break-word; hyphens: auto; }
+}
