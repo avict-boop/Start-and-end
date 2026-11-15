@@ -25,6 +25,7 @@ function selEvent(s, ev) {
   switch (ev.type) {
     case "selection_frame":
       s.selFrame = ev.frame;
+      s.selAttrs = (ev.frame.attributes || []);
       logAdd(s, `Рамка: ${n((ev.frame.attributes || []).length, "признак", "признака", "признаков")}; `
         + (ev.start === "check" ? "проверяем ваш список" : ev.start === "extend" ? "ваш список плюс поиск недостающих" : "ищем кандидатов с нуля")
         + (ev.seeds ? ` (в задании ${n(ev.seeds, "объект", "объекта", "объектов")})` : ""), "k-ok");
@@ -42,9 +43,21 @@ function selEvent(s, ev) {
       logAdd(s, `Отсев: подходят ${ev.pass}, не подходят ${ev.fail}, не выяснено ${ev.unclear} из ${ev.total}`, "k-ok");
       return true;
     case "shortlist":
+      s.selObjs = ev.objects || s.selObjs || [];
+      s.selCells = s.selCells || {};
       logAdd(s, `Подробно проверяем ${n(ev.count, "объект", "объекта", "объектов")}${ev.excluded ? ` · исключено при отсеве: ${ev.excluded}` : ""}`, "k-ok");
       return true;
+    case "object_filling":
+      (s.selBusy = s.selBusy || {})[ev.object] = true;
+      if (s.selObjs && !s.selObjs.some((o) => o.id === ev.object)) s.selObjs.push({ id: ev.object, name: ev.name });
+      return true;
+    case "object_ruled":
+      s.selCells = s.selCells || {};
+      s.selCells[ev.object] = { ...(s.selCells[ev.object] || {}), ...(ev.cells || {}) };
+      return true;
     case "object_filled":
+      (s.selCells = s.selCells || {})[ev.object] = ev.cells || {};
+      if (s.selBusy) delete s.selBusy[ev.object];
       logAdd(s, `${ev.name}: открыто страниц ${ev.pages} из ${ev.urls}; подтверждено ${(ev.n_document || 0) + (ev.n_official || 0) + (ev.n_secondary || 0)}`
         + `${ev.n_disputed ? `, спорных ${ev.n_disputed}` : ""}${ev.n_unverified ? `, без найденной цитаты ${ev.n_unverified}` : ""}`, ev.n_disputed ? "k-warn" : "");
       return true;
@@ -64,6 +77,39 @@ function selEvent(s, ev) {
     default:
       return false;
   }
+}
+
+/* ---------------------------------------------------------------- живая таблица (пока идёт заполнение) */
+
+function renderSelLive(s) {
+  const box = $("selLiveSec");
+  if (!box) return;
+  const on = s.mode === "selection" && !s.done && (s.selObjs || []).length && (s.selAttrs || []).length;
+  box.hidden = !on;
+  if (!on) return;
+  const attrs = s.selAttrs;
+  const cells = s.selCells || {};
+  const busy = s.selBusy || {};
+  const done = s.selObjs.filter((o) => cells[o.id]).length;
+  const rank = {};
+  ((s.selRank || {}).ranking || []).forEach((r) => { rank[r.object] = r.rank; });
+  const td = (oid, a) => {
+    const row = cells[oid];
+    if (!row) return `<td class="muted">${busy[oid] ? "…" : ""}</td>`;
+    const c = row[a.id] || {};
+    const [k, mark, word] = SEL_STATUS[c.status || "none"] || SEL_STATUS.none;
+    if (c.status === "disputed") return `<td><span class="badge warn" title="источники расходятся — решит совет">спор</span></td>`;
+    if (!c.value) return `<td class="muted">—</td>`;
+    const v = `${c.value}${c.unit && !c.value.includes(c.unit) ? ` ${c.unit}` : ""}`;
+    return `<td title="${esc(word)}${c.quote ? ` — «${esc(c.quote)}»` : ""}">${esc(v.length > 40 ? v.slice(0, 38) + "…" : v)} <span class="badge ${k}">${mark}</span>${c.ruled ? " ⚖" : ""}</td>`;
+  };
+  box.innerHTML = `<h2>Таблица заполняется</h2>
+    <p class="muted small">Готово ${done} из ${s.selObjs.length}. Д — документ, С — сайт компании, В — вторичный, ? — цитата не найдена,
+      «спор» — источники расходятся (решит совет), ⚖ — решено советом. Наведите на ячейку — цитата.</p>
+    <div class="table-wrap"><table class="sel-table"><thead><tr>${Object.keys(rank).length ? "<th>№</th>" : ""}<th>Объект</th>${attrs.map((a) => `<th>${esc(a.name)}</th>`).join("")}</tr></thead><tbody>
+    ${[...s.selObjs].sort((x, y) => (rank[x.id] || 999) - (rank[y.id] || 999)).map((o) => `<tr class="${busy[o.id] ? "sel-busy" : ""}">${Object.keys(rank).length ? `<td>${rank[o.id] || ""}</td>` : ""}
+      <td><b>${esc(o.name)}</b>${busy[o.id] ? ' <span class="muted small">заполняется…</span>' : !cells[o.id] ? ' <span class="muted small">в очереди</span>' : ""}</td>
+      ${attrs.map((a) => td(o.id, a)).join("")}</tr>`).join("")}</tbody></table></div>`;
 }
 
 /* ---------------------------------------------------------------- остановки «проверьте список» */

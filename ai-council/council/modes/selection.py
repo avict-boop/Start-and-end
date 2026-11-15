@@ -248,7 +248,8 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
             entities += [e for e in shortlist if e not in entities]
     keep_ids = {e["id"] for e in shortlist}
     excluded = [x for x in excluded if x["id"] not in keep_ids]  # возвращённые вами на остановке — не «исключены»
-    c._emit("shortlist", count=len(shortlist), excluded=len(excluded), total=len(entities))
+    c._emit("shortlist", count=len(shortlist), excluded=len(excluded), total=len(entities),
+            objects=[{"id": e["id"], "name": e["name"]} for e in shortlist])
 
     # 4. Подробное заполнение
     fillers = pick_fillers(c)
@@ -495,6 +496,7 @@ async def fill_object(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribu
     программа ищет каждую цитату на странице и сводит варианты."""
     sc = c.cfg.selection
     meta = {**META, "object": e["id"]}
+    c._emit("object_filling", object=e["id"], name=e["name"])
     src = S.ObjectSources()
     try:
         src = await c._ask(searcher(c), "sources", S.sources_prompt(frame, e, attrs, sc.pages_per_object),
@@ -548,7 +550,7 @@ async def fill_object(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribu
         cells[a.id] = S.resolve_cell(a, options)
     st = {k: sum(1 for v in cells.values() if v["status"] == k) for k in (*S.STATUSES, "disputed")}
     c._emit("object_filled", object=e["id"], name=e["name"], pages=sum(1 for u in urls if pages.get(u, {}).get("text")),
-            urls=len(urls), **{f"n_{k}": v for k, v in st.items()})
+            urls=len(urls), cells=live_cells(cells), **{f"n_{k}": v for k, v in st.items()})
     return {"cells": cells, "urls": urls, "website": e.get("website", "")}
 
 
@@ -634,6 +636,7 @@ async def resolve_disputes(c: Council, frame: S.SelectionFrame, attrs: list[S.At
                 cell = {"status": "none", "value": "", "options": opts}
             cell.update(ruled=True, votes={k: {"choice": x[0], "reason": x[1]} for k, x in v.items()})
             rows[oid]["cells"][a.id] = cell
+        c._emit("object_ruled", object=oid, cells=live_cells({a.id: rows[oid]["cells"][a.id] for a, _ in ds}))
 
     res = await asyncio.gather(*(one(oid, ds) for oid, ds in work), return_exceptions=True)
     for r in res:
@@ -649,6 +652,13 @@ def _choice(raw: str) -> str:
         return "none"
     m = re.match(r"^\W*(?:option|вариант)?\s*\(?([a-z])\)?(?![a-z])", t)
     return m.group(1) if m else "none"
+
+
+def live_cells(cells: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Ячейки для живой таблицы на сайте: статус, значение, единица, цитата (коротко)."""
+    return {aid: {"status": c.get("status", "none"), "value": str(c.get("value") or "")[:120],
+                  "unit": str(c.get("unit") or "")[:40], "quote": str(c.get("quote") or "")[:200],
+                  "ruled": bool(c.get("ruled"))} for aid, c in cells.items()}
 
 
 def sources_used(c: Council, table: dict[str, dict[str, Any]], rows: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:

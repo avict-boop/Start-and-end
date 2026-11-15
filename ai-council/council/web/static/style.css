@@ -1020,6 +1020,7 @@ details[open] > summary .params-edit { visibility: hidden; }
 .sel-table th, .sel-table td { padding: .3rem .45rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .sel-table th { background: var(--surface-2); position: sticky; top: 0; }
 .sel-table tr.sel-top td:first-child { color: var(--ok); font-weight: 650; }
+.sel-table tr.sel-busy td { background: var(--accent-soft); }
 .sel-cell { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .sel-cell:hover { text-decoration: underline; }
 .sel-cellbox { margin-top: .8rem; padding: .7rem .9rem; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); }

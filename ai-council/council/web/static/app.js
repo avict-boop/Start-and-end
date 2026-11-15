@@ -1756,6 +1756,7 @@ function render(s) {
 
   renderAttachments(s);
   renderFraming(s);
+  renderSelLive(s);  // «Отбор»: таблица заполняется на глазах
   renderActivity(s);
 
   // расходы по моделям — в журнале
