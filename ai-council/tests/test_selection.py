@@ -212,3 +212,14 @@ def test_procurement_alerts_compare_and_diff():
                        "table": {"X": {"A1": {"status": "document", "value": "2028-12-01"}}}}}
     ch = P.diff(p, d)
     assert ch and ch[0]["old"] == "2026-12-01" and ch[0]["new"] == "2028-12-01"
+
+
+def test_trim_snapshots_removes_oldest(tmp_path):
+    import os
+    import time
+    for i in range(4):
+        f = tmp_path / f"{i:016x}.json.gz"
+        f.write_bytes(b"x" * 400_000)
+        os.utime(f, (time.time() - 100 + i, time.time() - 100 + i))
+    removed = M.trim_snapshots(tmp_path, 1)  # 1 МБ: из 1,6 МБ уходят две самые старые копии
+    assert removed == 2 and sorted(p.name[:16] for p in tmp_path.glob("*.json.gz")) == [f"{2:016x}", f"{3:016x}"]

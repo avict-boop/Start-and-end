@@ -195,6 +195,8 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     start = start0 if start0 != "auto" else ("check" if len(seeds) >= 3 else "find")
     frame = apply_frame_edits(frame, gate(c, "frame", {"frame": frame.model_dump()}))
     attrs = frame.attributes
+    if not attrs:
+        raise S.CouncilError("в рамке не осталось признаков — нечего сравнивать")
     top_n = sc.top_n or frame.top_n or 12  # первая группа: из настроек, из задания, иначе 12
     c._emit("selection_frame", frame=frame.model_dump(), start=start, seeds=len(seeds))
     log.info("%sотбор: старт %s, признаков %d, объектов в задании %d", c._tag, start, len(attrs), len(seeds))
@@ -239,6 +241,8 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
             shortlist = [e for i in ids for e in entities if e["id"] == i] + apply_list_edits([], {"add": dec.get("add")},
                                                                                                 start_n=len(entities))
             entities += [e for e in shortlist if e not in entities]
+    keep_ids = {e["id"] for e in shortlist}
+    excluded = [x for x in excluded if x["id"] not in keep_ids]  # возвращённые вами на остановке — не «исключены»
     c._emit("shortlist", count=len(shortlist), excluded=len(excluded), total=len(entities))
 
     # 4. Подробное заполнение
@@ -300,6 +304,11 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
                       risks=conclusion.risks if conclusion else [])
     sel["conclusion"] = conclusion.model_dump() if conclusion else None
     c._emit("verdict", verdict=verdict, ideas=[])
+    if c.snapshot_dir and sc.snapshots:  # папка копий страниц — не больше предела; старые копии удаляются
+        try:
+            await asyncio.to_thread(trim_snapshots, c.snapshot_dir, sc.snapshot_mb)
+        except OSError as e:
+            log.warning("%sпапка копий страниц не очищена: %s", c._tag, e)
     return SessionResult(
         question=question, refined_question=frame.refined_question or question, criteria=[a.name for a in attrs],
         mode="selection", authors={}, initial_proposals={}, proposals={}, critiques={}, ballots={}, tally=[],
