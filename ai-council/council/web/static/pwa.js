@@ -156,3 +156,18 @@ function pwaNotify(title, body, tag, url) {
   if (PWA.reg && PWA.reg.showNotification) { PWA.reg.showNotification(title, opts).catch(() => {}); return true; }
   try { const n = new Notification(title, opts); n.onclick = () => { window.focus(); n.close(); }; return true; } catch { return false; }
 }
+
+/* Телефон: кнопка «Начать» с оценкой закреплена внизу — под неё оставляем место по её настоящей высоте, чтобы
+   низ формы (параметры, переключатели) можно было докрутить и он не прятался за кнопкой */
+(function startbarSpace() {
+  const bar = document.querySelector(".startbar");
+  if (!bar) return;
+  const set = () => {
+    const fixed = getComputedStyle(bar).position === "fixed";
+    document.documentElement.style.setProperty("--startbar-h", fixed ? `${Math.ceil(bar.getBoundingClientRect().height)}px` : "0px");
+  };
+  if ("ResizeObserver" in window) new ResizeObserver(set).observe(bar);
+  window.addEventListener("resize", set);
+  set();
+})();
+
