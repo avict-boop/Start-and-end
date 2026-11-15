@@ -70,6 +70,39 @@ def search_label(c: Council) -> str:
     return f"поиск · {model_title(c.cfg.selection.search_model or c.cfg.fact_check.model)}"
 
 
+def discover_hunters(c: Council) -> list[MemberConfig]:
+    """Кто ищет кандидатов. scouts — модель поиска, вторая модель Perplexity и младшие модели Google, OpenAI,
+    Anthropic, xAI со своими поисковиками (каждый — по всем направлениям); all — модель поиска и участники совета;
+    search — только модель поиска."""
+    sc = c.cfg.selection
+    base = [searcher(c)]
+    if sc.discover_by == "search":
+        return base
+    if sc.discover_by == "scouts":
+        from ..scouts import model_title, perplexity_pair, pick_scouts, scout_name
+        catalog = getattr(c, "catalog", None)
+        ids = list(dict.fromkeys(perplexity_pair(base[0].model, catalog) + (list(sc.scouts) or list(pick_scouts(catalog).values()))))
+        ids = [i for i in ids if i != base[0].model]
+        eff = None if sc.search_reasoning == "default" else sc.search_reasoning
+        scouts, labels = [], {}
+        for mid in ids:
+            name = scout_name(mid)
+            k = 2
+            while any(s.name == name for s in scouts):
+                name = f"{scout_name(mid)} {k}"
+                k += 1
+            scouts.append(MemberConfig(name=name, model=mid, max_tokens=max(c.cfg.fact_check.max_tokens, 8000),
+                                       temperature=0.2, reasoning_effort=None if mid.startswith("perplexity/") else eff))
+            c.stats.setdefault(name, MemberStats())
+            labels[name] = f"{name} · {model_title(mid)}"
+        if len(scouts) >= 2:
+            c._emit("labels", labels=labels)
+            log.info("%sпоиск кандидатов: разведчики %s", c._tag, {s.name: s.model for s in scouts})
+            return base + scouts
+        log.warning("%sразведчиков не подобрать (нет каталога моделей) — ищут участники совета", c._tag)
+    return base + [quick(c, m) for m in c.cfg.active_members]
+
+
 def quick(c: Council, m: MemberConfig) -> MemberConfig:
     """Участник для поиска кандидатов: короткие рассуждения (выписать названия из найденного — не рассуждение)."""
     eff = c.cfg.selection.search_reasoning
@@ -446,7 +479,8 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     chair = c.cfg.member(c.cfg.chair)
     angles = frame.angles[:sc.angles] or ["general web search for the candidates"]
     # кто ищет: модель поиска и (по умолчанию) все участники — каждый по всем направлениям, своим поисковиком
-    hunters = [searcher(c)] + ([quick(c, m) for m in c.cfg.active_members] if sc.discover_by == "all" else [])
+    hunters = discover_hunters(c)
+    scouting = any(m.name.startswith("поиск ") for m in hunters)
     c.stage_search_engine["discover"] = sc.discover_engine
     if sc.discover_engine == "native":
         pool = list(sc.discover_engines) or ["exa"]
@@ -455,6 +489,11 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
             c.stage_search_engine[f"discover:{m.name}"] = pool[i % len(pool)]
         engines = {m.name: c.stage_search_engine.get(f"discover:{m.name}", "свой") for m in hunters
                    if m.name != FACT_CHECKER}
+        if scouting:  # у xAI плата за найденные источники высокая и не очевидна — его модель ищет через Exa (свой индекс)
+            for m in hunters:
+                if m.model.startswith("x-ai/"):
+                    c.stage_search_engine[f"discover:{m.name}"] = "exa"
+                    engines[m.name] = "exa"
         log.info("%sпоиск кандидатов: поисковики %s", c._tag, engines)
     found: list[tuple[str, S.Candidate]] = []
     used: list[str] = []
@@ -493,13 +532,13 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
         from_frame = all(a in frame_angles for a in angles)
         # новые направления председателя ищут «кроме уже найденных»; волны рамки — независимо (для оценки полноты)
         known = [e["name"] for e in S.merge_candidates(found)] if rnd and not from_frame else []
-        per = len(hunters) if not sc.discover_models else min(len(hunters), sc.discover_models + 1)
+        per = len(hunters) if scouting or not sc.discover_models else min(len(hunters), sc.discover_models + 1)
         c._emit("stage", stage="discover", title=f"Поиск кандидатов{'' if not rnd else ' — вторая волна' if from_frame else ' — ещё круг'}: "
                                                  f"{len(angles)} {_word(len(angles), 'направление', 'направления', 'направлений')}, "
                                                  f"по каждому — {per} {_word(per, 'модель', 'модели', 'моделей')} "
                                                  f"(всего ищут: {', '.join(m.name for m in hunters)})",
                 members=[m.name for m in hunters])
-        plan = discover_plan(angles, hunters, sc.discover_models, shift=len(used))
+        plan = discover_plan(angles, hunters, 0 if scouting else sc.discover_models, shift=len(used))
         left = {m.name: sum(1 for _, x in plan if x.name == m.name) for m in hunters}
         left = {k: v for k, v in left.items() if v}
         by = {k: {"done": 0, "total": v, "found": 0, "failed": 0} for k, v in left.items()}

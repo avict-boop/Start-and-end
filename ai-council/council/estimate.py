@@ -310,6 +310,19 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
         out.append(MemberEstimate(m.name, m.model, calls, inp, outp,
                                   (inp * p.prompt + outp * p.completion + fees.get(m.name, 0.0)) if p else None))
     search_model = sc.search_model or cfg.fact_check.model
+    if start != "check" and sc.discover_by == "scouts":  # разведчики: младшие модели компаний и вторая Perplexity
+        from .scouts import perplexity_pair, pick_scouts, scout_name
+        pseudo = [{"id": k, "pricing": {"prompt": v.prompt, "completion": v.completion}} for k, v in pricing.items()]
+        ids = list(sc.scouts) or list(pick_scouts(pseudo).values())
+        ids = [i for i in dict.fromkeys(perplexity_pair(search_model, pseudo) + ids) if i != search_model]
+        for mid in ids:
+            p = price_of(mid)
+            ppx = mid.startswith("perplexity/")
+            inp = 2000 + min(q, 3000) + (0 if ppx else found_tokens)  # у Perplexity найденное во вход не идёт
+            outp = 2500 + (0 if ppx else 1500)
+            fee = 0.0 if ppx else searches * sc.search_uses * sc.search_results * 0.004
+            out.append(MemberEstimate(scout_name(mid), mid, searches, searches * inp, searches * outp,
+                                      (searches * (inp * p.prompt + outp * p.completion + p.request) + fee) if p else None))
     s_calls = (0 if start == "check" else sc.angles + (2 if sc.rounds > 1 else 0)
                + (-(-cands // sc.screen_batch) if sc.screen else 0)) + deep
     s_in = s_calls * (2000 + min(q, 3000))  # у модели поиска (Perplexity) найденное не идёт во вход — поиск встроен

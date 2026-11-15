@@ -191,7 +191,10 @@ class SelectionConfig(BaseModel):
     max_candidates: int = Field(default=150, ge=10, le=400)
     # Кто ищет кандидатов: all — модель поиска и все участники совета (у каждой модели свой поисковик и свои «слепые
     # зоны»: список полнее, оценка полноты честнее); search — только модель поиска (дешевле)
-    discover_by: Literal["all", "search"] = "all"
+    # scouts — поисковики разных компаний через их младшие модели (Gemini Flash, GPT mini, Claude Haiku, Grok mini) и обе
+    # модели Perplexity: все — по каждому направлению; дёшево, а «слепые зоны» поисковиков разные (рекомендуется)
+    discover_by: Literal["scouts", "all", "search"] = "scouts"
+    scouts: list[str] = Field(default_factory=list)  # свои модели-разведчики (id OpenRouter); пусто — подобрать по каталогу
     # Поисковик участников на этом этапе: native — собственный поиск модели, где он есть (OpenAI, Google, Anthropic,
     # xAI), у остальных — поиск OpenRouter; exa — у всех один поиск OpenRouter (дешевле, но одинаковые слепые зоны)
     discover_engine: Literal["native", "exa", "auto"] = "native"
@@ -422,7 +425,7 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
-                     "discover_by", "discover_engine", "discover_engines", "discover_models", "search_uses",
+                     "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
                      "search_results", "search_reasoning", "discover_waves", "second_read",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",

@@ -1116,6 +1116,7 @@ class CouncilBot:
                                       stage_out=stage_out, session_id=cp.id, shared_dir=rdir / "notes",
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     council_ref["c"] = council
+                    council.catalog = models_all  # «Отбор»: подбор младших моделей-разведчиков
                     council.model_max_out = max_out_map(models_all)
                     council.snapshot_dir = rdir / "sources"  # «Отбор»: копии скачанных страниц
                     if sp.get("mock") and sp.get("mode") == "selection":  # демо-страницы — только «Отбору»

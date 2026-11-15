@@ -979,6 +979,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                                       stage_out=stage_out, session_id=sid, shared_dir=runs_dir(cfg) / "notes",
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     st.council = council
+                    council.catalog = models_all  # «Отбор»: подбор младших моделей-разведчиков
                     council.thought_sink = st.add_thought
                     council.model_max_out = max_out_map(models_all)  # потолок ответа моделей — по каталогу
                     council.allow_split = bool(sp.get("allow_split")) and not (sp.get("request") or {}).get("series")

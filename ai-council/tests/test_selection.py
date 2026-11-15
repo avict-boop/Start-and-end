@@ -463,3 +463,57 @@ def test_discover_waves_stop_when_list_is_full(tmp_path):
 
     assert len(run(True)) == 4    # все находят одних и тех же — список полон, вторая волна не нужна
     assert len(run(False)) == 8   # каждый находит своих — список далёк от полного, ищем по всем направлениям
+
+
+CATALOG = [
+    {"id": "google/gemini-2-flash", "created": 100, "context_length": 1_000_000, "pricing": {"prompt": "0.0000001"}},
+    {"id": "google/gemini-3-flash", "created": 200, "context_length": 1_000_000, "pricing": {"prompt": "0.0000003"}},
+    {"id": "google/gemini-3-flash-image", "created": 300, "context_length": 1_000_000, "pricing": {"prompt": "0.0000003"}},
+    {"id": "google/gemini-3-pro", "created": 250, "context_length": 1_000_000, "pricing": {"prompt": "0.000002"}},
+    {"id": "openai/gpt-6-mini", "created": 220, "context_length": 400_000, "pricing": {"prompt": "0.00000025"},
+     "supported_parameters": ["tools", "reasoning"]},
+    {"id": "openai/gpt-6-nano", "created": 230, "context_length": 400_000, "pricing": {"prompt": "0.00000005"}},
+    {"id": "anthropic/claude-haiku-5.5", "created": 210, "context_length": 200_000, "pricing": {"prompt": "0.000001"}},
+    {"id": "anthropic/claude-sonnet-5.5", "created": 215, "context_length": 200_000, "pricing": {"prompt": "0.000003"}},
+    {"id": "x-ai/grok-5-fast", "created": 205, "context_length": 2_000_000, "pricing": {"prompt": "0.0000002"}},
+    {"id": "perplexity/sonar", "created": 1, "context_length": 128_000, "pricing": {"prompt": "0.000001"}},
+    {"id": "perplexity/sonar-pro", "created": 1, "context_length": 200_000, "pricing": {"prompt": "0.000003"}},
+]
+
+
+def test_pick_scouts_newest_junior_models():
+    from council.scouts import perplexity_pair, pick_scouts, scout_name
+    s = pick_scouts(CATALOG)
+    assert s == {"google": "google/gemini-3-flash", "openai": "openai/gpt-6-mini",
+                 "anthropic": "anthropic/claude-haiku-5.5", "x-ai": "x-ai/grok-5-fast"}
+    assert pick_scouts(None) == {}
+    assert perplexity_pair("perplexity/sonar-pro", CATALOG) == ["perplexity/sonar"]
+    assert scout_name("x-ai/grok-5-fast") == "поиск Exa" and scout_name("google/gemini-3-flash") == "поиск Google"
+
+
+def test_scouts_search_every_angle(tmp_path):
+    """Разведчики: каждый поисковик — по каждому направлению; модели совета в поиске кандидатов не участвуют;
+    xAI ищет через Exa."""
+    import asyncio
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.modes import selection as SM
+    from council.session import Council
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "selection": {"rounds": 1, "discover_waves": False},
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "abc"]})
+    c = Council(cfg, MockClient(delay=0))
+    c.catalog = CATALOG
+    asked = []
+
+    async def ask(m, stage, prompt, schema, meta=None, **kw):
+        asked.append((m.name, m.model, meta["angle"], m.reasoning_effort))
+        return SM.S.Candidates(items=[SM.S.Candidate(name=f"Plant {len(asked)}")])
+
+    c._ask = ask
+    fr = SM.S.SelectionFrame(refined_question="q", angles=[f"A{i}" for i in range(3)])
+    asyncio.run(SM.discover(c, fr, []))
+    who = {n for n, *_ in asked}
+    assert who == {"факт-чек", "поиск Perplexity", "поиск Google", "поиск OpenAI", "поиск Anthropic", "поиск Exa"}
+    assert len(asked) == 3 * 6 and not any(m.startswith("m/") for _, m, *_ in asked)
+    assert c.stage_search_engine["discover:поиск Exa"] == "exa"
+    assert all(e == "low" for n, m, _, e in asked if m.startswith(("google/", "openai/", "anthropic/")))
