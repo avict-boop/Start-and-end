@@ -52,6 +52,9 @@ function selEvent(s, ev) {
         + (c.share != null ? ` · полнота списка ≈ ${Math.round(c.share * 100)}% (оценка ~${c.estimate})` : ""), "k-ok");
       return true;
     }
+    case "screen_undone":
+      logAdd(s, `Отсев: ${ev.count} из ${ev.total} исключений отменено — цитата «не подходит» не найдена на странице, кандидаты остаются сомнительными`, "k-warn");
+      return true;
     case "screened":
       logAdd(s, `Отсев: подходят ${ev.pass}, не подходят ${ev.fail}, не выяснено ${ev.unclear} из ${ev.total}`, "k-ok");
       return true;

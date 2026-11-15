@@ -787,9 +787,35 @@ async def screen(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], 
                                             *(x.url for x in checks if x.url.startswith(("http://", "https://")))]))[:10]
             if row.website and not e.get("website"):
                 e["website"] = row.website
+    await verify_screen_fails(c, out)
     counts = {k: sum(1 for v in out.values() if v["result"] == k) for k in ("pass", "fail", "unclear")}
     c._emit("screened", **counts, total=len(entities))
     return out
+
+
+async def verify_screen_fails(c: Council, out: dict[str, dict[str, Any]]) -> int:
+    """«Не подходит» на отсеве засчитывается, только если программа нашла цитату этого вердикта на скачанной
+    странице. Не нашла (страница не открылась, цитата неточная или не оттуда) — кандидат «сомнительный» и остаётся:
+    выбросить нужный завод хуже, чем лишний раз его проверить. Возвращает, сколько исключений отменено."""
+    fails = {oid: r for oid, r in out.items() if r["result"] == "fail"}
+    if not fails:
+        return 0
+    urls = list(dict.fromkeys(ch.get("url") or "" for r in fails.values() for ch in r["checks"]
+                              if ch.get("verdict") == "fail" and (ch.get("url") or "").startswith(("http://", "https://"))))
+    pages = await fetch_pages(c, urls) if urls and c.link_checker else {}
+    undone = 0
+    for oid, r in fails.items():
+        proven = [ch for ch in r["checks"] if ch.get("verdict") == "fail" and ch.get("quote")
+                  and S.find_quote((pages.get(ch.get("url") or "") or {}).get("text") or "", ch["quote"]) >= 0]
+        if proven:
+            r["verified"] = True
+            continue
+        undone += 1
+        r.update(result="unclear", reason=f"не выяснено: «не подходит» без цитаты, найденной на странице ({r['reason'][:150]})")
+    if undone:
+        log.info("%sотсев: %d из %d исключений отменено — цитата не найдена на странице", c._tag, undone, len(fails))
+        c._emit("screen_undone", count=undone, total=len(fails))
+    return undone
 
 
 def _match_entity(name: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:

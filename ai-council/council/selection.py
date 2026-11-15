@@ -548,11 +548,13 @@ def completeness(entities: list[dict[str, Any]], n_angles: int) -> dict[str, Any
 
 
 def screen_decide(checks: list[ScreenCheck], attrs: list[Attribute]) -> tuple[str, str]:
-    """Отсев: кандидат исключается только при явном «не подходит» хотя бы по одному признаку отсева (с цитатой или
-    значением); все «подходит» — проходит; иначе — сомнительный (не выбрасывается)."""
+    """Отсев: кандидат исключается только при явном «не подходит» хотя бы по одному признаку отсева — с дословной
+    цитатой источника (отсутствие сведений — «нет данных», «не найдено» — не повод исключать); все «подходит» —
+    проходит; иначе — сомнительный (не выбрасывается). Найдена ли цитата на странице, проверяет программа после."""
     want = {a.id for a in attrs if a.screen}
     got = {c.attr: c for c in checks if c.attr in want}
-    fails = [c for c in got.values() if c.verdict == "fail" and (c.quote or c.value)]
+    fails = [c for c in got.values() if c.verdict == "fail" and len(c.quote.strip()) >= 8
+             and not UNKNOWN.search(c.value or "") and not UNKNOWN.search(c.quote)]
     if fails:
         names = {a.id: a.name for a in attrs}
         return "fail", "; ".join(f"{names.get(c.attr, c.attr)}: {c.value or c.quote}"[:200] for c in fails)

@@ -635,3 +635,26 @@ def test_named_competitors_do_not_turn_search_into_check():
     assert "discover" in {e.get("stage") for e in r.transcript}
     assert not {"Эвалар", "GLS", "ORZAX", "Demo Plant 7"} & set(names)  # названные «не кандидаты» отброшены
     assert names and all(n.startswith("Demo Plant") for n in names)
+
+
+def test_screen_excludes_only_with_quote_found_on_page():
+    """Отсев выбрасывает кандидата, только если цитата «не подходит» найдена программой на странице; «нет данных»
+    или цитата, которой на странице нет, — «сомнительный», остаётся (случай 15.11: отсеяны нужные заводы)."""
+    import asyncio
+    from council.modes import selection as SM
+    attrs = [S.Attribute(id="A1", name="Производитель", kind="bool", screen=True, knockout="нет")]
+    assert S.screen_decide([S.ScreenCheck(attr="A1", verdict="fail", value="нет данных")], attrs)[0] == "unclear"
+    assert S.screen_decide([S.ScreenCheck(attr="A1", verdict="fail", value="нет", quote="не найдено")], attrs)[0] == "unclear"
+    assert S.screen_decide([S.ScreenCheck(attr="A1", verdict="fail", value="перепродавец",
+                                          quote="demo plant 8 is a trading company")], attrs)[0] == "fail"
+    c = _council("find")
+    out = {"O1": {"result": "fail", "reason": "Производитель: перепродавец", "checks": [
+               {"attr": "A1", "verdict": "fail", "url": "https://plant8.example.com/about", "quote": "demo plant 8 — contract manufacturer"}]},
+           "O2": {"result": "fail", "reason": "Производитель: перепродавец", "checks": [
+               {"attr": "A1", "verdict": "fail", "url": "https://plant2.example.com/about", "quote": "we only resell products of other factories"}]},
+           "O3": {"result": "fail", "reason": "Производитель: нет", "checks": [
+               {"attr": "A1", "verdict": "fail", "url": "https://blocked.example.org/x", "quote": "trading company only"}]}}
+    undone = asyncio.run(SM.verify_screen_fails(c, out))
+    assert undone == 2
+    assert out["O1"]["result"] == "fail" and out["O1"]["verified"]          # цитата есть на странице — исключён
+    assert out["O2"]["result"] == "unclear" and out["O3"]["result"] == "unclear"  # нет на странице / не открылась
