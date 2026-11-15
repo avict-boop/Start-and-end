@@ -332,11 +332,11 @@ function renderSettings() {
           <small class="hint">разведчики: Perplexity (Sonar и Sonar Pro), Google, OpenAI, Anthropic и xAI со своим поиском — каждый по всем направлениям; у поисковиков разные «слепые зоны», а читают найденное младшие модели — в разы дешевле</small></label>
         <label class="field"><span>Свои разведчики (через запятую; пусто — подобрать самые новые младшие модели)</span><input type="text" data-sl="scouts" value="${esc((v("scouts", []) || []).join(", "))}" placeholder="например: google/…-flash, openai/…-mini" ${ro}></label>
         <label class="field"><span>Моделей совета на одно направление (если ищут модели совета)</span><input type="number" data-sn="discover_models" min="0" max="10" value="${v("discover_models", 2)}" ${ro}><small class="hint">по очереди, плюс модель поиска всегда; 0 — все модели по всем направлениям (в разы дороже)</small></label>
-        <label class="field"><span>Поисков в одном запросе (поиск кандидатов и отсев)</span><input type="number" data-sn="search_uses" min="1" max="10" value="${v("search_uses", 3)}" ${ro}><small class="hint">свой предел, не из общих настроек: каждая найденная страница идёт модели на вход</small></label>
+        <label class="field"><span>Поисков в одном запросе (все поисковые этапы «Отбора»)</span><input type="number" data-sn="search_uses" min="1" max="10" value="${v("search_uses", 3)}" ${ro}><small class="hint">свой предел, не из общих настроек: каждая найденная страница идёт модели на вход</small></label>
         <label class="field"><span>Результатов на поиск</span><input type="number" data-sn="search_results" min="1" max="10" value="${v("search_results", 8)}" ${ro}></label>
         <label class="field"><span>Рассуждения при поиске и отсеве</span>
           <select data-ss="search_reasoning" ${ro}>${[["low", "короткие (дешевле, хватает для списка)"], ["medium", "средние"], ["high", "глубокие"], ["default", "как у модели в настройках"]].map(([x, t]) => `<option value="${x}" ${v("search_reasoning", "low") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-        <label class="field"><span>Поиск участников при поиске кандидатов</span>
+        <label class="field"><span>Поиск моделей совета при поиске кандидатов</span>
           <select data-ss="discover_engine" ${ro}>${[["native", "свой поисковик модели (где есть)"], ["exa", "у всех поиск OpenRouter (дешевле)"]].map(([x, t]) => `<option value="${x}" ${v("discover_engine", "native") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
         <label class="field"><span>Готовых списков компаний, до</span><input type="number" data-sn="lists" min="0" max="20" value="${v("lists", 6)}" ${ro}><small class="hint">участники выставок, реестры, ассоциации, рейтинги: программа скачивает список целиком, дешёвая модель выписывает всех подходящих; 0 — не искать</small></label>
         <label class="field"><span>Знаков одного списка читать, до</span><input type="number" data-sn="list_chars" min="10000" max="1000000" step="10000" value="${v("list_chars", 150000)}" ${ro}></label>
@@ -404,6 +404,22 @@ function renderSettings() {
   requestAnimationFrame(() => markAllScroll($("setBody")));
   if (SET.tab === "system") { renderSystem(true); if (typeof pwaRender === "function") pwaRender(); }
   if (SET.tab === "members" && SET.upgrades) renderUpgrades();
+}
+
+// «Отбор»: что действует при выбранном «Кто ищет кандидатов» — остальное неактивно (не спорит с выбором)
+function selDepends() {
+  const by = (document.querySelector('[data-ss="discover_by"]') || {}).value;
+  if (!by) return;
+  const off = (sel, yes) => {
+    const el = document.querySelector(sel);
+    if (!el) return;
+    if (SET.writable) el.disabled = yes;  // настройки только для чтения — поля и так неактивны
+    const f = el.closest(".field");
+    if (f) f.classList.toggle("is-off", yes);
+  };
+  off('[data-sl="scouts"]', by !== "scouts");
+  off('[data-sn="discover_models"]', by !== "all");
+  off('[data-ss="discover_engine"]', by !== "all");
 }
 
 function bindSettings() {
@@ -474,7 +490,8 @@ function bindSettings() {
   for (const el of $("setBody").querySelectorAll("[data-fb]")) el.addEventListener("change", () => { d.fetch[el.dataset.fb] = el.checked; setDirty(); });
   d.selection = d.selection || {};
   for (const el of $("setBody").querySelectorAll("[data-sn]")) el.addEventListener("input", () => { d.selection[el.dataset.sn] = num(el.value); setDirty(); });
-  for (const el of $("setBody").querySelectorAll("[data-ss]")) el.addEventListener("change", () => { d.selection[el.dataset.ss] = el.value; setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-ss]")) el.addEventListener("change", () => { d.selection[el.dataset.ss] = el.value; setDirty(); selDepends(); });
+  selDepends();
   for (const el of $("setBody").querySelectorAll("[data-st]")) el.addEventListener("input", () => { d.selection[el.dataset.st] = el.value.trim(); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-sl]")) el.addEventListener("input", () => { d.selection[el.dataset.sl] = el.value.split(",").map((x) => x.trim()).filter(Boolean); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-sb]")) el.addEventListener("change", () => {

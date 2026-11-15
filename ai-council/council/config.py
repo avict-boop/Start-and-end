@@ -213,7 +213,12 @@ class SelectionConfig(BaseModel):
     search_results: int = Field(default=8, ge=1, le=10)
     # Глубина рассуждений при поиске кандидатов и отсеве: выписать названия из найденного — не рассуждение.
     # Рамка, споры и вывод председателя — с обычной глубиной
-    search_reasoning: Literal["none", "low", "medium", "high", "default"] = "low"
+    search_reasoning: Literal["low", "medium", "high", "default"] = "low"
+
+    @field_validator("search_reasoning", mode="before")
+    @classmethod
+    def _sr(cls, v: Any) -> Any:
+        return "low" if v in (None, "", "none") else v
     # Поиск кандидатов волнами: сначала половина направлений (не меньше 4); список уже почти полон — остальные не нужны
     discover_waves: bool = True
     # Готовые списки компаний (участники выставок, реестры, ассоциации, рейтинги, каталоги площадок): модель поиска

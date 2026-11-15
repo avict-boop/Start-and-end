@@ -338,7 +338,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
 
     # 1. Рамка
     c._emit("labels", labels={FACT_CHECKER: search_label(c)})  # на экране — «поиск · Sonar Pro», а не «факт-чек»
-    for st in ("discover", "screen"):  # свой предел поиска: каждая найденная страница идёт модели на вход
+    for st in ("discover", "screen", "sources", "lists"):  # свой предел поиска: найденное идёт модели на вход
         c.stage_search_limits[st] = (sc.search_uses, sc.search_results)
     c._emit("stage", stage="framing", title="Рамка отбора: кто кандидат, признаки и веса, где искать")
     start0 = sc.start
@@ -584,8 +584,8 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     # кто ищет: модель поиска и (по умолчанию) все участники — каждый по всем направлениям, своим поисковиком
     hunters = discover_hunters(c)
     scouting = any(m.name.startswith("поиск ") for m in hunters)
-    c.stage_search_engine["discover"] = sc.discover_engine
-    if sc.discover_engine == "native":
+    c.stage_search_engine["discover"] = "native" if scouting else sc.discover_engine
+    if scouting or sc.discover_engine == "native":
         pool = list(sc.discover_engines) or ["exa"]
         others = [m for m in hunters if m.name != FACT_CHECKER and not has_native_search(m.model)]
         for i, m in enumerate(others):
