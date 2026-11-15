@@ -179,6 +179,24 @@ class Candidates(BaseModel):
         return [x if isinstance(x, dict) else {"name": str(x)} for x in (v or []) if x]
 
 
+class ListSource(BaseModel):
+    """Готовый список компаний: участники выставки, реестр лицензий, члены ассоциации, рейтинг, каталог площадки."""
+
+    url: str
+    title: str = ""
+    kind: str = ""
+    size: str = ""
+
+    @field_validator("url", "title", "kind", "size", mode="before")
+    @classmethod
+    def _t(cls, v: Any) -> str:
+        return _txt(v)
+
+
+class ListSources(BaseModel):
+    lists: list[ListSource] = Field(default_factory=list)
+
+
 class NewAngles(BaseModel):
     angles: list[str] = Field(default_factory=list)
 
@@ -1184,6 +1202,39 @@ available), "local_name" (name in the local language, e.g. Chinese), "aliases", 
 exactly, in the page's language), "location", "why" (one line). Do not invent: only what the search returned.{ex}
 Return JSON: {{"items": [{{"name": "...", "local_name": "", "aliases": [], "website": "", "url": "", "quote": "",
 "location": "", "why": ""}}]}}"""
+
+
+def list_sources_prompt(frame: SelectionFrame, n: int) -> str:
+    return f"""Find READY-MADE LISTS of companies for this selection study — pages or PDF files that list many candidates
+at once, so a program can download them and read every name.
+
+Study: {frame.refined_question}
+A candidate is: {frame.object_kind}. Inclusion rules: {'; '.join(frame.inclusion) or '—'}.
+
+Good lists: exhibitor lists of the main trade shows (current or last edition), official registries and licence
+databases, member directories of industry associations, published industry rankings, category pages of B2B
+platforms, supplier lists. Prefer lists in the local language and the largest, most complete ones; the page must
+show company names itself (not just a search form). Up to {n} lists, the most useful first.
+Return JSON: {{"lists": [{{"url": "https://...", "title": "what the list is", "kind": "exhibitors | registry |
+association | ranking | b2b | other", "size": "about how many companies"}}]}}"""
+
+
+def list_read_prompt(frame: SelectionFrame, title: str, url: str, text: str, part: int, parts: int) -> str:
+    return f"""Below is part {part} of {parts} of a ready-made list of companies, downloaded by the program
+(lower-cased): {title or url} — {url}
+
+Study: {frame.refined_question}
+A candidate is: {frame.object_kind}. Inclusion rules: {'; '.join(frame.inclusion) or '—'}. Exclude: {'; '.join(frame.exclusion) or '—'}.
+
+Write out EVERY company in this text that may be a candidate (when unsure — include it, a later check will decide;
+skip only those clearly excluded or clearly of another kind). For each: "name" (as written; English if given),
+"local_name" (name in the local language if given), "website" (if the text shows it), "quote" (the list line or
+fragment with this company, copied VERBATIM, up to 30 words), "location" (if shown), "why" (a few words).
+Use ONLY this text — do not add companies from memory.
+
+{text}
+
+Return JSON: {{"items": [{{"name": "", "local_name": "", "website": "", "quote": "", "location": "", "why": ""}}]}}"""
 
 
 def angles_prompt(frame: SelectionFrame, used: list[str], found: int, share: float | None) -> str:

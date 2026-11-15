@@ -216,6 +216,12 @@ class SelectionConfig(BaseModel):
     search_reasoning: Literal["none", "low", "medium", "high", "default"] = "low"
     # Поиск кандидатов волнами: сначала половина направлений (не меньше 4); список уже почти полон — остальные не нужны
     discover_waves: bool = True
+    # Готовые списки компаний (участники выставок, реестры, ассоциации, рейтинги, каталоги площадок): модель поиска
+    # находит до lists ссылок, программа скачивает их сама (PDF, сканы, «трудные» сайты), дешёвая модель выписывает
+    # все подходящие компании — глубже обычного поиска (в списке выставки все её участники). 0 — не искать списки
+    lists: int = Field(default=6, ge=0, le=20)
+    list_chars: int = Field(default=150_000, ge=10_000, le=1_000_000)  # сколько знаков одного списка читать
+    list_reader: str = ""  # кто читает списки; пусто — самая дешёвая из разведчиков (Gemini Flash) или из участников
     # Второе прочтение страниц объекта: need — только признаки, влияющие на ранг и не подтверждённые дословной цитатой
     # из документа или с сайта компании; always — обе модели читают всё (как раньше, дороже)
     second_read: Literal["need", "always"] = "need"
@@ -434,7 +440,7 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
                      "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
-                     "search_results", "search_reasoning", "discover_waves", "second_read", "judges_on_demand", "skip_neutral_disputes",
+                     "search_results", "search_reasoning", "discover_waves", "lists", "list_chars", "list_reader", "second_read", "judges_on_demand", "skip_neutral_disputes",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",
                      "use_trust", "snapshots")

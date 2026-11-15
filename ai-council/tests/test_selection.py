@@ -133,7 +133,8 @@ def test_selection_find_end_to_end_demo():
     assert sel["stats"]["official"] > 0 and sel["stats"]["ruled"] == 1  # спорная ячейка решена советом
     plant3 = next(o["id"] for o in sel["objects"] if o["name"] == "Demo Plant 3")
     assert sel["table"][plant3]["A2"]["ruled"]
-    assert r.verdict.winner == "Demo Plant 7" and "### Ранг" in r.verdict.final_answer
+    # завод 10 есть только в демо-списке участников выставки — его нашли готовые списки, и он первый по мощности
+    assert r.verdict.winner == "Demo Plant 10" and "### Ранг" in r.verdict.final_answer
     assert sel["top_n"] == 3 and "«" in r.verdict.final_answer  # цитаты в карточках
     stages = {e["meta"]["stage"] for e in r.transcript if e.get("meta")} or {e.get("stage") for e in r.transcript}
     assert {"frame", "discover", "screen", "sources", "fill", "dispute", "conclusion"} <= stages
@@ -341,6 +342,7 @@ def test_discover_uses_own_search_limits_and_short_reasoning(tmp_path):
     from council.modes import selection as SM
     from council.session import Council
     cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "search_uses": 8, "search_results": 10,
+                                        "selection": {"lists": 0},
                                         "members": [{"name": n, "model": f"m/{n}", "reasoning_effort": "high"} for n in "abcd"]})
     seen = []
     client = MockClient(delay=0)
@@ -444,7 +446,7 @@ def test_discover_waves_stop_when_list_is_full(tmp_path):
     from council.session import Council
 
     def run(same: bool) -> set[str]:
-        cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "selection": {"rounds": 1},
+        cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "selection": {"rounds": 1, "lists": 0},
                                             "members": [{"name": n, "model": f"m/{n}"} for n in "abcd"]})
         c = Council(cfg, MockClient(delay=0))
         seen: set[str] = set()
@@ -499,7 +501,7 @@ def test_scouts_search_every_angle(tmp_path):
     from council.mock import MockClient
     from council.modes import selection as SM
     from council.session import Council
-    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "selection": {"rounds": 1, "discover_waves": False},
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "selection": {"rounds": 1, "discover_waves": False, "lists": 0},
                                         "members": [{"name": n, "model": f"m/{n}"} for n in "abc"]})
     c = Council(cfg, MockClient(delay=0))
     c.catalog = CATALOG
@@ -571,7 +573,7 @@ def test_failing_hunter_is_skipped_after_two_strikes(tmp_path):
     from council.modes import selection as SM
     from council.session import Council
     cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path),
-                                        "selection": {"rounds": 1, "discover_waves": False, "discover_by": "all", "discover_models": 0},
+                                        "selection": {"rounds": 1, "discover_waves": False, "discover_by": "all", "discover_models": 0, "lists": 0},
                                         "members": [{"name": n, "model": f"m/{n}"} for n in "abc"]})
     c = Council(cfg, MockClient(delay=0))
     calls = []
@@ -588,3 +590,20 @@ def test_failing_hunter_is_skipped_after_two_strikes(tmp_path):
     asyncio.run(SM.discover(c, fr, []))
     assert calls.count("b") == 2          # два сбоя — дальше «b» не спрашивают
     assert calls.count("a") == 8 and calls.count("c") == 8
+
+
+def test_ready_made_lists_add_candidates_and_count_for_completeness():
+    """Готовые списки: модель поиска даёт ссылку, программа скачивает, читатель выписывает компании; список —
+    независимый источник находок (полнота), цитата — строка списка."""
+    import asyncio
+    from council.modes import selection as SM
+    c = _council("find", rounds=1, discover_waves=False)
+    fr = SM.S.SelectionFrame(refined_question="q", object_kind="завод", angles=["демо: участники выставки"])
+    listed, n = asyncio.run(SM.harvest_lists(c, fr, SM.discover_hunters(c)))
+    names = {x.name for _, x in listed}
+    assert n == 1 and "Demo Plant 10" in names and len(names) == 10
+    label, cand = listed[0]
+    assert label.startswith("список: Демо-выставка") and cand.url == "https://expo.example.com/exhibitors"
+    assert "stand a" in cand.quote
+    c2 = _council("find", lists=0)
+    assert asyncio.run(SM.harvest_lists(c2, fr, SM.discover_hunters(c2))) == ([], 0)

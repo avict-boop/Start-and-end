@@ -42,6 +42,10 @@ function selEvent(s, ev) {
     case "candidates_found":
       logAdd(s, `${ev.by ? `${memberName(s, ev.by)}, ` : ""}«${shortTitle(ev.angle, 60)}»: ${n(ev.count, "кандидат", "кандидата", "кандидатов")}`);
       return true;
+    case "lists_read":
+      logAdd(s, ev.opened ? `Готовые списки компаний: найдено ${ev.lists}, открылось ${ev.opened}, кандидатов из них ${ev.found}`
+        : `Готовые списки компаний: найдено ${ev.lists}, ни один не открылся — ищем обычным поиском`, ev.opened ? "k-ok" : "k-warn");
+      return true;
     case "candidates": {
       const c = ev.completeness || {};
       logAdd(s, `Найдено ${n(ev.count, "кандидат", "кандидата", "кандидатов")}${ev.merged ? `, склеено дублей: ${ev.merged}` : ""}`

@@ -311,6 +311,12 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
         out.append(MemberEstimate(m.name, m.model, calls, inp, outp,
                                   (inp * p.prompt + outp * p.completion + fees.get(m.name, 0.0)) if p else None))
     search_model = sc.search_model or cfg.fact_check.model
+    if start != "check" and sc.lists:  # готовые списки: читает дешёвая модель, кусками по 30 тыс. знаков (≈ 3 на список)
+        reader_m = min(members, key=cheap_key) if members else None
+        rp = price_of(reader_m.model) if reader_m else None
+        chunks = sc.lists * min(3, -(-sc.list_chars // 30_000))
+        out.append(MemberEstimate("чтение списков", reader_m.model if reader_m else "", chunks, chunks * 11_000,
+                                  chunks * 3000, (chunks * (11_000 * rp.prompt + 3000 * rp.completion)) if rp else None))
     if start != "check" and sc.discover_by == "scouts":  # разведчики: младшие модели компаний и вторая Perplexity
         from .scouts import perplexity_pair, pick_scouts, scout_name
         pseudo = [{"id": k, "pricing": {"prompt": v.prompt, "completion": v.completion}} for k, v in pricing.items()]

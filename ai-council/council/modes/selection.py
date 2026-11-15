@@ -70,6 +70,94 @@ def search_label(c: Council) -> str:
     return f"поиск · {model_title(c.cfg.selection.search_model or c.cfg.fact_check.model)}"
 
 
+LIST_CHUNK = 30_000  # знаков списка в одном запросе чтения
+
+
+def list_reader(c: Council, hunters: list[MemberConfig]) -> MemberConfig:
+    """Кто читает готовые списки: из настроек; иначе самый дешёвый разведчик (не Perplexity — ему нужен поиск, а
+    здесь текст уже скачан); иначе самый дешёвый участник."""
+    sc = c.cfg.selection
+    if sc.list_reader:
+        return MemberConfig(name="чтение списков", model=sc.list_reader, max_tokens=12000, temperature=0.1,
+                            reasoning_effort="low")
+    price = getattr(c, "pricing", None) or {}
+
+    def cost(m: MemberConfig) -> float:
+        p = price.get(m.model)
+        return (p.prompt * 4 + p.completion) if p else 1e9
+
+    pool = [m for m in hunters if m.name.startswith("поиск ") and not m.model.startswith("perplexity/")]
+    pool = sorted(pool, key=cost) or pick_fillers(c)
+    m = pool[0]
+    return m.model_copy(update={"max_tokens": max(m.max_tokens or 0, 12000), "reasoning_effort": "low"})
+
+
+async def harvest_lists(c: Council, frame: S.SelectionFrame, hunters: list[MemberConfig]
+                        ) -> tuple[list[tuple[str, S.Candidate]], int]:
+    """Готовые списки компаний: модель поиска находит ссылки, программа скачивает, дешёвая модель выписывает всех
+    подходящих. Возвращает (находки «список · читатель», сколько списков прочитано)."""
+    sc = c.cfg.selection
+    if not sc.lists:
+        return [], 0
+    try:
+        ls = await c._ask(searcher(c), "lists", S.list_sources_prompt(frame, sc.lists), S.ListSources,
+                          meta=META, web_search=True)
+    except (ProviderError, InvalidResponse) as e:
+        if not _soft(e):
+            raise
+        return [], 0
+    items = [x for x in ls.lists if x.url.startswith(("http://", "https://"))][:sc.lists]
+    if not items:
+        return [], 0
+    pages = await fetch_pages(c, [x.url for x in items])
+    reader = list_reader(c, hunters)
+    jobs, meta_of = [], []
+    for x in items:
+        text = (pages.get(x.url) or {}).get("text") or ""
+        if len(text) < 300:
+            continue
+        text = text[:sc.list_chars]
+        parts = [text[i:i + LIST_CHUNK] for i in range(0, len(text), LIST_CHUNK)]
+        label = f"список: {(x.title or S.site_of(x.url) or x.url)[:80]}"
+        for k, part in enumerate(parts, 1):
+            jobs.append((label, S.list_read_prompt(frame, x.title, x.url, part, k, len(parts))))
+            meta_of.append((label, x.url))
+    if not jobs:
+        c._emit("lists_read", lists=len(items), opened=0, found=0)
+        return [], 0
+    prog = {"done": 0, "total": len(jobs), "found": 0, "round": 0}
+    c._emit("progress", stage="discover", unit="частей списков", **prog)
+
+    async def read(label: str, prompt: str) -> Any:
+        try:
+            return await c._ask(reader, "list_read", prompt, S.Candidates, meta={**META, "angle": label})
+        finally:
+            prog["done"] += 1
+            c._emit("progress", stage="discover", unit="частей списков", **prog)
+
+    got = await asyncio.gather(*(read(lb, p) for lb, p in jobs), return_exceptions=True)
+    out: list[tuple[str, S.Candidate]] = []
+    per: dict[str, int] = {}
+    for (label, url), r in zip(meta_of, got):
+        if isinstance(r, (BudgetExceeded, OutOfCredits)):
+            raise r
+        if isinstance(r, BaseException):
+            if not _soft(r):
+                raise r
+            continue
+        for cand in r.items:
+            if not cand.url:
+                cand.url = url
+            out.append((f"{label}{S.BY}{reader.name}", cand))
+            per[label] = per.get(label, 0) + 1
+    for label, n in per.items():
+        c._emit("candidates_found", angle=label, by=reader.name, count=n)
+    c._emit("lists_read", lists=len(items), opened=len({u for _, u in meta_of}), found=len(S.merge_candidates(out)))
+    log.info("%sготовые списки: найдено %d, открыто %d, кандидатов %d", c._tag, len(items),
+             len({u for _, u in meta_of}), len(S.merge_candidates(out)))
+    return out, len(per)
+
+
 def discover_hunters(c: Council) -> list[MemberConfig]:
     """Кто ищет кандидатов. scouts — модель поиска, вторая модель Perplexity и младшие модели Google, OpenAI,
     Anthropic, xAI со своими поисковиками (каждый — по всем направлениям); all — модель поиска и участники совета;
@@ -509,6 +597,13 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     pairs = first_pairs = 0  # независимых поисков (направление · модель): по ним считается полнота
     strikes: dict[str, int] = {}  # сбоев подряд у модели на этом этапе
     gates: dict[str, asyncio.Semaphore] = {}
+    # готовые списки компаний — до поиска по направлениям: найденное в них идёт в общий список как независимые источники
+    listed, n_lists = await harvest_lists(c, frame, hunters)
+    if listed:
+        found.extend(listed)
+        frame_angles.extend(dict.fromkeys(x[0].split(S.BY)[0] for x in listed))
+        pairs += n_lists
+        first_pairs += n_lists
     for rnd in range(sc.rounds + len(waves) - 1):
         if rnd:
             comp = S.completeness(S.merge_candidates(found), pairs)
@@ -612,12 +707,14 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
         if all(a in frame_angles for a in angles):
             first_pairs += len(plan)
         rounds_meta.append({"angles": angles, "found": len(S.merge_candidates(found)), "searches": len(plan)})
-    first_angles = {a for a in used if a in frame_angles} or set(used)
+    first_angles = set(frame_angles) or set(used)  # направления рамки и готовые списки (без новых от председателя)
     first = [x for x in found if x[0].split(S.BY)[0] in first_angles]
     comp = S.completeness(S.merge_candidates(first), first_pairs)
     entities = S.merge_candidates(found, seeds)
     for e in entities:  # какие модели нашли кандидата
-        e["models"] = sorted({a.split(S.BY)[-1] for a in e["angles"] if S.BY in a})
+        # кто нашёл: модели поиска по направлениям; найденное в готовом списке — «список: …» (а не читавшая модель)
+        e["models"] = sorted({a.split(S.BY)[0] if a.startswith("список: ") else a.split(S.BY)[-1]
+                              for a in e["angles"] if S.BY in a})
     entities.sort(key=lambda e: (not e["seed"], -len(e["angles"]), e["name"].lower()))
     for i, e in enumerate(entities, 1):
         e["id"] = f"O{i}"

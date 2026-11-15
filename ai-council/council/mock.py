@@ -243,6 +243,9 @@ def _research(stage: str, who: str, meta: dict[str, Any]) -> dict[str, Any]:
 def demo_page(url: str) -> str:
     """Текст демо-страницы завода N (адрес plantN.example.com): на нём лежат цитаты, которые «находят» модели."""
     import re as _re
+    if "expo.example.com" in url:  # демо-список участников выставки: заводы 1–10 и один дистрибьютор
+        return " ".join(f"stand a{i:02d} demo plant {i} co., ltd. — softgel contract manufacturing (oem/odm), china"
+                        for i in range(1, 11)) + " stand b01 demo trading co. — distributor"
     m = _re.search(r"plant(\d+)", url)
     if not m:
         return ""
@@ -281,6 +284,13 @@ def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[st
                 "angles": ["демо: участники выставки", "демо: биржевые отчёты", "демо: реестр сертификатов"],
                 "objects": heuristic_objects(text.split("Objects named in the task")[-1]) if "Objects named in the task"
                 in text else [], "shortlist": 0, "top_n": 3}
+    if stage == "lists":
+        return {"lists": [{"url": "https://expo.example.com/exhibitors", "title": "Демо-выставка: участники",
+                           "kind": "exhibitors", "size": "11"}]}
+    if stage == "list_read":
+        ids = sorted({int(x) for x in _re.findall(r"demo plant (\d+)", text)})
+        return {"items": [{"name": f"Demo Plant {i}", "quote": f"stand a{i:02d} demo plant {i} co., ltd.",
+                           "location": "Китай", "why": "участник выставки, OEM"} for i in ids]}
     if stage == "angles":
         return {"angles": ["демо: поиск на китайском", "демо: отраслевой рейтинг"]}
     if stage == "discover":
