@@ -566,3 +566,29 @@ def test_silent_cheap_provider_switches_to_fastest(_fresh_features):
     assert [b["provider"]["sort"] for b in seen] == ["price", "throughput"]
     assert seen[1]["provider"]["quantizations"]  # быстрый — тоже только полноточный
     assert any(e.get("phase") == "retry" and "самого быстрого" in (e.get("detail") or "") for e in events)
+
+
+def test_provider_choice_and_responder_are_reported(_fresh_features, caplog):
+    """В журнал и результат: как выбран поставщик, кто ответил, через сколько начал, переключения."""
+    import logging
+    calls = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        calls.append(body)
+        if body["provider"]["sort"] == "price":
+            return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                  content=(b": OPENROUTER PROCESSING\\n\\n" * 3))
+        return sse({"provider": "FastCo", "choices": [{"delta": {"content": '{"a":1}'}, "finish_reason": "stop"}]})
+
+    c = make(handler)
+    c.cheap_open, c.cheap_wait = True, 0.0001
+    events = []
+    with caplog.at_level(logging.INFO, logger="council.client"):
+        comp = asyncio.run(c.complete("z-ai/glm-x", [], temperature=0, max_tokens=100, on_progress=events.append))
+    assert comp.provider == "FastCo" and comp.provider_choice.startswith("самый быстрый")
+    assert comp.first_s is not None and comp.provider_log and "самый быстрый" in comp.provider_log[0]
+    sent = [e for e in events if e.get("phase") == "sent"]
+    assert sent[0]["choice"].startswith("самый дешёвый") and sent[-1]["choice"].startswith("самый быстрый")
+    text = caplog.text
+    assert "поставщик — самый дешёвый" in text and "ответил поставщик FastCo" in text and "переключения" in text

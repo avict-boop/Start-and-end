@@ -592,10 +592,12 @@ class Council:
                 self._thought(name, stage, call_n, None)
                 raise
             self._account(member, comp)
-            log.info("%s← %s · %s: %s, вход %d (кэш %d), выход %d (рассужд. %d), $%.5f, %.1f с, finish=%s, %d зн., модель %s",
-                     self._tag, name, stage, comp.gen_id or "без номера", comp.prompt_tokens, comp.cached_tokens,
-                     comp.completion_tokens, comp.reasoning_tokens, comp.cost, time.monotonic() - started,
-                     comp.finish_reason, len(comp.text), comp.model or member.model)
+            log.info("%s← %s · %s: %s, вход %d (кэш %d), выход %d (рассужд. %d), $%.5f, %.1f с, finish=%s, %d зн., модель %s, "
+                     "поставщик %s (выбор: %s)%s", self._tag, name, stage, comp.gen_id or "без номера", comp.prompt_tokens,
+                     comp.cached_tokens, comp.completion_tokens, comp.reasoning_tokens, comp.cost,
+                     time.monotonic() - started, comp.finish_reason, len(comp.text), comp.model or member.model,
+                     getattr(comp, "provider", "") or "—", getattr(comp, "provider_choice", "") or "—",
+                     f"; {'; '.join(comp.provider_log)}" if getattr(comp, "provider_log", None) else "")
             self._call(name, stage, "checking", started, tokens=comp.completion_tokens)
             max_tokens = max(max_tokens, comp.max_tokens or 0)  # клиент мог уже увеличить лимит
             text = acc + comp.text if acc else comp.text
@@ -705,8 +707,17 @@ class Council:
                 obj = obj.model_copy(update={"search_citations": list(getattr(comp, "citations", []) or [])})
             entry["parsed"] = obj.model_dump()
             entry["gen_id"] = comp.gen_id
+            if getattr(comp, "provider", ""):  # кто ответил и как выбран — в стенограмму (диагностика)
+                entry["provider"] = comp.provider
+            if getattr(comp, "provider_choice", ""):
+                entry["provider_choice"] = comp.provider_choice
+            if getattr(comp, "first_s", None) is not None:
+                entry["first_s"] = comp.first_s
+            if getattr(comp, "provider_log", None):
+                entry["provider_log"] = comp.provider_log
             self._log(entry)
-            self._call(name, stage, "done", started, cost=round(self.stats[name].cost, 6))
+            self._call(name, stage, "done", started, cost=round(self.stats[name].cost, 6),
+                       provider=getattr(comp, "provider", "") or None, first_s=getattr(comp, "first_s", None))
             self._thought(name, stage, call_n, None)
             return obj
         self._call(name, stage, "failed", started, detail=f"некорректный ответ: {error}"[:300])

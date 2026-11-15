@@ -173,6 +173,10 @@ def events_text(events: list[dict[str, Any]]) -> str:
         st = STAGE_RU.get(e.get("stage", ""), e.get("stage", ""))
         if typ == "call":
             msg = f"{e.get('phase', '')}" + (f" — {e.get('detail')}" if e.get("detail") else "")
+            if e.get("choice"):  # как выбирался поставщик для попытки
+                msg += f" · поставщик: {e['choice']}"
+            if e.get("provider"):  # кто ответил и через сколько начал отвечать
+                msg += f" · ответил {e['provider']}" + (f", первое слово через {e['first_s']} с" if e.get("first_s") is not None else "")
             if e.get("phase") in ("thinking", "writing") and not e.get("detail"):
                 continue  # частые обновления «думает/пишет» — без пользы для разбора
         elif typ == "stage":

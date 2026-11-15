@@ -1536,6 +1536,7 @@ function apply(s, ev) {
       c.detail = ev.detail || (ev.phase === "retry" ? c.detail : "");
       if (ev.wait) c.wait = ev.wait;
       if (ev.cost != null) c.cost = ev.cost;
+      if (ev.provider) c.provider = ev.provider;  // кто ответил (поставщик OpenRouter)
       if (["done", "failed"].includes(ev.phase)) c.final = ev.elapsed;
       s.calls[ev.member] = c;
       const who = `${memberName(s, ev.member)} (${STAGE_NAME[ev.stage] || ev.stage})`;
@@ -1980,7 +1981,7 @@ function phaseText(c) {
   if (c.phase === "sent" && c.attempt > 1) t += ` (попытка ${c.attempt})`;
   if (c.phase === "retry") t = `повтор: ${c.detail || "временная ошибка"}`;
   if (c.phase === "queued" && c.detail) t = `ждёт: ${c.detail}`;
-  if (c.phase === "done") t = `готово${c.cost != null ? ` · ${money(c.cost)}` : ""}`;
+  if (c.phase === "done") t = `готово${c.cost != null ? ` · ${money(c.cost)}` : ""}${c.provider ? ` · ${c.provider}` : ""}`;
   if (c.phase === "failed") t = `сбой: ${c.detail || ""}`;
   return t;
 }

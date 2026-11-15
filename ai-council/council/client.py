@@ -246,6 +246,22 @@ class Completion:
     gen_id: str = ""  # номер ответа у OpenRouter (gen-…): по нему запрос находится в журнале OpenRouter
     reasoning_tokens: int = 0     # из выходных токенов — скрытые рассуждения модели (если провайдер сообщает)
     reasoning_off: bool = False   # рассуждения пришлось выключить: модель тратила на них весь лимит
+    provider: str = ""            # какой поставщик OpenRouter ответил (Fireworks, Together, Google Vertex…)
+    provider_choice: str = ""     # как выбирался: «дешёвый», «быстрый (дешёвый молчал)», «как в настройках: …»
+    first_s: float | None = None  # через сколько секунд пришло первое слово или рассуждение
+    provider_log: list[str] = field(default_factory=list)  # переключения и смены поставщика по попыткам
+
+
+def provider_choice(payload: dict[str, Any]) -> str:
+    """Как выбирался поставщик для этой попытки — словами для журнала."""
+    p = payload.get("provider") or {}
+    sort = p.get("sort")
+    s = {"price": "самый дешёвый", "throughput": "самый быстрый", "latency": "быстрее начинает"}.get(sort, "как решит OpenRouter")
+    if p.get("quantizations"):
+        s += ", только полноточные"
+    if p.get("ignore"):
+        s += f", кроме {', '.join(p['ignore'])}"
+    return s
 
 
 class LLMClient(Protocol):
@@ -396,6 +412,7 @@ class OpenRouterClient:
         credit_waits = 0
         empty_runs = 0  # ответы, целиком ушедшие в скрытые рассуждения
         slow_runs = 0  # попытки, на которых поставщик завис (слишком долго / замолчал)
+        switches: list[str] = []  # смены поставщика по ходу запроса — в журнал и стенограмму
         call_start = time.monotonic()
         while attempt < self.max_retries + 1:
             attempt += 1
@@ -409,7 +426,8 @@ class OpenRouterClient:
                 if wait:
                     await asyncio.sleep(wait)
             wait = self.retry_base_delay * (min(2**attempt, 30) + random.random())
-            report({"phase": "sent", "attempt": attempt, "max_tokens": payload["max_tokens"]})
+            report({"phase": "sent", "attempt": attempt, "max_tokens": payload["max_tokens"], "choice": provider_choice(payload)})
+            log.info("→ %s попытка %d: поставщик — %s", model, attempt, provider_choice(payload))
             log.debug("HTTP → %s попытка %d: max_tokens=%s, reasoning=%s, tools=%s, plugins=%s, response_format=%s, "
                       "сообщений %d, ≈%d зн.", model, attempt, payload["max_tokens"], payload.get("reasoning"),
                       [t["type"] for t in payload.get("tools") or []], [p["id"] for p in payload.get("plugins") or []],
@@ -428,6 +446,9 @@ class OpenRouterClient:
                 log.warning("HTTP ✗ %s попытка %d: %s (повтор)", model, attempt, e)
                 if e.cheap_slow and (payload.get("provider") or {}).get("sort") == "price":
                     # дешёвый поставщик молчит — сразу к самому быстрому (попыткой не считается: это не сбой)
+                    switches.append(f"дешёвый ({e.provider or 'не назвался'}) молчал {int(self.cheap_wait)}+ с → самый быстрый")
+                    log.warning("поставщик: %s — дешёвый (%s) не начал отвечать вовремя, переключаюсь на самого быстрого",
+                                model, e.provider or "не назвался")
                     prov = {k: v for k, v in (payload.get("provider") or {}).items() if k != "sort"}
                     payload["provider"] = {**prov, "sort": "throughput"}
                     report({"phase": "retry", "attempt": attempt, "wait": 0, "detail": last_error})
@@ -441,6 +462,7 @@ class OpenRouterClient:
                                       "(«Повторить не ответивших» спросит её снова)")
                         break
                     if e.provider:  # следующая попытка — у другого поставщика той же модели
+                        switches.append(f"{e.provider} завис → другой поставщик")
                         prov = dict(payload.get("provider") or {})
                         prov["ignore"] = sorted(set(prov.get("ignore") or []) | {e.provider})
                         payload["provider"] = prov
@@ -474,6 +496,10 @@ class OpenRouterClient:
                       model, attempt, res.get("id") or "без номера", res["prompt_tokens"], res.get("cached_tokens", 0),
                       res["completion_tokens"], res.get("reasoning_tokens", 0), res["cost"], res["finish"],
                       len(res["text"]))
+            log.info("← %s попытка %d: ответил поставщик %s (выбор: %s), начал отвечать через %s, $%.5f%s",
+                     model, attempt, res.get("provider") or "не назвался", provider_choice(payload),
+                     f"{res['first_s']} с" if res.get("first_s") is not None else "—", res["cost"],
+                     f"; переключения: {'; '.join(switches)}" if switches else "")
             spent.prompt_tokens += res["prompt_tokens"]
             spent.cached_tokens += res.get("cached_tokens", 0)
             spent.completion_tokens += res["completion_tokens"]
@@ -528,6 +554,10 @@ class OpenRouterClient:
                 reasoning_tokens=spent.reasoning_tokens,
                 reasoning_off=payload.get("reasoning") == REASONING_OFF,
                 gen_id=res.get("id", ""),
+                provider=res.get("provider", ""),
+                provider_choice=provider_choice(payload),
+                first_s=res.get("first_s"),
+                provider_log=list(switches),
             )
         raise ProviderError(
             f"{model}: не удалось получить ответ после {self.max_retries + 1} попыток: {last_error}",
@@ -588,6 +618,7 @@ class OpenRouterClient:
             raise _Retryable("пустой список choices")
         choice = choices[0]
         return {
+            "provider": str(data.get("provider") or ""),
             "citations": _citations(data, choice.get("message") or {}),
             "text": _as_text((choice.get("message") or {}).get("content")),
             "finish": choice.get("finish_reason") or choice.get("native_finish_reason"),
@@ -632,6 +663,7 @@ class OpenRouterClient:
         report({"phase": "thinking", "chars": 0})
         moved = time.monotonic()  # когда в последний раз пришёл новый текст или рассуждения
         seen = 0
+        first_at = 0.0
         async for line in resp.aiter_lines():
             now = time.monotonic()
             # одна попытка: обычно до 9 минут, с поиском — до 18 (много поисков и чтение страниц)
@@ -643,6 +675,8 @@ class OpenRouterClient:
                 raise _Retryable(f"дешёвый поставщик не начал отвечать за {int(first)} с — переключаюсь на самого "
                                  "быстрого", cheap_slow=True, provider=provider)
             if chars + reasoning_chars > seen:
+                if not seen:
+                    first_at = now  # первое слово или рассуждение — поставщик начал отвечать
                 seen, moved = chars + reasoning_chars, now
             elif stall and seen and now - moved > STALL_S:
                 # только если модель уже начала присылать текст или рассуждения и замолчала. Модели OpenAI
@@ -693,6 +727,8 @@ class OpenRouterClient:
         report({"phase": phase, "chars": chars, "reasoning_chars": reasoning_chars,  # итог потока
                 "thought": "".join(thought), "thought_hidden": hidden})
         return {
+            "provider": provider,
+            "first_s": round(first_at - started, 1) if first_at else None,
             "citations": list(dict.fromkeys(cites)),
             "text": "".join(text),
             "finish": finish,
