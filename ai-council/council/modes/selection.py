@@ -14,6 +14,7 @@ import asyncio
 import gzip
 import json
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -225,11 +226,13 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         for e in entities:
             r = screened.get(e["id"]) or {"result": "unclear", "reason": "отсев не дал ответа"}
             e["screen"] = r
+        # ваш список отсев не выбрасывает: вы сами назвали эти объекты — они идут на подробную проверку с пометкой
         excluded = [{"id": e["id"], "name": e["name"], "reason": e["screen"]["reason"]}
-                    for e in entities if e["screen"]["result"] == "fail"]
+                    for e in entities if e["screen"]["result"] == "fail" and not e.get("seed")]
         passed = [e for e in entities if e["screen"]["result"] == "pass"]
         unclear = [e for e in entities if e["screen"]["result"] == "unclear"]
-        keep = passed + unclear
+        seeds_failed = [e for e in entities if e["screen"]["result"] == "fail" and e.get("seed")]
+        keep = passed + unclear + seeds_failed
     else:
         keep = list(entities)
     limit = sc.shortlist or frame.shortlist or sc.max_deep
@@ -599,7 +602,7 @@ async def resolve_disputes(c: Council, frame: S.SelectionFrame, attrs: list[S.At
             for it in r.items:
                 a = S.match_attr(it.key, [x for x, _ in ds])
                 if a:
-                    votes.setdefault(a.id, {})[name] = (it.choice.strip().lower()[:4], it.reason)
+                    votes.setdefault(a.id, {})[name] = (_choice(it.choice), it.reason)
         for a, opts in ds:
             v = votes.get(a.id) or {}
             tally: dict[str, int] = {}
@@ -609,7 +612,7 @@ async def resolve_disputes(c: Council, frame: S.SelectionFrame, attrs: list[S.At
             top = [k for k, t in tally.items() if t == best]
             choice = (v.get(chair, ("",))[0] if len(top) > 1 and v.get(chair, ("",))[0] in top else
                       (top[0] if top else "none"))
-            idx = ord(choice[0]) - 97 if choice and choice[0].isalpha() and choice not in ("none", "non") else -1
+            idx = ord(choice) - 97 if len(choice) == 1 else -1
             cell: dict[str, Any]
             if 0 <= idx < len(opts):
                 o = opts[idx]
@@ -627,6 +630,15 @@ async def resolve_disputes(c: Council, frame: S.SelectionFrame, attrs: list[S.At
         if isinstance(r, BaseException):
             raise r
     c._emit("disputes_done", cells=n)
+
+
+def _choice(raw: str) -> str:
+    """Выбор судьи: буква варианта («a», «(b)», «Option C», «вариант c») или «none»."""
+    t = (raw or "").strip().lower()
+    if not t or re.match(r"^\W*(none|no option|нет|ни один|neither)", t):
+        return "none"
+    m = re.match(r"^\W*(?:option|вариант)?\s*\(?([a-z])\)?(?![a-z])", t)
+    return m.group(1) if m else "none"
 
 
 def sources_used(c: Council, table: dict[str, dict[str, Any]], rows: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:

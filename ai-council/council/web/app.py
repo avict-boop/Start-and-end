@@ -1145,7 +1145,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         return jsonable(out)
 
     @app.get("/api/sessions/{sid}/selection.xlsx")
-    async def selection_xlsx(sid: str, weights: str = "") -> Response:
+    async def selection_xlsx(sid: str, weights: str = "", trust: str = "") -> Response:
         """Таблица отбора в Excel: ранг, полная таблица со статусами, карточки (источник и цитата), исключённые."""
         from ..reports.xlsx import selection_xlsx as build
         try:
@@ -1161,7 +1161,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 w[k] = float(v)
             except ValueError:
                 continue
-        data = await asyncio.to_thread(build, d, w or None)
+        data = await asyncio.to_thread(build, d, w or None, {"1": True, "0": False}.get(trust))
         from urllib.parse import quote
         name = f"{sid[:80]}.xlsx"
         ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "selection.xlsx"

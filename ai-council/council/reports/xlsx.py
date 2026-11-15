@@ -9,7 +9,7 @@ from .. import selection as S
 FILL = {"document": "C6EFCE", "official": "DDEBF7", "secondary": "FFF2CC", "unverified": "FCE4D6", "none": "EDEDED"}
 
 
-def selection_xlsx(d: dict[str, Any], weights: dict[str, float] | None = None) -> bytes:
+def selection_xlsx(d: dict[str, Any], weights: dict[str, float] | None = None, use_trust: bool | None = None) -> bytes:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -20,7 +20,7 @@ def selection_xlsx(d: dict[str, Any], weights: dict[str, float] | None = None) -
     attrs = [S.Attribute.model_validate(a) for a in sel["attributes"]]
     if weights:
         attrs = [a.model_copy(update={"weight": weights.get(a.id, a.weight)}) for a in attrs]
-    rr = rerank(sel, weights)
+    rr = rerank(sel, weights, use_trust)
     names = rr["names"]
     objs = {o["id"]: o for o in sel["objects"]}
     table = sel["table"]

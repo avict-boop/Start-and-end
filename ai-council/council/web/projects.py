@@ -54,6 +54,15 @@ def register(app: FastAPI, *, base_config: Callable, runs_dir: Callable, archive
     def rdir():
         return runs_dir(base_config())
 
+    locks: dict[str, asyncio.Lock] = {}
+
+    def lock(pid: str) -> asyncio.Lock:
+        """Правки одного проекта — по очереди: два ответа заводов подряд не должны затереть друг друга."""
+        return locks.setdefault(pid, asyncio.Lock())
+
+    async def show(p: dict[str, Any]) -> dict[str, Any]:
+        return await asyncio.to_thread(view, p)  # читает архив перепроверки — не в основном потоке сайта
+
     def get(pid: str) -> dict[str, Any]:
         try:
             return P.load(rdir(), pid)
@@ -122,10 +131,14 @@ def register(app: FastAPI, *, base_config: Callable, runs_dir: Callable, archive
 
     @app.get("/api/projects/{pid}")
     async def project_get(pid: str) -> dict[str, Any]:
-        return view(await asyncio.to_thread(get, pid))
+        return await show(await asyncio.to_thread(get, pid))
 
     @app.put("/api/projects/{pid}")
     async def project_edit(pid: str, body: ProjectEdit) -> dict[str, Any]:
+        async with lock(pid):
+            return await _edit(pid, body)
+
+    async def _edit(pid: str, body: ProjectEdit) -> dict[str, Any]:
         p = await asyncio.to_thread(get, pid)
         for k in ("title", "company", "skus", "documents_required", "rates", "base_currency"):
             v = getattr(body, k)
@@ -149,7 +162,7 @@ def register(app: FastAPI, *, base_config: Callable, runs_dir: Callable, archive
         if body.remove:
             p["suppliers"] = [s for s in p["suppliers"] if s["id"] not in set(body.remove)]
         await asyncio.to_thread(P.save, rdir(), p)
-        return view(p)
+        return await show(p)
 
     @app.delete("/api/projects/{pid}")
     async def project_delete(pid: str) -> dict[str, Any]:
@@ -162,10 +175,12 @@ def register(app: FastAPI, *, base_config: Callable, runs_dir: Callable, archive
         """Письмо-запрос цен (английский и китайский) по SKU и списку документов проекта — одним запросом модели."""
         p = await asyncio.to_thread(get, pid)
         letters, cost = await ask(P.rfq_prompt(p, p.get("company", "")), P.RfqLetters, "rfq", body.mock)
-        p["letters"] = letters.model_dump()
-        p["spent"] = round(float(p.get("spent") or 0) + cost, 4)
-        await asyncio.to_thread(P.save, rdir(), p)
-        return view(p)
+        async with lock(pid):  # пока модель писала, проект могли править — сохраняем поверх свежей версии
+            p = await asyncio.to_thread(get, pid)
+            p["letters"] = letters.model_dump()
+            p["spent"] = round(float(p.get("spent") or 0) + cost, 4)
+            await asyncio.to_thread(P.save, rdir(), p)
+        return await show(p)
 
     @app.post("/api/projects/{pid}/suppliers/{sup}/reply")
     async def project_reply(pid: str, sup: str, body: ReplyBody) -> dict[str, Any]:
@@ -183,10 +198,15 @@ def register(app: FastAPI, *, base_config: Callable, runs_dir: Callable, archive
             raise HTTPException(400, "вставьте текст ответа или приложите файл")
         parsed, cost = await ask(P.reply_prompt(p, s, text or "(see images)"), P.ReplyParsed, "reply", body.mock,
                                  images=images)
-        P.add_reply(p, sup, parsed, source=", ".join(a.name for a in atts) or "текст письма", text=text)
-        p["spent"] = round(float(p.get("spent") or 0) + cost, 4)
-        await asyncio.to_thread(P.save, rdir(), p)
-        return view(p)
+        async with lock(pid):  # ответы двух заводов разбираются одновременно — дописываем каждый в свежую версию
+            p = await asyncio.to_thread(get, pid)
+            try:
+                P.add_reply(p, sup, parsed, source=", ".join(a.name for a in atts) or "текст письма", text=text)
+            except KeyError as e:
+                raise HTTPException(404, "поставщика уже убрали из проекта") from e
+            p["spent"] = round(float(p.get("spent") or 0) + cost, 4)
+            await asyncio.to_thread(P.save, rdir(), p)
+        return await show(p)
 
     @app.post("/api/projects/{pid}/recheck")
     async def project_recheck(pid: str, body: RfqBody) -> dict[str, Any]:
@@ -200,8 +220,10 @@ def register(app: FastAPI, *, base_config: Callable, runs_dir: Callable, archive
                          members=req0.get("members") or None, chair=req0.get("chair") or None,
                          selection={"start": "check", "review": []}, budget=req0.get("budget") or None)
         sid = await create_session(req)
-        p.setdefault("rechecks", []).append({"session": sid, "at": P.now()})
-        await asyncio.to_thread(P.save, rdir(), p)
+        async with lock(pid):
+            p = await asyncio.to_thread(get, pid)
+            p.setdefault("rechecks", []).append({"session": sid, "at": P.now()})
+            await asyncio.to_thread(P.save, rdir(), p)
         return {"session": sid}
 
     async def alerts_loop() -> None:
@@ -223,8 +245,10 @@ def register(app: FastAPI, *, base_config: Callable, runs_dir: Callable, archive
                     async with httpx.AsyncClient(timeout=20) as h:
                         for u in users:
                             await h.post(f"{base}/bot{token}/sendMessage", json={"chat_id": u, "text": text})
-                    p["notified"] = list(dict.fromkeys((p.get("notified") or []) + [a["key"] for a in new]))[-500:]
-                    await asyncio.to_thread(P.save, rdir(), p)
+                    async with lock(p["id"]):
+                        fresh = await asyncio.to_thread(P.load, rdir(), p["id"])
+                        fresh["notified"] = list(dict.fromkeys((fresh.get("notified") or []) + [a["key"] for a in new]))[-500:]
+                        await asyncio.to_thread(P.save, rdir(), fresh)
             except Exception as e:  # noqa: BLE001 — уведомления не должны ронять сайт
                 log.warning("предупреждения проектов не отправлены: %r", e)
             await asyncio.sleep(ALERT_EVERY_S)

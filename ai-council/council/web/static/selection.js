@@ -156,31 +156,27 @@ async function renderSelection(s) {
   await selRank(s.id);
 }
 
+let selSeq = 0;  // номер последнего запроса пересчёта: ответы на старые (при быстром движении ползунка) отбрасываются
+
 async function selRank(id, weights, trust) {
   const box = $("vSelection");
+  const seq = ++selSeq;
   try {
     const d = await api(`/api/sessions/${encodeURIComponent(id)}/selection/rank`, { method: "POST", body: { weights: weights || null, use_trust: trust ?? null } });
+    if (seq !== selSeq) return;
+    const reset = !weights;
     selState[id] = { data: d, weights: { ...d.weights }, trust: trust ?? d.use_trust };
-    selDraw(id);
-  } catch (e) { box.innerHTML = `<p class="muted small">Таблица недоступна: ${esc(e.message)}</p>`; }
+    // ползунки рисуются один раз: перерисовка посреди перетаскивания сбивала бы его; «как в заседании» — заново
+    if (reset || box.dataset.ctrl !== id) selDraw(id); else selTable(id);
+  } catch (e) { if (seq === selSeq) box.innerHTML = `<p class="muted small">Таблица недоступна: ${esc(e.message)}</p>`; box.dataset.ctrl = ""; }
 }
 
 function selDraw(id) {
   const st = selState[id];
   const d = st.data;
   const box = $("vSelection");
-  const attrs = d.attributes || [];
-  const scored = attrs.filter((a) => a.scorable_kind);
-  const names = d.names || {};
-  const cell = (oid, a) => {
-    const c = ((d.cells || {})[oid] || {})[a.id] || {};
-    const [k, mark, word] = SEL_STATUS[c.status || "none"] || SEL_STATUS.none;
-    if (!c.value) return `<td class="muted">—</td>`;
-    const v = `${c.value}${c.unit && !String(c.value).includes(c.unit) ? ` ${c.unit}` : ""}`;
-    return `<td><button type="button" class="sel-cell" data-o="${esc(oid)}" data-a="${esc(a.id)}" title="${esc(word)}${c.quote ? ` — «${c.quote.slice(0, 200)}»` : ""}">
-      ${esc(v.length > 48 ? v.slice(0, 46) + "…" : v)} <span class="badge ${k}">${mark}</span></button></td>`;
-  };
-  const top = d.top_n || (d.ranking || []).length;
+  const scored = (d.attributes || []).filter((a) => a.scorable_kind);
+  box.dataset.ctrl = id;
   box.innerHTML = `<h3>Таблица и веса</h3>
     <p class="muted small">Двигайте веса — ранг пересчитывается сразу, без моделей и без денег. Нажмите на ячейку — источник, цитата и копия страницы.
       Д — документ, С — сайт компании, В — вторичный, ? — цитата не найдена.</p>
@@ -191,24 +187,43 @@ function selDraw(id) {
     <div class="sel-actions"><a class="btn small" id="selXlsx" href="#">⬇ Excel с этими весами</a>
       <button type="button" class="btn small" id="selProject">📦 Создать проект закупки</button>
       <button type="button" class="link small" id="selReset">Веса как в заседании</button></div>
-    <div class="table-wrap"><table class="sel-table"><thead><tr><th>№</th><th>Объект</th><th>Балл</th>${attrs.map((a) => `<th>${esc(a.name)}${a.scorable_kind ? ` <span class="muted small">×${st.weights[a.id] ?? a.weight}</span>` : ""}</th>`).join("")}</tr></thead>
-    <tbody>${(d.ranking || []).map((r) => `<tr class="${r.rank <= top ? "sel-top" : ""}"><td>${r.rank}${r.rank <= top ? " ✓" : ""}</td>
-      <td><b>${esc(names[r.object] || r.object)}</b></td><td>${String(r.score).replace(".", ",")}</td>${attrs.map((a) => cell(r.object, a)).join("")}</tr>`).join("")}</tbody></table></div>
-    ${(d.voi || []).length ? `<h4>Что выяснить, чтобы выбор не поменялся неожиданно</h4><ul>${d.voi.map((v) => `<li>${esc(names[v.object] || v.object)}: ${esc(v.text)}</li>`).join("")}</ul>` : ""}
-    ${(d.sensitivity || []).length ? `<h4>Устойчивость ранга к весам</h4><ul>${d.sensitivity.slice(0, 8).map((x) => `<li>${esc(x.text)}</li>`).join("")}</ul>` : ""}
+    <div id="selTableBox"></div>
     <div id="selCellBox" class="sel-cellbox" hidden></div>`;
   let timer = null;
   box.querySelectorAll("input[data-wa]").forEach((inp) => inp.addEventListener("input", () => {
     inp.nextElementSibling.textContent = inp.value;
-    st.weights[inp.dataset.wa] = Number(inp.value);
+    selState[id].weights[inp.dataset.wa] = Number(inp.value);
     clearTimeout(timer);
-    timer = setTimeout(() => selRank(id, st.weights, $("selTrust").checked), 250);
+    timer = setTimeout(() => selRank(id, selState[id].weights, $("selTrust").checked), 250);
   }));
-  $("selTrust").addEventListener("change", () => selRank(id, st.weights, $("selTrust").checked));
+  $("selTrust").addEventListener("change", () => selRank(id, selState[id].weights, $("selTrust").checked));
   $("selReset").addEventListener("click", () => selRank(id, null, null));
   $("selProject").addEventListener("click", () => createProject(id));
-  $("selXlsx").href = `/api/sessions/${encodeURIComponent(id)}/selection.xlsx?weights=${encodeURIComponent(Object.entries(st.weights).map(([k, v]) => `${k}:${v}`).join(","))}`;
-  box.querySelectorAll(".sel-cell").forEach((b) => b.addEventListener("click", () => selCell(id, b.dataset.o, b.dataset.a)));
+  selTable(id);
+}
+
+function selTable(id) {
+  const st = selState[id];
+  const d = st.data;
+  const attrs = d.attributes || [];
+  const names = d.names || {};
+  const cell = (oid, a) => {
+    const c = ((d.cells || {})[oid] || {})[a.id] || {};
+    const [k, mark, word] = SEL_STATUS[c.status || "none"] || SEL_STATUS.none;
+    if (!c.value) return `<td class="muted">—</td>`;
+    const v = `${c.value}${c.unit && !String(c.value).includes(c.unit) ? ` ${c.unit}` : ""}`;
+    return `<td><button type="button" class="sel-cell" data-o="${esc(oid)}" data-a="${esc(a.id)}" title="${esc(word)}${c.quote ? ` — «${esc(c.quote.slice(0, 200))}»` : ""}">
+      ${esc(v.length > 48 ? v.slice(0, 46) + "…" : v)} <span class="badge ${k}">${mark}</span></button></td>`;
+  };
+  const top = d.top_n || (d.ranking || []).length;
+  const w = st.weights;
+  $("selTableBox").innerHTML = `<div class="table-wrap"><table class="sel-table"><thead><tr><th>№</th><th>Объект</th><th>Балл</th>${attrs.map((a) => `<th>${esc(a.name)}${a.scorable_kind ? ` <span class="muted small">×${w[a.id] ?? a.weight}</span>` : ""}</th>`).join("")}</tr></thead>
+    <tbody>${(d.ranking || []).map((r) => `<tr class="${r.rank <= top ? "sel-top" : ""}"><td>${r.rank}${r.rank <= top ? " ✓" : ""}</td>
+      <td><b>${esc(names[r.object] || r.object)}</b></td><td>${String(r.score).replace(".", ",")}</td>${attrs.map((a) => cell(r.object, a)).join("")}</tr>`).join("")}</tbody></table></div>
+    ${(d.voi || []).length ? `<h4>Что выяснить, чтобы выбор не поменялся неожиданно</h4><ul>${d.voi.map((v) => `<li>${esc(names[v.object] || v.object)}: ${esc(v.text)}</li>`).join("")}</ul>` : ""}
+    ${(d.sensitivity || []).length ? `<h4>Устойчивость ранга к весам</h4><ul>${d.sensitivity.slice(0, 8).map((x) => `<li>${esc(x.text)}</li>`).join("")}</ul>` : ""}`;
+  $("selXlsx").href = `/api/sessions/${encodeURIComponent(id)}/selection.xlsx?weights=${encodeURIComponent(Object.entries(w).map(([k, v]) => `${k}:${v}`).join(","))}&trust=${st.trust === false ? 0 : 1}`;
+  $("selTableBox").querySelectorAll(".sel-cell").forEach((b) => b.addEventListener("click", () => selCell(id, b.dataset.o, b.dataset.a)));
 }
 
 function selCell(id, oid, aid) {

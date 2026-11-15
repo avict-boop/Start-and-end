@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import math
 import re
@@ -519,6 +520,7 @@ SCALE = [
 NUM = re.compile(r"[-+]?\d[\d\s  ,.'’]*")
 
 
+@functools.lru_cache(maxsize=65536)
 def parse_number(text: str) -> float | None:
     """Первое число в тексте с учётом множителей: «25亿粒» → 2.5e9, «242 774,46万» → 2.4277446e9,
     «11 000 т/год» → 11000, «1,9 млрд» → 1.9e9. Диапазон «38–40» → середина. Не нашлось — None."""
@@ -573,11 +575,16 @@ def number_of(cell: dict[str, Any]) -> float | None:
     return parse_number(f"{cell.get('value', '')} {cell.get('unit', '')}".strip())
 
 
-YES = re.compile(r"^\s*(да|есть|имеется|yes|true|y|有|是|подтвержд|available|certified)", re.I)
-NO = re.compile(r"^\s*(нет|отсутств|no|false|n|无|否|не\s)", re.I)
+YES = re.compile(r"^\s*(да|есть|имеется|yes|true|y\b|有|是|подтвержд|available|certified)", re.I)
+NO = re.compile(r"^\s*(нет|отсутств|no\b|false|n\b|无|否|не\s)", re.I)
+# «нет данных», «не найдено», «n/a» — это «неизвестно», а не «нет»
+UNKNOWN = re.compile(r"нет\s+данных|нет\s+сведений|не\s+найден|не\s+указан|не\s+раскрыт|неизвест|не\s+выяснен|"
+                     r"\bn/?a\b|unknown|not\s+(found|disclosed|available|stated)|未知|不详", re.I)
 
 
 def parse_bool(text: str) -> bool | None:
+    if UNKNOWN.search(text or ""):
+        return None
     if YES.search(text or ""):
         return True
     if NO.search(text or ""):
@@ -585,6 +592,7 @@ def parse_bool(text: str) -> bool | None:
     return None
 
 
+@functools.lru_cache(maxsize=65536)
 def parse_date(text: str) -> float | None:
     """Дата как число (год + доля): 15.03.2026, 2026-03-15, 2026年3月, «март 2026», просто год."""
     t = text or ""
@@ -658,8 +666,9 @@ def numbers_in(text: str) -> list[float]:
     """Все числа текста с множителями (万/亿, млн, billion…)."""
     t = text or ""
     out = []
-    for m in NUM.finditer(t):
-        v = parse_number(t[m.start():])
+    # с начала каждой группы цифр: «в 2024, 500 млн» — и 2024, и 500 млн (одно регулярное выражение склеило бы их)
+    for m in re.finditer(r"(?<![\d.,])\d", t):
+        v = parse_number(t[m.start():m.start() + 60])
         if v is not None:
             out.append(v)
     return out
@@ -791,32 +800,48 @@ def resolve_cell(attr: Attribute, options: list[dict[str, Any]]) -> dict[str, An
 
 # ---------------------------------------------------------------------------------------------------- ранг
 
-def cell_score(attr: Attribute, cell: dict[str, Any], column: list[dict[str, Any]]) -> float | None:
-    """Оценка значения 0…1 среди всех объектов (без учёта надёжности). Неизвестно или не оценивается — None."""
+def _cell_value(attr: Attribute, cell: dict[str, Any]) -> Any:
+    """Разобранное значение ячейки для сравнения: число, дата (год с долей), да/нет, пункты списка; нет — None."""
     if not cell or cell.get("status") in (None, "none", "disputed") or not (cell.get("value") or "").strip():
         return None
     v = cell["value"]
+    if attr.kind == "number":
+        return parse_number(f"{v} {cell.get('unit', '')}")
+    if attr.kind == "date":
+        return parse_date(v)
     if attr.kind == "bool":
-        b = parse_bool(v)
-        if b is None:
-            return None
-        return float(b if attr.better != "no" else not b)
+        return parse_bool(v)
     if attr.kind == "list":
-        items = [plain(i) for i in list_items(v)]
+        return [plain(i) for i in list_items(v)] or None
+    return None
+
+
+def _col_stats(attr: Attribute, values: list[Any]) -> tuple[float, float] | int | None:
+    """Что нужно знать о столбце для оценки ячейки: (мин, макс) чисел и дат, наибольшая длина списка."""
+    vals = [x for x in values if x is not None]
+    if not vals:
+        return None
+    if attr.kind in ("number", "date"):
+        return (min(vals), max(vals))
+    if attr.kind == "list":
+        return max(len(x) for x in vals)
+    return None
+
+
+def _score(attr: Attribute, x: Any, stats: Any) -> float | None:
+    if x is None:
+        return None
+    if attr.kind == "bool":
+        return float(x if attr.better != "no" else not x)
+    if attr.kind == "list":
         if attr.wanted:
             want = [plain(w) for w in attr.wanted]
-            return sum(1 for w in want if any(w in i or i in w for i in items)) / len(want)
-        mx = max((len(list_items(c.get("value", ""))) for c in column if c), default=0)
-        return len(items) / mx if mx else None
+            return sum(1 for w in want if any(w in i or i in w for i in x)) / len(want)
+        return len(x) / stats if stats else None
     if attr.kind in ("number", "date"):
-        f = parse_date if attr.kind == "date" else (lambda s: parse_number(s))
-        x = f(f"{v} {cell.get('unit', '')}") if attr.kind == "number" else f(v)
-        vals = [f(f"{c.get('value', '')} {c.get('unit', '')}") if attr.kind == "number" else f(c.get("value", ""))
-                for c in column if c and c.get("status") not in ("none", "disputed")]
-        vals = [y for y in vals if y is not None]
-        if x is None or not vals:
+        if not stats:
             return None
-        lo, hi = min(vals), max(vals)
+        lo, hi = stats
         if hi == lo:
             return 1.0
         if attr.kind == "number" and lo > 0 and hi / lo > 20:  # разброс на порядки — по логарифму
@@ -829,21 +854,26 @@ def cell_score(attr: Attribute, cell: dict[str, Any], column: list[dict[str, Any
     return None
 
 
+def cell_score(attr: Attribute, cell: dict[str, Any], column: list[dict[str, Any]]) -> float | None:
+    """Оценка значения 0…1 среди всех объектов (без учёта надёжности). Неизвестно или не оценивается — None."""
+    return _score(attr, _cell_value(attr, cell), _col_stats(attr, [_cell_value(attr, c) for c in column]))
+
+
 def score_parts(attrs: list[Attribute], table: dict[str, dict[str, dict[str, Any]]],
                 use_trust: bool = True) -> dict[str, dict[str, float]]:
     """Вклад каждой ячейки: оценка значения × надёжность источника (документ 1, сайт 0,8, вторичный 0,6,
-    не подтверждено 0,4); неизвестно — 0."""
-    out: dict[str, dict[str, float]] = {}
-    for oid, row in table.items():
-        parts = {}
-        for a in attrs:
-            if not a.scorable:
-                continue
-            col = [r.get(a.id) or {} for r in table.values()]
-            s = cell_score(a, row.get(a.id) or {}, col)
+    не подтверждено 0,4); неизвестно — 0. Столбец разбирается один раз (ползунки и «что выяснить» пересчитывают
+    ранг сотни раз)."""
+    out: dict[str, dict[str, float]] = {oid: {} for oid in table}
+    for a in attrs:
+        if not a.scorable:
+            continue
+        vals = {oid: _cell_value(a, row.get(a.id) or {}) for oid, row in table.items()}
+        stats = _col_stats(a, list(vals.values()))
+        for oid, row in table.items():
+            s = _score(a, vals[oid], stats)
             trust = TRUST.get((row.get(a.id) or {}).get("status", "none"), 0.4) if use_trust else 1.0
-            parts[a.id] = round((s or 0.0) * trust, 4)
-        out[oid] = parts
+            out[oid][a.id] = round((s or 0.0) * trust, 4)
     return out
 
 

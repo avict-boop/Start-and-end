@@ -244,3 +244,16 @@ def test_added_objects_never_reuse_numbers():
     assert out[-1]["id"] == "O11"
     more = M.apply_list_edits([], {"add": ["Ещё"]}, start_n=M._max_id(out))
     assert more[0]["id"] == "O12"
+
+
+def test_bool_unknown_and_numbers_after_year():
+    assert S.parse_bool("нет данных") is None and S.parse_bool("N/A") is None and S.parse_bool("Yuwang") is None
+    assert S.parse_bool("нет") is False and S.parse_bool("Yes, NSF") is True
+    assert 5e8 in S.numbers_in("в 2024, 500 млн капсул")
+    num = S.Attribute(name="мощность", kind="number")
+    assert S.quote_supports(num, "500", "млн капсул", "мощность в 2024, 500 млн капсул в год")
+
+
+def test_judge_choice_parsing():
+    assert [M._choice(x) for x in ("a", "(b)", "Option C", "вариант d", "none", "Ни один", "", "abc")] == \
+        ["a", "b", "c", "d", "none", "none", "none", "none"]
