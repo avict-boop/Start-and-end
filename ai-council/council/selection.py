@@ -497,6 +497,7 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
             "location": next((c.location for c in cs if c.location), ""),
             "angles": angles, "seed": bool(seed),
             "url": ev.url if ev else next((c.url for c in cs if c.url), ""),
+            "urls": list(dict.fromkeys(c.url for c in cs if c.url.startswith(("http://", "https://"))))[:6],
             "quote": ev.quote if ev else "", "why": next((c.why for c in cs if c.why), ""),
             "merged": len(set(norm_name(c.name) for c in cs)) > 1,
         })
@@ -806,6 +807,45 @@ def excerpts(text: str, words: list[str], budget: int = 9000, window: int = 700)
     return "\n…\n".join(text[k:k + window] for k in sorted(picked))
 
 
+def drop_repeats(texts: list[tuple[str, str]], chunk: int = 240, share: float = 0.6) -> tuple[list[tuple[str, str]], int]:
+    """Убирает из отрывков страниц одного объекта куски, которые уже были на предыдущих страницах (меню, подвал,
+    «о компании», баннеры повторяются на каждой странице сайта). Первое появление остаётся — сведения не теряются.
+    Возвращает (отрывки, сколько знаков убрано)."""
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    removed = 0
+
+    def shingles(s: str) -> set[str]:
+        w = s.split()
+        return {" ".join(w[i:i + 6]) for i in range(max(1, len(w) - 5))} if w else set()
+
+    for url, text in texts:
+        parts, keep = re.split(r"(\n…\n)", text), []
+        for part in parts:
+            if part == "\n…\n":
+                keep.append(part)
+                continue
+            words, buf, pieces = part.split(" "), [], []
+            for w in words:  # куски по ~chunk знаков по границам слов
+                buf.append(w)
+                if sum(len(x) + 1 for x in buf) >= chunk:
+                    pieces.append(" ".join(buf))
+                    buf = []
+            if buf:
+                pieces.append(" ".join(buf))
+            for p in pieces:
+                sh = shingles(p)
+                if sh and len(p) >= 60 and len(sh & seen) >= share * len(sh):
+                    removed += len(p) + 1
+                    continue
+                seen |= sh
+                keep.append(p)
+        joined = re.sub(r"(\n…\n)+", "\n…\n", " ".join(keep).replace(" \n…\n ", "\n…\n")).strip()
+        if joined.strip("…\n "):
+            out.append((url, joined))
+    return out, removed
+
+
 def sha(text: str) -> str:
     return hashlib.sha1((text or "").encode("utf-8", "ignore")).hexdigest()[:16]
 
@@ -871,6 +911,17 @@ def resolve_cell(attr: Attribute, options: list[dict[str, Any]]) -> dict[str, An
         else:
             groups.append([o])
     if len(groups) > 1:
+        # документ (отчёт, реестр, сертификат) против сайта или вторичного источника — документ надёжнее, судьи не
+        # нужны. Проверенная цитата обязательна у обоих; равные по уровню источники по-прежнему решает совет
+        if verified:
+            top = [g for g in groups if any(o.get("kind") == "document" for o in g)]
+            if len(top) == 1:
+                g = top[0]
+                best = next(o for o in g if o.get("kind") == "document")
+                return {"status": "document", "value": best["value"], "unit": best.get("unit", ""),
+                        "as_of": best.get("as_of", ""), "url": best.get("url", ""), "quote": best.get("quote", ""),
+                        "context": best.get("context", ""), "agree": len(g), "of": len(opts), "options": opts,
+                        "auto": "выбран документ: он надёжнее сайта и вторичных источников"}
         return {"status": "disputed", "value": "", "options": opts}
     g = groups[0]
     best = sorted(g, key=lambda o: rank.get(o.get("kind", ""), 3))[0]
@@ -1161,15 +1212,18 @@ For each object and attribute: "verdict" pass | fail | unclear (fail ONLY with a
 given>", "website": "", "checks": [{{"attr": "A1", "verdict": "pass", "value": "", "url": "", "quote": ""}}]}}]}}"""
 
 
-def sources_prompt(frame: SelectionFrame, obj: dict[str, Any], attrs: list[Attribute], max_sources: int) -> str:
+def sources_prompt(frame: SelectionFrame, obj: dict[str, Any], attrs: list[Attribute], max_sources: int,
+                   known: list[str] | None = None) -> str:
     names = ", ".join(obj.get("names") or [obj["name"]])
+    known_block = ("\n\nAlready known pages (the program downloads them anyway — do NOT list them again; find OTHER pages):\n"
+                   + "\n".join(f"- {u}" for u in known)) if known else ""
     return f"""Detailed check of ONE object for a selection study. Search the web for primary sources about it.
 
 Object: {obj['name']} (also: {names}){f"; official site: {obj['website']}" if obj.get('website') else ''}{f"; location: {obj['location']}" if obj.get('location') else ''}
 Study: {frame.refined_question}
 
 Attributes to fill:
-{_attrs_block(attrs)}
+{_attrs_block(attrs)}{known_block}
 
 1) "sources": up to {max_sources} best pages for these attributes — prefer primary documents (annual reports and
    exchange filings, registries, certificate databases), then the company's own pages, then others. For each: url,
@@ -1181,11 +1235,14 @@ Return JSON: {{"website": "", "sources": [{{"url": "", "title": "", "kind": "off
 "A1", "value": "", "unit": "", "as_of": "", "url": "", "quote": ""}}]}}"""
 
 
-def fill_prompt(frame: SelectionFrame, obj: dict[str, Any], attrs: list[Attribute], pages: list[tuple[str, str]]) -> str:
-    body = "\n\n".join(f"### PAGE {i}: {u}\n{t}" for i, (u, t) in enumerate(pages, 1)) or "(no pages could be opened)"
-    return f"""Fill the table row for ONE object using ONLY the page texts below (downloaded by the program; lower-cased).
+CACHE_SPLIT = "\n\u2063\u2063\n"  # граница общего начала запроса: до неё — одинаково у всех объектов (кэш провайдера)
 
-Object: {obj['name']} (also: {', '.join(obj.get('names') or [])})
+
+def fill_prompt(frame: SelectionFrame, obj: dict[str, Any], attrs: list[Attribute], pages: list[tuple[str, str]],
+                only: list[str] | None = None) -> str:
+    body = "\n\n".join(f"### PAGE {i}: {u}\n{t}" for i, (u, t) in enumerate(pages, 1)) or "(no pages could be opened)"
+    focus = (f"\n\nFill ONLY these attributes (the others are already confirmed): {', '.join(only)}" if only else "")
+    return f"""Fill the table row for ONE object using ONLY the page texts given (downloaded by the program; lower-cased).
 Study: {frame.refined_question}
 
 Attributes:
@@ -1198,10 +1255,9 @@ attribute's unit and period; if the source gives another measure (money instead 
 per year) — copy it as is and write that unit exactly ("млн юаней/год", "шт/сутки"): the program will not mix it in.
 Yes/no attributes: "value" is "да" or "нет". Lists: short items separated by commas. Say what the number is
 (capacity vs actual output, which year) in "note". Not on the pages → omit the attribute. Do not guess.
+Return JSON: {{"cells": [{{"attr": "A1", "value": "", "unit": "", "as_of": "", "url": "", "quote": "", "note": ""}}]}}{CACHE_SPLIT}Object: {obj['name']} (also: {', '.join(obj.get('names') or [])}){focus}
 
-{body}
-
-Return JSON: {{"cells": [{{"attr": "A1", "value": "", "unit": "", "as_of": "", "url": "", "quote": "", "note": ""}}]}}"""
+{body}"""
 
 
 def disputes_prompt(frame: SelectionFrame, work: list[tuple[dict[str, Any], list[tuple[Attribute, list[dict[str, Any]]]]]]
@@ -1361,6 +1417,8 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
                 extra.append(c["as_of"])
             if c.get("ruled"):
                 extra.append("решено советом")
+            elif c.get("auto"):
+                extra.append(f"источники расходились, {c['auto']}")
             if c.get("agree") and c.get("of"):
                 extra.append(f"совпало {c['agree']} из {c['of']}")
             lines.append(f"- **{esc(a.name)}:** {cell_text(c)} · {STATUS_RU.get(c.get('status', ''), '')}"

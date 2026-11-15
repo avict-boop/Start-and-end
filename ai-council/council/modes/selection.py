@@ -459,12 +459,27 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     found: list[tuple[str, S.Candidate]] = []
     used: list[str] = []
     rounds_meta = []
+    # волны: половина направлений рамки, затем остальные — если список ещё не полон; затем новые от председателя
+    half = max(4, -(-len(angles) // 2))
+    waves = [angles[:half], angles[half:]] if sc.discover_waves and len(angles) > half else [angles]
+    waves = [w for w in waves if w]
+    frame_angles = list(angles)
+    wave_i = 0
     pairs = first_pairs = 0  # независимых поисков (направление · модель): по ним считается полнота
-    for rnd in range(sc.rounds):
+    for rnd in range(sc.rounds + len(waves) - 1):
         if rnd:
             comp = S.completeness(S.merge_candidates(found), pairs)
-            if comp["share"] is None or comp["share"] >= sc.saturation:
+            # остальные направления рамки пропускаем, только если список почти полон (≥ 90%): глубина важнее
+            enough = max(sc.saturation, 0.9) if wave_i < len(waves) else sc.saturation
+            if comp["share"] is None or comp["share"] >= enough:
+                if wave_i < len(waves):
+                    log.info("%sпоиск кандидатов: полнота %s после %d направлений — остальные %d не нужны",
+                             c._tag, comp["share"], len(used), sum(len(w) for w in waves[wave_i:]))
                 break
+        if wave_i < len(waves):
+            angles = waves[wave_i]
+            wave_i += 1
+        elif rnd:
             try:
                 na = await c._ask(chair, "angles", S.angles_prompt(frame, used, comp["found"], comp["share"]),
                                   S.NewAngles, meta=META)
@@ -475,9 +490,11 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
                 break
             if not angles:
                 break
-        known = [e["name"] for e in S.merge_candidates(found)] if rnd else []
+        from_frame = all(a in frame_angles for a in angles)
+        # новые направления председателя ищут «кроме уже найденных»; волны рамки — независимо (для оценки полноты)
+        known = [e["name"] for e in S.merge_candidates(found)] if rnd and not from_frame else []
         per = len(hunters) if not sc.discover_models else min(len(hunters), sc.discover_models + 1)
-        c._emit("stage", stage="discover", title=f"Поиск кандидатов{' — ещё круг' if rnd else ''}: "
+        c._emit("stage", stage="discover", title=f"Поиск кандидатов{'' if not rnd else ' — вторая волна' if from_frame else ' — ещё круг'}: "
                                                  f"{len(angles)} {_word(len(angles), 'направление', 'направления', 'направлений')}, "
                                                  f"по каждому — {per} {_word(per, 'модель', 'модели', 'моделей')} "
                                                  f"(всего ищут: {', '.join(m.name for m in hunters)})",
@@ -526,10 +543,10 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
                 c._emit("member_failed", stage="discover", member=f"{m.name} ({a[:40]})", error=str(r))
         used += angles
         pairs += len(plan)
-        if not rnd:
-            first_pairs = len(plan)
+        if all(a in frame_angles for a in angles):
+            first_pairs += len(plan)
         rounds_meta.append({"angles": angles, "found": len(S.merge_candidates(found)), "searches": len(plan)})
-    first_angles = set(frame.angles[:sc.angles] or used)
+    first_angles = {a for a in used if a in frame_angles} or set(used)
     first = [x for x in found if x[0].split(S.BY)[0] in first_angles]
     comp = S.completeness(S.merge_candidates(first), first_pairs)
     entities = S.merge_candidates(found, seeds)
@@ -580,6 +597,9 @@ async def screen(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], 
                                             or ch.attr}) for ch in row.checks]
             result, reason = S.screen_decide(checks, attrs)
             out[e["id"]] = {"result": result, "reason": reason, "checks": [x.model_dump() for x in checks]}
+            # адреса из отсева — уже найденные страницы объекта: при заполнении их не ищут заново
+            e["urls"] = list(dict.fromkeys([*(e.get("urls") or []),
+                                            *(x.url for x in checks if x.url.startswith(("http://", "https://")))]))[:10]
             if row.website and not e.get("website"):
                 e["website"] = row.website
     counts = {k: sum(1 for v in out.values() if v["result"] == k) for k in ("pass", "fail", "unclear")}
@@ -606,18 +626,21 @@ async def fill_object(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribu
     meta = {**META, "object": e["id"]}
     c._emit("object_filling", object=e["id"], name=e["name"])
     src = S.ObjectSources()
-    try:
-        src = await c._ask(searcher(c), "sources", S.sources_prompt(frame, e, attrs, sc.pages_per_object),
-                           S.ObjectSources, meta=meta, web_search=True)
-    except (ProviderError, InvalidResponse) as err:
-        if not _soft(err):
-            raise
-        c.stats[FACT_CHECKER].failures.append(f"sources {e['name']}: {err}")
-        c._emit("member_failed", stage="sources", member=f"{FACT_CHECKER} ({e['name'][:40]})", error=str(err))
+    # страницы, найденные при поиске кандидатов и отсеве, уже известны: поиск источников ищет только недостающие
+    known = list(dict.fromkeys(u for u in [e.get("url") or "", *(e.get("urls") or [])] if u.startswith(("http://", "https://"))))
+    need = max(0, sc.pages_per_object - len(known))
+    if need:
+        try:
+            src = await c._ask(searcher(c), "sources", S.sources_prompt(frame, e, attrs, need, known),
+                               S.ObjectSources, meta=meta, web_search=True)
+        except (ProviderError, InvalidResponse) as err:
+            if not _soft(err):
+                raise
+            c.stats[FACT_CHECKER].failures.append(f"sources {e['name']}: {err}")
+            c._emit("member_failed", stage="sources", member=f"{FACT_CHECKER} ({e['name'][:40]})", error=str(err))
     if src.website and not S.site_of(e.get("website", "")):
         e["website"] = src.website
-    urls = list(dict.fromkeys([s.url for s in src.sources if s.url] + [x.url for x in src.cells if x.url]
-                              + ([e["url"]] if e.get("url") else [])
+    urls = list(dict.fromkeys(known + [s.url for s in src.sources if s.url] + [x.url for x in src.cells if x.url]
                               + ([_home(e["website"])] if S.site_of(e.get("website", "")) else [])))[:sc.pages_per_object + 2]
     pages = await fetch_pages(c, urls)
     words = [w for a in attrs for w in [a.name, *a.keywords]] + list(e.get("names") or [e["name"]])
@@ -630,13 +653,40 @@ async def fill_object(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribu
         ex = S.excerpts(t, words, min(sc.page_chars, budget))
         budget -= len(ex)
         texts.append((u, ex))
+    texts, cut = S.drop_repeats(texts)  # меню, подвалы, «о компании» — один раз, а не на каждой странице
+    if cut:
+        c.saved_chars = getattr(c, "saved_chars", 0) + cut
     if not texts:  # страницы не открылись — модели читают хотя бы цитаты, которые вернул поиск
         texts = [(x.url or "search", f"(search snippet) {x.quote}") for x in src.cells if x.quote]
-    jobs = {m.name: c._ask(m, "fill", S.fill_prompt(frame, e, attrs, texts), S.ObjectCells, meta=meta)
-            for m in fillers}
-    got = await asyncio.gather(*jobs.values(), return_exceptions=True)
     reads: dict[str, list[S.Cell]] = {"поиск": list(src.cells)}
-    for name, r in zip(jobs, got):
+    got_all: list[tuple[str, Any]] = []
+    first, rest = fillers[0], fillers[1:]
+    if sc.second_read == "always" or not rest:
+        jobs = {m.name: c._ask(m, "fill", S.fill_prompt(frame, e, attrs, texts), S.ObjectCells, meta=meta) for m in fillers}
+        got_all = list(zip(jobs, await asyncio.gather(*jobs.values(), return_exceptions=True)))
+    else:
+        # первое прочтение; второе — только по признакам, которые влияют на ранг и ещё не подтверждены дословной
+        # цитатой из документа или с сайта компании (или не найдены). Всё подтверждено — второе не нужно
+        r1 = (await asyncio.gather(c._ask(first, "fill", S.fill_prompt(frame, e, attrs, texts), S.ObjectCells, meta=meta),
+                                   return_exceptions=True))[0]
+        got_all.append((first.name, r1))
+        firm: set[str] = set()
+        if not isinstance(r1, BaseException):
+            for a in attrs:
+                x = next((x for x in r1.cells if (S.match_attr(x.attr, attrs) or S.Attribute(name="?")).id == a.id
+                          and x.value.strip()), None)
+                v = verify_option(c, x, first.name, e, pages, a) if x is not None else {}
+                if v.get("found") and v.get("kind") in ("document", "official"):
+                    firm.add(a.id)
+        todo = [a for a in attrs if a.scorable and a.id not in firm]
+        if todo:
+            m2 = rest[0]
+            r2 = (await asyncio.gather(c._ask(m2, "fill", S.fill_prompt(frame, e, attrs, texts, only=[a.id for a in todo]),
+                                              S.ObjectCells, meta=meta), return_exceptions=True))[0]
+            got_all.append((m2.name, r2))
+        else:
+            c.skipped_reads = getattr(c, "skipped_reads", 0) + 1
+    for name, r in got_all:
         if isinstance(r, (BudgetExceeded, OutOfCredits)):
             raise r
         if isinstance(r, BaseException):

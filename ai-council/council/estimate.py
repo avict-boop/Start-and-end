@@ -275,7 +275,7 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
     fillers = (named + pool)[:2]
     judges = ([chair] + [m for m in members if m.name != chair.name and m not in fillers]
               + [m for m in members if m in fillers and m.name != chair.name])[:sc.judges]
-    disputes = max(1, int(deep * 0.3)) if deep else 0
+    disputes = max(1, int(deep * 0.25)) if deep else 0  # часть споров (документ против сайта) решает программа
     tokens: dict[str, list[int]] = {}
     fees: dict[str, float] = {}
 
@@ -296,8 +296,9 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
             add(m, max(1, round(per)), 3000 + min(q, 3000) + found_tokens,
                 2500 + (4000 if sc.search_reasoning in ("medium", "high", "default") else 1500))
     add(chair, 1, 4000 + deep * 350, 1500)              # вывод
-    for m in fillers:
-        add(m, deep, sc.object_chars // 3 + 1800, 1500)  # заполнение по тексту страниц
+    page_in = int(sc.object_chars // 3 * 0.8) + 1800     # страницы без повторов (меню, подвалы) — примерно −20%
+    for i, m in enumerate(fillers):                      # второе прочтение — примерно у 60% объектов («где нужно»)
+        add(m, deep if i == 0 or sc.second_read == "always" else max(1, round(deep * 0.6)), page_in, 1500)
     for m in judges:
         add(m, disputes, 3500, 600)                    # спорное
     out = []

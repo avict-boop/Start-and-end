@@ -211,6 +211,11 @@ class SelectionConfig(BaseModel):
     # Глубина рассуждений при поиске кандидатов и отсеве: выписать названия из найденного — не рассуждение.
     # Рамка, споры и вывод председателя — с обычной глубиной
     search_reasoning: Literal["none", "low", "medium", "high", "default"] = "low"
+    # Поиск кандидатов волнами: сначала половина направлений (не меньше 4); список уже почти полон — остальные не нужны
+    discover_waves: bool = True
+    # Второе прочтение страниц объекта: need — только признаки, влияющие на ранг и не подтверждённые дословной цитатой
+    # из документа или с сайта компании; always — обе модели читают всё (как раньше, дороже)
+    second_read: Literal["need", "always"] = "need"
     # Отсев: короткая проверка признаков отсева у всех кандидатов (пачками по screen_batch)
     screen: bool = True
     screen_batch: int = Field(default=5, ge=1, le=15)
@@ -418,7 +423,7 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
                      "discover_by", "discover_engine", "discover_engines", "discover_models", "search_uses",
-                     "search_results", "search_reasoning",
+                     "search_results", "search_reasoning", "discover_waves", "second_read",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",
                      "use_trust", "snapshots")

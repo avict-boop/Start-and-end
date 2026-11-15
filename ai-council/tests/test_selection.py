@@ -361,3 +361,105 @@ def test_discover_uses_own_search_limits_and_short_reasoning(tmp_path):
     assert all(x[3] in ("low", None) for x in web)  # участники — коротко; модель поиска — без параметра
     members = [x for x in web if x[0].startswith("m/")]
     assert len(members) == 4 * 2  # по 2 участника на направление
+
+
+def test_drop_repeats_keeps_first_occurrence():
+    from council.selection import drop_repeats
+    menu = "главная о компании продукция контакты сертификаты новости вакансии карта сайта политика конфиденциальности " * 3
+    a = ("https://x.cn/a", menu + "мощность завода 7 млрд капсул в год по данным отчёта за 2025 год")
+    b = ("https://x.cn/b", menu + "сертификат gmp действует до 2027 года выдан органом провинции")
+    out, cut = drop_repeats([a, b])
+    assert cut > 200
+    assert "главная о компании" in out[0][1]           # первое появление осталось
+    assert "главная о компании" not in out[1][1]       # на второй странице меню убрано
+    assert "сертификат gmp" in out[1][1] and "7 млрд" in out[0][1]
+
+
+def test_document_beats_site_without_judges():
+    from council.selection import Attribute, resolve_cell
+    a = Attribute(id="A1", name="Мощность", kind="number", unit="млн капсул/год")
+    doc = {"value": "7000", "unit": "млн капсул/год", "found": True, "kind": "document", "quote": "q1", "url": "https://r/a.pdf"}
+    site = {"value": "9000", "unit": "млн капсул/год", "found": True, "kind": "official", "quote": "q2", "url": "https://x.cn"}
+    c = resolve_cell(a, [doc, site])
+    assert c["status"] == "document" and c["value"] == "7000" and "документ" in c["auto"]
+    # два сайта расходятся — по-прежнему спор для совета
+    site2 = {**site, "value": "5000", "quote": "q3"}
+    assert resolve_cell(a, [site, site2])["status"] == "disputed"
+
+
+def test_fill_prompt_shared_start_first():
+    from council.selection import CACHE_SPLIT, Attribute, SelectionFrame, fill_prompt
+    fr = SelectionFrame(refined_question="q")
+    attrs = [Attribute(id="A1", name="Мощность", kind="number")]
+    p1 = fill_prompt(fr, {"name": "Завод 1"}, attrs, [("https://a", "текст 1")])
+    p2 = fill_prompt(fr, {"name": "Завод 2"}, attrs, [("https://b", "текст 2")], only=["A1"])
+    assert p1.split(CACHE_SPLIT)[0] == p2.split(CACHE_SPLIT)[0]   # общее начало одинаково — его кэширует провайдер
+    assert "Завод 1" not in p1.split(CACHE_SPLIT)[0] and "ONLY these attributes" in p2
+
+
+def test_second_read_only_when_needed(tmp_path):
+    """Первое прочтение подтвердило всё, что влияет на ранг, цитатой с сайта компании — второе не запускается."""
+    import asyncio
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.modes import selection as SM
+    from council.session import Council
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path),
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "abc"]})
+    c = Council(cfg, MockClient(delay=0))
+    page = "demo plant 1 annual capacity is 7000 million capsules per year"
+    calls = []
+
+    async def ask(m, stage, prompt, schema, **kw):
+        calls.append((m.name, stage, "ONLY these" in prompt))
+        if stage == "sources":
+            return SM.S.ObjectSources()
+        return SM.S.ObjectCells(cells=[SM.S.Cell(attr="A1", value="7000", unit="млн капсул/год", url="https://p1.cn/about",
+                                                 quote="annual capacity is 7000 million capsules per year")])
+
+    async def fetch(c_, urls):
+        return {u: {"text": page, "fetched": ""} for u in urls}
+
+    c._ask = ask
+    SM.fetch_pages, orig = fetch, SM.fetch_pages
+    try:
+        attrs = [SM.S.Attribute(id="A1", name="Мощность", kind="number", unit="млн капсул/год", weight=5),
+                 SM.S.Attribute(id="A2", name="Примечание", kind="text", weight=0)]
+        e = {"id": "O1", "name": "Demo Plant 1", "names": ["Demo Plant 1"], "website": "https://p1.cn",
+             "url": "https://p1.cn/about", "urls": ["https://p1.cn/about"]}
+        fr = SM.S.SelectionFrame(refined_question="q")
+        row = asyncio.run(SM.fill_object(c, fr, attrs, e, [cfg.member("b"), cfg.member("c")]))
+    finally:
+        SM.fetch_pages = orig
+    fills = [x for x in calls if x[1] == "fill"]
+    assert len(fills) == 1 and fills[0][0] == "b"                  # второе прочтение не понадобилось
+    assert row["cells"]["A1"]["status"] == "official"
+
+
+def test_discover_waves_stop_when_list_is_full(tmp_path):
+    import asyncio
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.modes import selection as SM
+    from council.session import Council
+
+    def run(same: bool) -> set[str]:
+        cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "selection": {"rounds": 1},
+                                            "members": [{"name": n, "model": f"m/{n}"} for n in "abcd"]})
+        c = Council(cfg, MockClient(delay=0))
+        seen: set[str] = set()
+        n = [0]
+
+        async def ask(m, stage, prompt, schema, meta=None, **kw):
+            seen.add(meta["angle"])
+            n[0] += 1
+            names = [f"Plant {i}" for i in range(6)] if same else [f"Plant {n[0]}-{i}" for i in range(3)]
+            return SM.S.Candidates(items=[SM.S.Candidate(name=x) for x in names])
+
+        c._ask = ask
+        fr = SM.S.SelectionFrame(refined_question="q", angles=[f"A{i}" for i in range(8)])
+        asyncio.run(SM.discover(c, fr, []))
+        return seen
+
+    assert len(run(True)) == 4    # все находят одних и тех же — список полон, вторая волна не нужна
+    assert len(run(False)) == 8   # каждый находит своих — список далёк от полного, ищем по всем направлениям

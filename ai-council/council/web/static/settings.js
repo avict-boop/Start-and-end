@@ -350,6 +350,8 @@ function renderSettings() {
         <label class="field"><span>Предел папки копий страниц, МБ</span><input type="number" data-sn="snapshot_mb" min="10" max="10000" value="${v("snapshot_mb", 300)}" ${ro}></label>
       </div>
       <label class="switch"><input type="checkbox" data-sb="screen" ${v("screen", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Отсев</b><small>короткая проверка 2–4 признаков отсева у всех кандидатов перед подробной</small></span></label>
+      <label class="switch"><input type="checkbox" data-sb="discover_waves" ${v("discover_waves", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Поиск кандидатов волнами</b><small>сначала половина направлений; если список уже почти полон (≥ 90%), остальные не запускаются</small></span></label>
+      <label class="switch"><input type="checkbox" data-sb="second_read_need" ${v("second_read", "need") === "need" ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Второе прочтение — только где нужно</b><small>вторая модель перечитывает признаки, влияющие на ранг и не подтверждённые дословной цитатой из документа или с сайта компании; выключено — обе модели читают всё</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="use_trust" ${v("use_trust", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Ранг с учётом надёжности источника</b><small>документ 1; сайт компании 0,8; вторичный 0,6; цитата не найдена 0,4</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="snapshots" ${v("snapshots", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Хранить копии страниц</b><small>текст скачанных страниц с датой — «копия источника» в таблице; продолжение после паузы читает те же тексты</small></span></label>`; })()}
       <h2 style="margin-top:1.2rem">Пилот</h2>
@@ -468,7 +470,11 @@ function bindSettings() {
   for (const el of $("setBody").querySelectorAll("[data-ss]")) el.addEventListener("change", () => { d.selection[el.dataset.ss] = el.value; setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-st]")) el.addEventListener("input", () => { d.selection[el.dataset.st] = el.value.trim(); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-sl]")) el.addEventListener("input", () => { d.selection[el.dataset.sl] = el.value.split(",").map((x) => x.trim()).filter(Boolean); setDirty(); });
-  for (const el of $("setBody").querySelectorAll("[data-sb]")) el.addEventListener("change", () => { d.selection[el.dataset.sb] = el.checked; setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-sb]")) el.addEventListener("change", () => {
+    if (el.dataset.sb === "second_read_need") d.selection.second_read = el.checked ? "need" : "always";
+    else d.selection[el.dataset.sb] = el.checked;
+    setDirty();
+  });
   for (const el of $("setBody").querySelectorAll("[data-kb]")) el.addEventListener("change", () => { d[el.dataset.kb] = el.checked; setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-k]")) el.addEventListener("input", () => { d[el.dataset.k] = num(el.value); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-ab]")) el.addEventListener("change", () => { d.advisor[el.dataset.ab] = el.checked; setDirty(); });

@@ -34,6 +34,9 @@ T = TypeVar("T", bound=BaseModel)
 EventHandler = Callable[..., None]
 
 
+
+CACHE_SPLIT = "\n\u2063\u2063\n"  # метка общего начала запроса (council.selection.CACHE_SPLIT)
+
 class CouncilError(RuntimeError):
     pass
 
@@ -871,6 +874,10 @@ class Council:
             extra = []
         # Общее для всех этапов начало (вложения + вопрос) идёт первым — его кэширует провайдер.
         head = self.head if self.head and prompt.startswith(self.head) else ""
+        if CACHE_SPLIT in prompt:  # запрос сам отметил общее начало (например, одинаковое у всех объектов «Отбора»)
+            head, _, tail = prompt.partition(CACHE_SPLIT)
+            head += "\n\n"
+            prompt = head + tail
         shared = "\n\n".join(extra + ([head] if head else []))
         rest = prompt[len(head):] if head else prompt
         if not shared:
