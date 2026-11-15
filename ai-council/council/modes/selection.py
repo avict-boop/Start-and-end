@@ -45,6 +45,17 @@ def has_native_search(model: str) -> bool:
     return model.startswith(NATIVE_SEARCH) or model.startswith("perplexity/")
 
 
+def model_title(model: str) -> str:
+    """«perplexity/sonar-pro» → «Sonar Pro»."""
+    tail = (model or "").split("/")[-1].split(":")[0]
+    return " ".join(w if any(ch.isdigit() for ch in w) and len(w) > 3 else w.capitalize()
+                    for w in tail.replace("_", "-").split("-") if w) or model
+
+
+def search_label(c: Council) -> str:
+    return f"поиск · {model_title(c.cfg.selection.search_model or c.cfg.fact_check.model)}"
+
+
 def searcher(c: Council) -> MemberConfig:
     sc = c.cfg.selection
     fc = c.cfg.fact_check
@@ -185,6 +196,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     hint = list(c.fixed_objects) or heuristic_objects("\n".join([question, context or "", docs]))
 
     # 1. Рамка
+    c._emit("labels", labels={FACT_CHECKER: search_label(c)})  # на экране — «поиск · Sonar Pro», а не «факт-чек»
     c._emit("stage", stage="framing", title="Рамка отбора: кто кандидат, признаки и веса, где искать")
     start0 = sc.start
     try:
@@ -265,9 +277,16 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     rows: dict[str, dict[str, Any]] = {}
     sem = asyncio.Semaphore(sc.parallel)
 
+    fprog = {"done": 0, "total": len(shortlist)}
+    c._emit("progress", stage="fill", unit="объектов", **fprog)
+
     async def one(e: dict[str, Any]) -> None:
         async with sem:
-            rows[e["id"]] = await fill_object(c, frame, attrs, e, fillers)
+            try:
+                rows[e["id"]] = await fill_object(c, frame, attrs, e, fillers)
+            finally:
+                fprog["done"] += 1
+                c._emit("progress", stage="fill", unit="объектов", **fprog)
 
     results = await asyncio.gather(*(one(e) for e in shortlist), return_exceptions=True)
     for r in results:
@@ -441,13 +460,33 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
                 members=[m.name for m in hunters])
         plan = [(a, m) for a in angles for m in hunters]
         left = {m.name: len(angles) for m in hunters}
+        by = {m.name: {"done": 0, "total": len(angles), "found": 0, "failed": 0} for m in hunters}
+        prog = {"done": 0, "total": len(plan), "round": rnd + 1}
+        before = len(S.merge_candidates(found)) if rnd else 0
+
+        def progress() -> None:
+            c._emit("progress", stage="discover", unit="поисков", **prog, by=by,
+                    found=len(S.merge_candidates(found)), new=len(S.merge_candidates(found)) - before if rnd else None)
+
+        progress()
 
         async def hunt(a: str, m: MemberConfig) -> Any:
             try:
-                return await c._ask(m, "discover", S.discover_prompt(frame, a, sc.per_angle, known), S.Candidates,
-                                    meta={**META, "angle": a}, web_search=True)
+                r = await c._ask(m, "discover", S.discover_prompt(frame, a, sc.per_angle, known), S.Candidates,
+                                 meta={**META, "angle": a}, web_search=True)
+                # источник находки — пара «направление · модель»: полнота считается по независимым находкам
+                found.extend((f"{a}{S.BY}{m.name}", x) for x in r.items)
+                by[m.name]["found"] += len(r.items)
+                c._emit("candidates_found", angle=a, by=m.name, count=len(r.items))
+                return r
+            except BaseException:
+                by[m.name]["failed"] += 1
+                raise
             finally:
                 left[m.name] -= 1
+                by[m.name]["done"] += 1
+                prog["done"] += 1
+                progress()
                 if not left[m.name]:
                     c._emit("member_done", stage="discover", member=m.name)
 
@@ -460,10 +499,6 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
                     raise r
                 c.stats.setdefault(m.name, MemberStats()).failures.append(f"discover: {a}: {r}")
                 c._emit("member_failed", stage="discover", member=f"{m.name} ({a[:40]})", error=str(r))
-                continue
-            # источник находки — пара «направление · модель»: полнота считается по независимым находкам
-            found += [(f"{a}{S.BY}{m.name}", x) for x in r.items]
-            c._emit("candidates_found", angle=a, by=m.name, count=len(r.items))
         used += angles
         rounds_meta.append({"angles": angles, "found": len(S.merge_candidates(found))})
     first_angles = set(frame.angles[:sc.angles] or used)
@@ -487,9 +522,19 @@ async def screen(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], 
     c._emit("stage", stage="screen", title=f"Отсев: {len(entities)} кандидатов по {len(attrs)} признакам "
                                           f"({', '.join(a.name for a in attrs)})")
     batches = [entities[i:i + sc.screen_batch] for i in range(0, len(entities), sc.screen_batch)]
-    jobs = [c._ask(searcher(c), "screen", S.screen_prompt(frame, attrs, b), S.ScreenBatch,
-                   meta={**META, "objects": [e["id"] for e in b]}, web_search=True) for b in batches]
-    got = await asyncio.gather(*jobs, return_exceptions=True)
+    prog = {"done": 0, "total": len(batches), "checked": 0, "objects": len(entities)}
+    c._emit("progress", stage="screen", unit="пачек", **prog)
+
+    async def check(b: list[dict[str, Any]]) -> Any:
+        try:
+            return await c._ask(searcher(c), "screen", S.screen_prompt(frame, attrs, b), S.ScreenBatch,
+                                meta={**META, "objects": [e["id"] for e in b]}, web_search=True)
+        finally:
+            prog["done"] += 1
+            prog["checked"] += len(b)
+            c._emit("progress", stage="screen", unit="пачек", **prog)
+
+    got = await asyncio.gather(*(check(b) for b in batches), return_exceptions=True)
     out: dict[str, dict[str, Any]] = {}
     for b, r in zip(batches, got):
         if isinstance(r, (BudgetExceeded, OutOfCredits)):

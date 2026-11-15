@@ -32,8 +32,15 @@ function selEvent(s, ev) {
         + (ev.start === "check" ? "проверяем ваш список" : ev.start === "extend" ? "ваш список плюс поиск недостающих" : "ищем кандидатов с нуля")
         + (ev.seeds ? ` (в задании ${n(ev.seeds, "объект", "объекта", "объектов")})` : ""), "k-ok");
       return true;
+    case "labels":
+      s.labels = { ...(s.labels || {}), ...(ev.labels || {}) };
+      return true;
+    case "progress":
+      if (!s.prog || s.prog.stage !== ev.stage || (ev.round && s.prog.round !== ev.round)) s.progStart = s.at;
+      s.prog = ev;
+      return true;
     case "candidates_found":
-      logAdd(s, `${ev.by ? `${ev.by}, ` : ""}«${shortTitle(ev.angle, 60)}»: ${n(ev.count, "кандидат", "кандидата", "кандидатов")}`);
+      logAdd(s, `${ev.by ? `${memberName(s, ev.by)}, ` : ""}«${shortTitle(ev.angle, 60)}»: ${n(ev.count, "кандидат", "кандидата", "кандидатов")}`);
       return true;
     case "candidates": {
       const c = ev.completeness || {};
@@ -79,6 +86,40 @@ function selEvent(s, ev) {
     default:
       return false;
   }
+}
+
+/* ---------------------------------------------------------------- ход этапа: сколько готово, сколько найдено, сколько осталось */
+
+// имя участника на экране: модель поиска «Отбора» — «поиск · Sonar Pro», а не служебное «факт-чек»
+function memberName(s, name) { return (s && s.labels && s.labels[name]) || name; }
+
+function selProgress(s, now) {
+  const p = s.prog;
+  if (!p || p.stage !== s.stage || !p.total) return null;
+  const n = (x, a, b, c) => `${x} ${plural(x, a, b, c)}`;
+  const el = s.progStart ? (now - s.progStart) / 1000 : 0;
+  const left = p.total - p.done;
+  // осталось — по средней скорости этого этапа (запросы идут параллельно, поэтому делим на уже готовые)
+  const eta = p.done >= 2 && left > 0 && el > 5 ? (el / p.done) * left : null;
+  const parts = [];
+  if (p.stage === "discover") {
+    parts.push(`поисков ${p.done} из ${p.total}${p.round > 1 ? ` (ещё круг)` : ""}`);
+    parts.push(`найдено ${n(p.found || 0, "кандидат", "кандидата", "кандидатов")} без дублей${p.new != null ? ` (+${p.new} новых)` : ""}`);
+  } else if (p.stage === "screen") {
+    parts.push(`проверено ${p.checked} из ${n(p.objects, "кандидата", "кандидатов", "кандидатов")}`);
+  } else {
+    parts.push(`${p.unit === "объектов" ? "заполнено" : "готово"} ${p.done} из ${n(p.total, "объекта", "объектов", "объектов")}`);
+  }
+  if (eta != null) parts.push(`осталось ≈ ${eta < 90 ? `${Math.max(10, Math.round(eta / 10) * 10)} с` : `${Math.round(eta / 60)} мин`}`);
+  return { text: parts.join(" · "), share: p.done / p.total };
+}
+
+// подпись в строке модели на этапе поиска: сколько направлений она прошла и сколько нашла
+function selMemberProgress(s, name) {
+  const p = s.prog;
+  if (!p || p.stage !== "discover" || p.stage !== s.stage || !p.by || !p.by[name]) return "";
+  const b = p.by[name];
+  return `${b.done}/${b.total} направл. · нашла ${b.found}${b.failed ? ` · сбоев ${b.failed}` : ""}`;
 }
 
 /* ---------------------------------------------------------------- живая таблица (пока идёт заполнение) */

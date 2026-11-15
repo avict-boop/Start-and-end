@@ -1538,7 +1538,7 @@ function apply(s, ev) {
       if (ev.cost != null) c.cost = ev.cost;
       if (["done", "failed"].includes(ev.phase)) c.final = ev.elapsed;
       s.calls[ev.member] = c;
-      const who = `${ev.member} (${STAGE_NAME[ev.stage] || ev.stage})`;
+      const who = `${memberName(s, ev.member)} (${STAGE_NAME[ev.stage] || ev.stage})`;
       const key = `${ev.member}|${ev.stage}`;
       if (ev.phase === "sent" && (ev.attempt || 1) === 1 && fresh) logAdd(s, `${who}: запрос отправлен`);
       if (ev.phase === "writing" && !s.wrote[key]) { s.wrote[key] = 1; logAdd(s, `${who}: начал писать ответ через ${fmtSec(ev.elapsed || 0)}`); }
@@ -2015,13 +2015,15 @@ function workerRows(s, now) {
     const c = s.calls[name];
     if (!c || c.stage !== s.stage) {
       const why = s.budgetWarn && !s.done ? "ждёт: бюджет почти исчерпан — запросы идут по два" : "ожидает запуска";
-      rows.push(`<li class="w idle"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">${why}</span><span class="w-time"></span></li>`);
+      const sp = typeof selMemberProgress === "function" ? selMemberProgress(s, name) : "";
+      rows.push(`<li class="w idle"><span class="dot"></span><b>${esc(memberName(s, name))}</b><span class="w-phase">${sp ? esc(sp) : why}</span><span class="w-time"></span></li>`);
       continue;
     }
     const active = PHASE_ACTIVE.has(c.phase);
     const secs = active ? (now - c.since) / 1000 : (c.final || 0);
     const cls = ["w", active ? "active" : "", c.phase].join(" ");
-    rows.push(`<li class="${cls}"><span class="dot"></span><b>${esc(name)}</b><span class="w-phase">${esc(phaseText(c))}</span><span class="w-time" title="время этого обращения">${fmtSec(secs)}</span></li>`);
+    const sp = typeof selMemberProgress === "function" ? selMemberProgress(s, name) : "";
+    rows.push(`<li class="${cls}"><span class="dot"></span><b>${esc(memberName(s, name))}</b><span class="w-phase">${esc(phaseText(c))}${sp ? `<span class="w-prog">${esc(sp)}</span>` : ""}</span><span class="w-time" title="время этого обращения">${fmtSec(secs)}</span></li>`);
   }
   // председатель без своего варианта: показываем, почему его нет в списке
   if (["proposal", "revision"].includes(s.stage) && s.chairJudge && s.chair)
@@ -2062,10 +2064,11 @@ function renderActivity(s) {
   } else {
     const [ready, total] = readyCount(s);
     const stageSec = s.stageStart ? (now - s.stageStart) / 1000 : 0;
-    const who = ["framing", "verdict"].includes(s.stage) ? `председатель ${esc(s.chair || "")}` : total ? `готово ${ready} из ${total}` : "";
+    const sp = typeof selProgress === "function" ? selProgress(s, now) : null;
+    const who = sp ? esc(sp.text) : ["framing", "verdict"].includes(s.stage) ? `председатель ${esc(s.chair || "")}` : total ? `готово ${ready} из ${total}` : "";
     $("stageNow").innerHTML = `<b>Этап ${idx + 1} из ${plan.length}: ${esc((plan[idx] || [])[1] || STAGE_NAME[s.stage] || s.stage)}</b> <span class="muted">· ${who ? `${who} · ` : ""}${fmtSec(stageSec)}</span>`;
     bar.classList.toggle("indeterminate", false);
-    const part = total ? ready / total : 0;
+    const part = sp ? sp.share : total ? ready / total : 0;
     $("stageBar").style.width = `${Math.max(4, Math.round(((doneN + part) / plan.length) * 100))}%`;
   }
 
@@ -2177,7 +2180,7 @@ function renderThoughts(s) {
   const key = who.join("|") + "#" + s.thoughtSel;
   if ($("thoughtChips").dataset.key !== key) {
     $("thoughtChips").dataset.key = key;
-    $("thoughtChips").innerHTML = who.length ? who.map((n) => `<button type="button" class="chip-tg${n === s.thoughtSel ? " on" : ""}" data-thought="${esc(n)}" aria-pressed="${n === s.thoughtSel}">${esc(n)}</button>`).join("")
+    $("thoughtChips").innerHTML = who.length ? who.map((n) => `<button type="button" class="chip-tg${n === s.thoughtSel ? " on" : ""}" data-thought="${esc(n)}" aria-pressed="${n === s.thoughtSel}">${esc(memberName(s, n))}</button>`).join("")
       : `<span class="muted small">Сейчас никто не думает — следующий этап начнётся сам.</span>`;
   }
   if (box.open && !thoughtTimer) { pollThoughts(); thoughtTimer = setInterval(pollThoughts, 1500); }
