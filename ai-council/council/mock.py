@@ -284,7 +284,7 @@ def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[st
     if stage == "angles":
         return {"angles": ["демо: поиск на китайском", "демо: отраслевой рейтинг"]}
     if stage == "discover":
-        h = _h(str(meta.get("angle", "")))
+        h = _h(str(meta.get("angle", "")), who)
         ids = sorted({(h >> (k * 3)) % 8 + 1 for k in range(4)})
         return {"items": [{"name": f"Demo Plant {i}", "local_name": f"演示工厂{i}", "website": f"https://plant{i}.example.com",
                            "url": f"https://plant{i}.example.com/about",

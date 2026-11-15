@@ -325,6 +325,11 @@ function renderSettings() {
           <select data-ss="start" ${ro}>${[["auto", "сам: есть список — проверить, нет — найти"], ["find", "найти с нуля"], ["check", "проверить список из задания"], ["extend", "список + найти недостающих"]].map(([x, t]) => `<option value="${x}" ${v("start", "auto") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
         <label class="field"><span>Признаков в таблице, до</span><input type="number" data-sn="max_attributes" min="3" max="20" value="${v("max_attributes", 12)}" ${ro}></label>
         <label class="field"><span>Направлений поиска кандидатов</span><input type="number" data-sn="angles" min="2" max="10" value="${v("angles", 6)}" ${ro}><small class="hint">выставки, биржевые отчёты, реестры, рейтинги, поиск на языке страны…</small></label>
+        <label class="field"><span>Кто ищет кандидатов</span>
+          <select data-ss="discover_by" ${ro}>${[["all", "все модели совета и модель поиска"], ["search", "только модель поиска (дешевле)"]].map(([x, t]) => `<option value="${x}" ${v("discover_by", "all") === x ? "selected" : ""}>${t}</option>`).join("")}</select>
+          <small class="hint">у каждой модели свой поисковик и свои «слепые зоны» — вместе находят больше</small></label>
+        <label class="field"><span>Поиск участников при поиске кандидатов</span>
+          <select data-ss="discover_engine" ${ro}>${[["native", "свой поисковик модели (где есть)"], ["exa", "у всех поиск OpenRouter (дешевле)"]].map(([x, t]) => `<option value="${x}" ${v("discover_engine", "native") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
         <label class="field"><span>Кандидатов на направление, до</span><input type="number" data-sn="per_angle" min="5" max="60" value="${v("per_angle", 25)}" ${ro}></label>
         <label class="field"><span>Кругов поиска, до</span><input type="number" data-sn="rounds" min="1" max="3" value="${v("rounds", 2)}" ${ro}><small class="hint">ещё круг с новыми направлениями, если список по оценке полон меньше чем на долю ниже</small></label>
         <label class="field"><span>Полнота списка, достаточная</span><input type="number" data-sn="saturation" min="0.3" max="1" step="0.05" value="${v("saturation", 0.75)}" ${ro}></label>

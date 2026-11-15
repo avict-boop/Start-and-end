@@ -189,6 +189,12 @@ class SelectionConfig(BaseModel):
     rounds: int = Field(default=2, ge=1, le=3)
     saturation: float = Field(default=0.75, ge=0.3, le=1.0)
     max_candidates: int = Field(default=150, ge=10, le=400)
+    # Кто ищет кандидатов: all — модель поиска и все участники совета (у каждой модели свой поисковик и свои «слепые
+    # зоны»: список полнее, оценка полноты честнее); search — только модель поиска (дешевле)
+    discover_by: Literal["all", "search"] = "all"
+    # Поисковик участников на этом этапе: native — собственный поиск модели, где он есть (OpenAI, Google, Anthropic,
+    # xAI), у остальных — поиск OpenRouter; exa — у всех один поиск OpenRouter (дешевле, но одинаковые слепые зоны)
+    discover_engine: Literal["native", "exa", "auto"] = "native"
     # Отсев: короткая проверка признаков отсева у всех кандидатов (пачками по screen_batch)
     screen: bool = True
     screen_batch: int = Field(default=5, ge=1, le=15)
@@ -395,6 +401,7 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
+                     "discover_by", "discover_engine",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",
                      "use_trust", "snapshots")

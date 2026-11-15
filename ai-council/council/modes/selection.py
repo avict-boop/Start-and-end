@@ -386,6 +386,9 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     sc = c.cfg.selection
     chair = c.cfg.member(c.cfg.chair)
     angles = frame.angles[:sc.angles] or ["general web search for the candidates"]
+    # кто ищет: модель поиска и (по умолчанию) все участники — каждый по всем направлениям, своим поисковиком
+    hunters = [searcher(c)] + (list(c.cfg.active_members) if sc.discover_by == "all" else [])
+    c.stage_search_engine["discover"] = sc.discover_engine
     found: list[tuple[str, S.Candidate]] = []
     used: list[str] = []
     rounds_meta = []
@@ -406,26 +409,33 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
                 break
         known = [e["name"] for e in S.merge_candidates(found)] if rnd else []
         c._emit("stage", stage="discover", title=f"Поиск кандидатов{' — ещё круг' if rnd else ''}: "
-                                                 f"{len(angles)} направлений")
-        jobs = [c._ask(searcher(c), "discover", S.discover_prompt(frame, a, sc.per_angle, known), S.Candidates,
-                       meta={**META, "angle": a}, web_search=True) for a in angles]
+                                                 f"{len(angles)} направлений × {len(hunters)} "
+                                                 f"{'модель' if len(hunters) == 1 else 'моделей' if len(hunters) > 4 else 'модели'}"
+                                                 f" ({', '.join(m.name for m in hunters)})")
+        plan = [(a, m) for a in angles for m in hunters]
+        jobs = [c._ask(m, "discover", S.discover_prompt(frame, a, sc.per_angle, known), S.Candidates,
+                       meta={**META, "angle": a}, web_search=True) for a, m in plan]
         got = await asyncio.gather(*jobs, return_exceptions=True)
-        for a, r in zip(angles, got):
+        for (a, m), r in zip(plan, got):
             if isinstance(r, (BudgetExceeded, OutOfCredits)):
                 raise r
             if isinstance(r, BaseException):
                 if not _soft(r):
                     raise r
-                c.stats[FACT_CHECKER].failures.append(f"discover: {a}: {r}")
-                c._emit("member_failed", stage="discover", member=f"{FACT_CHECKER} ({a[:40]})", error=str(r))
+                c.stats.setdefault(m.name, MemberStats()).failures.append(f"discover: {a}: {r}")
+                c._emit("member_failed", stage="discover", member=f"{m.name} ({a[:40]})", error=str(r))
                 continue
-            found += [(a, x) for x in r.items]
-            c._emit("candidates_found", angle=a, count=len(r.items))
+            # источник находки — пара «направление · модель»: полнота считается по независимым находкам
+            found += [(f"{a}{S.BY}{m.name}", x) for x in r.items]
+            c._emit("candidates_found", angle=a, by=m.name, count=len(r.items))
         used += angles
         rounds_meta.append({"angles": angles, "found": len(S.merge_candidates(found))})
-    first = [x for x in found if x[0] in (frame.angles[:sc.angles] or used)]
-    comp = S.completeness(S.merge_candidates(first), min(len(used), sc.angles))
+    first_angles = set(frame.angles[:sc.angles] or used)
+    first = [x for x in found if x[0].split(S.BY)[0] in first_angles]
+    comp = S.completeness(S.merge_candidates(first), min(len(used), sc.angles) * len(hunters))
     entities = S.merge_candidates(found, seeds)
+    for e in entities:  # какие модели нашли кандидата
+        e["models"] = sorted({a.split(S.BY)[-1] for a in e["angles"] if S.BY in a})
     entities.sort(key=lambda e: (not e["seed"], -len(e["angles"]), e["name"].lower()))
     for i, e in enumerate(entities, 1):
         e["id"] = f"O{i}"

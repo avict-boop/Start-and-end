@@ -223,6 +223,7 @@ class Council:
         # режим «Отбор»: остановки «проверьте список» (ставит сайт), решения человека по ним (из запроса),
         # папка копий скачанных страниц, сведения о страницах (когда скачана, открылась ли)
         self.review_enabled = False
+        self.stage_search_engine: dict[str, str] = {}  # этап -> поисковик (иначе — общий из настроек)
         self.review_decisions: dict[str, Any] = {}
         self.snapshot_dir: Any = None
         self.page_meta: dict[str, dict[str, Any]] = {}
@@ -544,7 +545,8 @@ class Council:
                     # у границы бюджета запросы идут по два: меньше запросов «в полёте» — меньше превышение лимита
                     async with self._budget_gate(name, stage, started):
                         extra: dict[str, Any] = ({"web_search": True, "web_tools": self.cfg.web_tools,
-                                                  "search_engine": self.cfg.search_engine,
+                                                  "search_engine": self.stage_search_engine.get(
+                                                      stage, self.cfg.search_engine),
                                                   "search_uses": self.cfg.search_uses,
                                                   # председатель при итоге читает всё заседание — его поиск с пределом
                                                   "search_unlimited": self.cfg.search_unlimited

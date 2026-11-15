@@ -284,6 +284,9 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
         t[1] += calls * inp
         t[2] += calls * out
     add(chair, 1, 2500 + q, 2500)                       # рамка
+    if start != "check" and sc.discover_by == "all":   # поиск кандидатов: каждый участник по каждому направлению
+        for m in members:
+            add(m, sc.angles + (2 if sc.rounds > 1 else 0), 9000 + min(q, 3000), 2500)
     add(chair, 1, 4000 + deep * 350, 1500)              # вывод
     for m in fillers:
         add(m, deep, sc.object_chars // 3 + 1800, 1500)  # заполнение по тексту страниц

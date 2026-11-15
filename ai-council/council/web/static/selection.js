@@ -30,7 +30,7 @@ function selEvent(s, ev) {
         + (ev.seeds ? ` (в задании ${n(ev.seeds, "объект", "объекта", "объектов")})` : ""), "k-ok");
       return true;
     case "candidates_found":
-      logAdd(s, `Направление «${shortTitle(ev.angle, 70)}»: ${n(ev.count, "кандидат", "кандидата", "кандидатов")}`);
+      logAdd(s, `${ev.by ? `${ev.by}, ` : ""}«${shortTitle(ev.angle, 60)}»: ${n(ev.count, "кандидат", "кандидата", "кандидатов")}`);
       return true;
     case "candidates": {
       const c = ev.completeness || {};
@@ -106,7 +106,8 @@ function renderReview(s) {
           ${x.merged ? '<span class="badge plain">склеено</span>' : ""}${x.seed ? '<span class="badge plain">ваш список</span>' : ""}
           ${scr ? `<span class="badge ${scr[0]}">${scr[1]}</span>` : ""}
           <small class="muted">${[x.website ? esc(x.website) : "", x.location ? esc(x.location) : "",
-            (x.angles || []).length ? `нашли направлений: ${x.angles.length}` : ""].filter(Boolean).join(" · ")}</small>
+            (x.models || []).length ? `нашли ${x.models.length} ${plural(x.models.length, "модель", "модели", "моделей")}: ${esc(x.models.join(", "))}`
+              : (x.angles || []).length ? `найден ${x.angles.length} ${plural(x.angles.length, "раз", "раза", "раз")}` : ""].filter(Boolean).join(" · ")}</small>
           ${x.screen && x.screen.reason ? `<small class="muted">${esc(x.screen.reason)}</small>` : x.quote ? `<small class="muted">«${esc(x.quote.slice(0, 160))}»</small>` : ""}</span></label>`;
       }).join("")}</div>
       <label class="field"><span>Добавить своих (по одному в строке)</span><textarea id="rvAdd" rows="3"></textarea></label>`;

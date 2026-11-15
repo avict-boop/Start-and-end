@@ -257,3 +257,16 @@ def test_bool_unknown_and_numbers_after_year():
 def test_judge_choice_parsing():
     assert [M._choice(x) for x in ("a", "(b)", "Option C", "вариант d", "none", "Ни один", "", "abc")] == \
         ["a", "b", "c", "d", "none", "none", "none", "none"]
+
+
+def test_all_models_search_candidates_with_own_engine():
+    c = _council("find")
+    r = asyncio.run(c.run("Найти производителей", mode="selection"))
+    calls = [e for e in r.transcript if e.get("stage") == "discover"]
+    who = {e.get("member") for e in calls}
+    assert who == {"факт-чек", *[m.name for m in c.cfg.active_members]}  # модель поиска и все участники
+    assert c.stage_search_engine["discover"] == "native"
+    assert any(len(e.get("models") or []) >= 2 for e in r.selection["objects"])  # найден несколькими моделями
+    c2 = _council("find", discover_by="search")
+    r2 = asyncio.run(c2.run("Найти производителей", mode="selection"))
+    assert {e.get("member") for e in r2.transcript if e.get("stage") == "discover"} == {"факт-чек"}
