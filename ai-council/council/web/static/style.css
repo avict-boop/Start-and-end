@@ -1030,3 +1030,4 @@ details[open] > summary .params-edit { visibility: hidden; }
 .row3 { display: grid; grid-template-columns: 2fr 3fr 2fr; gap: .4rem; margin: .25rem 0; }
 @media (max-width: 640px) { .row3 { grid-template-columns: 1fr; } }
 .link.danger { color: var(--bad); }
+.bad-input { outline: 2px solid var(--bad); outline-offset: 1px; }

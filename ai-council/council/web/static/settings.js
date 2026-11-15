@@ -476,8 +476,27 @@ function fixRoles() {
   if (d.devil_advocate && !on.includes(d.devil_advocate)) d.devil_advocate = null;
 }
 
+// число вне допустимого — показать поле и границы по-русски до отправки (а не «log_files: Input should be…»)
+function checkRanges() {
+  for (const inp of $("setBody").querySelectorAll('input[type="number"]')) {
+    if (inp.disabled || inp.value === "") continue;
+    const v = Number(inp.value), mn = inp.min === "" ? -Infinity : Number(inp.min), mx = inp.max === "" ? Infinity : Number(inp.max);
+    if (Number.isFinite(v) && v >= mn && v <= mx) continue;
+    const lab = inp.closest("label, .field");
+    const name = ((lab && lab.querySelector("span, .label")) || {}).textContent || "поле";
+    inp.classList.add("bad-input");
+    inp.scrollIntoView({ behavior: "smooth", block: "center" });
+    inp.focus();
+    setTimeout(() => inp.classList.remove("bad-input"), 4000);
+    return `«${name.trim()}» — допустимо от ${inp.min} до ${inp.max}, сейчас ${inp.value}`;
+  }
+  return "";
+}
+
 async function saveSettings() {
   const d = SET.data;
+  const bad = checkRanges();
+  if (bad) { $("setState").textContent = `Не сохранено: ${bad}`; toast(`Не сохранено: ${bad}`); return; }
   const body = { ...d, members: d.members.map(({ _new, ...m }) => m) };
   $("setSave").disabled = true;
   $("setState").textContent = "Сохраняю…";
