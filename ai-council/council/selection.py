@@ -1087,7 +1087,7 @@ def _attrs_block(attrs: list[Attribute]) -> str:
 
 
 def frame_prompt(question: str, context: str | None, criteria: list[str] | None, objects_hint: list[str],
-                 start: str, max_attrs: int) -> str:
+                 start: str, max_attrs: int, n_angles: int = 8) -> str:
     hint = ("\n\nObjects named in the task (keep their spelling in \"objects\"):\n" + "\n".join(f"- {o}" for o in objects_hint[:300])
             if objects_hint else "")
     return f"""Task for a SELECTION study (compare many objects attribute by attribute, every cell backed by a source):
@@ -1106,7 +1106,7 @@ Build the frame of the study:
   the user's decision; 0 = for information only), "better" (high | low | yes | no | newer | older | "" for text),
   "wanted" (for lists: the items the user needs, e.g. forms), "screen": true for 2–4 quick knock-out attributes
   (is it a manufacturer, makes the needed forms, has a production licence…) with "knockout" (which value excludes);
-- "angles": 6–8 different directions to find candidates (exhibitor lists, stock exchange filings, registries,
+- "angles": {n_angles} different directions to find candidates (exhibitor lists, stock exchange filings, registries,
   industry rankings and associations, searches in the local language, B2B platforms, certification databases) —
   each a concrete instruction for a web search, different from the others;
 - "objects": objects named in the task (exact spelling), empty if none;

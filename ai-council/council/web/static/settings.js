@@ -212,7 +212,7 @@ function renderSettings() {
           .map(([v, t]) => `<option value="${v}" ${(d.provider_sort ?? "throughput") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
         <small class="hint">одну и ту же модель обслуживают разные серверы; скорость у них различается в разы, ответ — тот же. Завис один — следующая попытка идёт к другому</small></label>
       <label class="field" style="max-width:360px"><span>Глубина рассуждений на голосовании</span>
-        <select id="sVoteReason" ${ro}>${[["", "как у участника"], ["none", "без рассуждений"], ["low", "низкая — дешевле (рекомендуем)"], ["medium", "средняя"], ["high", "высокая"]]
+        <select id="sVoteReason" ${ro}>${[["", "как у участника"], ["low", "низкая — дешевле (рекомендуем)"], ["medium", "средняя"], ["high", "высокая"]]
           .map(([v, t]) => `<option value="${v}" ${(d.vote_reasoning ?? "low") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
         <small class="hint">голосование — ранжирование готовых вариантов; глубокие скрытые рассуждения здесь дороги и почти не нужны</small></label>
       <div class="row2">
@@ -324,10 +324,15 @@ function renderSettings() {
         <label class="field"><span>С чего начинать по умолчанию</span>
           <select data-ss="start" ${ro}>${[["auto", "сам: есть список — проверить, нет — найти"], ["find", "найти с нуля"], ["check", "проверить список из задания"], ["extend", "список + найти недостающих"]].map(([x, t]) => `<option value="${x}" ${v("start", "auto") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
         <label class="field"><span>Признаков в таблице, до</span><input type="number" data-sn="max_attributes" min="3" max="20" value="${v("max_attributes", 12)}" ${ro}></label>
-        <label class="field"><span>Направлений поиска кандидатов</span><input type="number" data-sn="angles" min="2" max="10" value="${v("angles", 6)}" ${ro}><small class="hint">выставки, биржевые отчёты, реестры, рейтинги, поиск на языке страны…</small></label>
+        <label class="field"><span>Направлений поиска кандидатов</span><input type="number" data-sn="angles" min="2" max="10" value="${v("angles", 8)}" ${ro}><small class="hint">выставки, биржевые отчёты, реестры, рейтинги, поиск на языке страны…</small></label>
         <label class="field"><span>Кто ищет кандидатов</span>
           <select data-ss="discover_by" ${ro}>${[["all", "все модели совета и модель поиска"], ["search", "только модель поиска (дешевле)"]].map(([x, t]) => `<option value="${x}" ${v("discover_by", "all") === x ? "selected" : ""}>${t}</option>`).join("")}</select>
           <small class="hint">у каждой модели свой поисковик и свои «слепые зоны» — вместе находят больше</small></label>
+        <label class="field"><span>Моделей совета на одно направление</span><input type="number" data-sn="discover_models" min="0" max="10" value="${v("discover_models", 2)}" ${ro}><small class="hint">по очереди, плюс модель поиска всегда; 0 — все модели по всем направлениям (в разы дороже)</small></label>
+        <label class="field"><span>Поисков в одном запросе (поиск кандидатов и отсев)</span><input type="number" data-sn="search_uses" min="1" max="10" value="${v("search_uses", 3)}" ${ro}><small class="hint">свой предел, не из общих настроек: каждая найденная страница идёт модели на вход</small></label>
+        <label class="field"><span>Результатов на поиск</span><input type="number" data-sn="search_results" min="1" max="10" value="${v("search_results", 8)}" ${ro}></label>
+        <label class="field"><span>Рассуждения при поиске и отсеве</span>
+          <select data-ss="search_reasoning" ${ro}>${[["low", "короткие (дешевле, хватает для списка)"], ["medium", "средние"], ["high", "глубокие"], ["default", "как у модели в настройках"]].map(([x, t]) => `<option value="${x}" ${v("search_reasoning", "low") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
         <label class="field"><span>Поиск участников при поиске кандидатов</span>
           <select data-ss="discover_engine" ${ro}>${[["native", "свой поисковик модели (где есть)"], ["exa", "у всех поиск OpenRouter (дешевле)"]].map(([x, t]) => `<option value="${x}" ${v("discover_engine", "native") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
         <label class="field"><span>Кандидатов на направление, до</span><input type="number" data-sn="per_angle" min="5" max="60" value="${v("per_angle", 25)}" ${ro}></label>

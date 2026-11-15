@@ -224,6 +224,7 @@ class Council:
         # папка копий скачанных страниц, сведения о страницах (когда скачана, открылась ли)
         self.review_enabled = False
         self.stage_search_engine: dict[str, str] = {}  # этап -> поисковик (иначе — общий из настроек)
+        self.stage_search_limits: dict[str, tuple[int, int]] = {}  # этап -> (поисков, результатов) — иначе общие
         self.review_decisions: dict[str, Any] = {}
         self.snapshot_dir: Any = None
         self.page_meta: dict[str, dict[str, Any]] = {}
@@ -548,11 +549,13 @@ class Council:
                                                   "search_engine": self.stage_search_engine.get(
                                                       f"{stage}:{name}",
                                                       self.stage_search_engine.get(stage, self.cfg.search_engine)),
-                                                  "search_uses": self.cfg.search_uses,
+                                                  "search_uses": self.stage_search_limits.get(
+                                                      stage, (self.cfg.search_uses, 0))[0],
                                                   # председатель при итоге читает всё заседание — его поиск с пределом
                                                   "search_unlimited": self.cfg.search_unlimited
                                                   and stage in ("proposal", "revision"),
-                                                  "search_results": self.cfg.search_results} if web_search else {})
+                                                  "search_results": self.stage_search_limits.get(
+                                                      stage, (0, self.cfg.search_results))[1]} if web_search else {})
                         if web_fetch:
                             extra["web_fetch"] = web_fetch
                         if self.cfg.json_mode and not acc:  # продолжение обрывка — не JSON-объект целиком

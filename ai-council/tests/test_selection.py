@@ -315,3 +315,49 @@ def test_units_text_lists_and_short_chinese_names():
     ents = S.merge_candidates([("a", S.Candidate(name="仙乐健康科技股份有限公司")),
                                ("b", S.Candidate(name="Sirio Pharma Co., Ltd.", aliases=["仙乐健康"]))])
     assert len(ents) == 1
+
+
+def test_discover_plan_rotates_two_models_per_angle():
+    from council.config import MemberConfig
+    from council.modes.selection import discover_plan
+    hunters = [MemberConfig(name=n, model=f"m/{n}") for n in ["факт-чек", "a", "b", "c", "d", "e", "f"]]
+    angles = [f"A{i}" for i in range(8)]
+    plan = discover_plan(angles, hunters, 2)
+    assert len(plan) == 8 * 3                                  # модель поиска + 2 участника на направление
+    for a in angles:
+        who = [m.name for x, m in plan if x == a]
+        assert who[0] == "факт-чек" and len(set(who)) == 3      # разные модели на одном направлении
+    load = {n: sum(1 for _, m in plan if m.name == n) for n in "abcdef"}
+    assert max(load.values()) - min(load.values()) <= 1        # поровну
+    assert len(discover_plan(angles, hunters, 0)) == 8 * 7     # 0 — все по всем
+    assert len(discover_plan(angles, hunters[:3], 2)) == 8 * 3  # участников мало — все
+
+
+def test_discover_uses_own_search_limits_and_short_reasoning(tmp_path):
+    """Поиск кандидатов: свой предел поиска (не общий 8×10) и короткие рассуждения у участников."""
+    import asyncio
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.modes import selection as SM
+    from council.session import Council
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "search_uses": 8, "search_results": 10,
+                                        "members": [{"name": n, "model": f"m/{n}", "reasoning_effort": "high"} for n in "abcd"]})
+    seen = []
+    client = MockClient(delay=0)
+    orig = client.complete
+
+    async def spy(model, messages, **kw):
+        seen.append((model, kw.get("search_uses"), kw.get("search_results"), kw.get("reasoning_effort"), kw.get("web_search")))
+        return await orig(model, messages, **kw)
+
+    client.complete = spy
+    c = Council(cfg, client)
+    for st in ("discover", "screen"):
+        c.stage_search_limits[st] = (cfg.selection.search_uses, cfg.selection.search_results)
+    frame = SM.S.SelectionFrame(refined_question="q", angles=[f"A{i}" for i in range(4)])
+    asyncio.run(SM.discover(c, frame, []))
+    web = [x for x in seen if x[4]]
+    assert web and all(x[1] == 3 and x[2] == 8 for x in web)
+    assert all(x[3] in ("low", None) for x in web)  # участники — коротко; модель поиска — без параметра
+    members = [x for x in web if x[0].startswith("m/")]
+    assert len(members) == 4 * 2  # по 2 участника на направление

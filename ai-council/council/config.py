@@ -184,7 +184,7 @@ class SelectionConfig(BaseModel):
     max_attributes: int = Field(default=12, ge=3, le=20)       # признаков в таблице не больше
     # Поиск кандидатов: направлений в первом круге, кандидатов на направление, кругов (второй — новые направления,
     # если список по оценке «повторных поимок» полон меньше чем на saturation), предел списка
-    angles: int = Field(default=6, ge=2, le=10)
+    angles: int = Field(default=8, ge=2, le=10)
     per_angle: int = Field(default=25, ge=5, le=60)
     rounds: int = Field(default=2, ge=1, le=3)
     saturation: float = Field(default=0.75, ge=0.3, le=1.0)
@@ -199,6 +199,18 @@ class SelectionConfig(BaseModel):
     # и они искали независимо друг от друга; не принят поисковик — запрос сам перейдёт на Exa
     discover_engines: list[Literal["exa", "parallel", "firecrawl", "perplexity"]] = Field(
         default_factory=lambda: ["exa", "parallel"])
+    # Сколько участников совета ищут по каждому направлению (по очереди, у каждого свой поисковик) — плюс модель поиска
+    # всегда. 0 — все участники по всем направлениям (дорого: запросов = направлений × моделей). Двух хватает, чтобы
+    # у каждого направления были независимые находки и полнота списка считалась честно
+    discover_models: int = Field(default=2, ge=0, le=10)
+    # Предел поиска в одном запросе поиска кандидатов и отсева — свой, не из общих настроек (там его поднимают для
+    # глубоких ответов): каждая найденная страница целиком идёт модели на вход, а чтобы назвать 10–25 заводов по одному
+    # направлению, 3 поисков по 8 результатов хватает — дальше названия повторяются
+    search_uses: int = Field(default=3, ge=1, le=10)
+    search_results: int = Field(default=8, ge=1, le=10)
+    # Глубина рассуждений при поиске кандидатов и отсеве: выписать названия из найденного — не рассуждение.
+    # Рамка, споры и вывод председателя — с обычной глубиной
+    search_reasoning: Literal["none", "low", "medium", "high", "default"] = "low"
     # Отсев: короткая проверка признаков отсева у всех кандидатов (пачками по screen_batch)
     screen: bool = True
     screen_batch: int = Field(default=5, ge=1, le=15)
@@ -405,7 +417,8 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
-                     "discover_by", "discover_engine", "discover_engines",
+                     "discover_by", "discover_engine", "discover_engines", "discover_models", "search_uses",
+                     "search_results", "search_reasoning",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",
                      "use_trust", "snapshots")

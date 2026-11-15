@@ -277,6 +277,7 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
               + [m for m in members if m in fillers and m.name != chair.name])[:sc.judges]
     disputes = max(1, int(deep * 0.3)) if deep else 0
     tokens: dict[str, list[int]] = {}
+    fees: dict[str, float] = {}
 
     def add(m: Any, calls: int, inp: int, out: int) -> None:
         t = tokens.setdefault(m.name, [0, 0, 0])
@@ -284,9 +285,16 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
         t[1] += calls * inp
         t[2] += calls * out
     add(chair, 1, 2500 + q, 2500)                       # рамка
-    if start != "check" and sc.discover_by == "all":   # поиск кандидатов: каждый участник по каждому направлению
+    # каждая найденная страница идёт модели на вход: ≈2500 токенов на результат поиска (по реальным заседаниям)
+    found_tokens = sc.search_uses * sc.search_results * 2500
+    searches = sc.angles + (2 if sc.rounds > 1 else 0)  # направлений с учётом второго круга
+    if start != "check" and sc.discover_by == "all":   # поиск кандидатов: по discover_models участников на направление
+        k = len(members) if not sc.discover_models else min(len(members), sc.discover_models)
+        per = searches * k / max(1, len(members))
         for m in members:
-            add(m, sc.angles + (2 if sc.rounds > 1 else 0), 9000 + min(q, 3000), 2500)
+            fees[m.name] = max(1, round(per)) * sc.search_uses * sc.search_results * 0.004  # плата за результаты поиска
+            add(m, max(1, round(per)), 3000 + min(q, 3000) + found_tokens,
+                2500 + (4000 if sc.search_reasoning in ("medium", "high", "default") else 1500))
     add(chair, 1, 4000 + deep * 350, 1500)              # вывод
     for m in fillers:
         add(m, deep, sc.object_chars // 3 + 1800, 1500)  # заполнение по тексту страниц
@@ -299,11 +307,11 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
         calls, inp, outp = tokens[m.name]
         p = price_of(m.model)
         out.append(MemberEstimate(m.name, m.model, calls, inp, outp,
-                                  (inp * p.prompt + outp * p.completion) if p else None))
+                                  (inp * p.prompt + outp * p.completion + fees.get(m.name, 0.0)) if p else None))
     search_model = sc.search_model or cfg.fact_check.model
     s_calls = (0 if start == "check" else sc.angles + (2 if sc.rounds > 1 else 0)
                + (-(-cands // sc.screen_batch) if sc.screen else 0)) + deep
-    s_in = s_calls * (2000 + min(q, 3000))
+    s_in = s_calls * (2000 + min(q, 3000))  # у модели поиска (Perplexity) найденное не идёт во вход — поиск встроен
     s_out = s_calls * 2200
     p = price_of(search_model)
     out.append(MemberEstimate(FACT_CHECKER, search_model, s_calls, s_in, s_out,

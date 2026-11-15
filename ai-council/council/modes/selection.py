@@ -45,6 +45,20 @@ def has_native_search(model: str) -> bool:
     return model.startswith(NATIVE_SEARCH) or model.startswith("perplexity/")
 
 
+def discover_plan(angles: list[str], hunters: list[MemberConfig], k: int, shift: int = 0
+                  ) -> list[tuple[str, MemberConfig]]:
+    """Кто ищет по какому направлению: модель поиска (первая в hunters) — по всем; участники — по k на направление,
+    по очереди, чтобы каждому досталось поровну и у каждого направления были разные поисковики. k=0 — все по всем."""
+    if not k or len(hunters) <= k + 1:
+        return [(a, m) for a in angles for m in hunters]
+    head, rest = hunters[0], hunters[1:]
+    plan = []
+    for i, a in enumerate(angles):
+        plan.append((a, head))
+        plan += [(a, rest[(shift * k + i * k + j) % len(rest)]) for j in range(k)]
+    return plan
+
+
 def model_title(model: str) -> str:
     """«perplexity/sonar-pro» → «Sonar Pro»."""
     tail = (model or "").split("/")[-1].split(":")[0]
@@ -54,6 +68,12 @@ def model_title(model: str) -> str:
 
 def search_label(c: Council) -> str:
     return f"поиск · {model_title(c.cfg.selection.search_model or c.cfg.fact_check.model)}"
+
+
+def quick(c: Council, m: MemberConfig) -> MemberConfig:
+    """Участник для поиска кандидатов: короткие рассуждения (выписать названия из найденного — не рассуждение)."""
+    eff = c.cfg.selection.search_reasoning
+    return m if eff == "default" else m.model_copy(update={"reasoning_effort": eff})
 
 
 def searcher(c: Council) -> MemberConfig:
@@ -197,6 +217,8 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
 
     # 1. Рамка
     c._emit("labels", labels={FACT_CHECKER: search_label(c)})  # на экране — «поиск · Sonar Pro», а не «факт-чек»
+    for st in ("discover", "screen"):  # свой предел поиска: каждая найденная страница идёт модели на вход
+        c.stage_search_limits[st] = (sc.search_uses, sc.search_results)
     c._emit("stage", stage="framing", title="Рамка отбора: кто кандидат, признаки и веса, где искать")
     start0 = sc.start
     try:
@@ -205,7 +227,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         frame = await c._ask(chair, "frame",
                              S.frame_prompt(question, context, criteria, hint,
                                             start0 if start0 != "auto" else ("check" if len(hint) >= 3 else "find"),
-                                            sc.max_attributes),
+                                            sc.max_attributes, sc.angles),
                              S.SelectionFrame, meta=META)
     except (ProviderError, InvalidResponse) as e:
         if not _soft(e):
@@ -424,7 +446,7 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     chair = c.cfg.member(c.cfg.chair)
     angles = frame.angles[:sc.angles] or ["general web search for the candidates"]
     # кто ищет: модель поиска и (по умолчанию) все участники — каждый по всем направлениям, своим поисковиком
-    hunters = [searcher(c)] + (list(c.cfg.active_members) if sc.discover_by == "all" else [])
+    hunters = [searcher(c)] + ([quick(c, m) for m in c.cfg.active_members] if sc.discover_by == "all" else [])
     c.stage_search_engine["discover"] = sc.discover_engine
     if sc.discover_engine == "native":
         pool = list(sc.discover_engines) or ["exa"]
@@ -437,9 +459,10 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     found: list[tuple[str, S.Candidate]] = []
     used: list[str] = []
     rounds_meta = []
+    pairs = first_pairs = 0  # независимых поисков (направление · модель): по ним считается полнота
     for rnd in range(sc.rounds):
         if rnd:
-            comp = S.completeness(S.merge_candidates(found), len(used))
+            comp = S.completeness(S.merge_candidates(found), pairs)
             if comp["share"] is None or comp["share"] >= sc.saturation:
                 break
             try:
@@ -453,14 +476,16 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
             if not angles:
                 break
         known = [e["name"] for e in S.merge_candidates(found)] if rnd else []
+        per = len(hunters) if not sc.discover_models else min(len(hunters), sc.discover_models + 1)
         c._emit("stage", stage="discover", title=f"Поиск кандидатов{' — ещё круг' if rnd else ''}: "
-                                                 f"{len(angles)} {_word(len(angles), 'направление', 'направления', 'направлений')} × {len(hunters)} "
-                                                 f"{'модель' if len(hunters) == 1 else 'моделей' if len(hunters) > 4 else 'модели'}"
-                                                 f" ({', '.join(m.name for m in hunters)})",
+                                                 f"{len(angles)} {_word(len(angles), 'направление', 'направления', 'направлений')}, "
+                                                 f"по каждому — {per} {_word(per, 'модель', 'модели', 'моделей')} "
+                                                 f"(всего ищут: {', '.join(m.name for m in hunters)})",
                 members=[m.name for m in hunters])
-        plan = [(a, m) for a in angles for m in hunters]
-        left = {m.name: len(angles) for m in hunters}
-        by = {m.name: {"done": 0, "total": len(angles), "found": 0, "failed": 0} for m in hunters}
+        plan = discover_plan(angles, hunters, sc.discover_models, shift=len(used))
+        left = {m.name: sum(1 for _, x in plan if x.name == m.name) for m in hunters}
+        left = {k: v for k, v in left.items() if v}
+        by = {k: {"done": 0, "total": v, "found": 0, "failed": 0} for k, v in left.items()}
         prog = {"done": 0, "total": len(plan), "round": rnd + 1}
         before = len(S.merge_candidates(found)) if rnd else 0
 
@@ -500,10 +525,13 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
                 c.stats.setdefault(m.name, MemberStats()).failures.append(f"discover: {a}: {r}")
                 c._emit("member_failed", stage="discover", member=f"{m.name} ({a[:40]})", error=str(r))
         used += angles
-        rounds_meta.append({"angles": angles, "found": len(S.merge_candidates(found))})
+        pairs += len(plan)
+        if not rnd:
+            first_pairs = len(plan)
+        rounds_meta.append({"angles": angles, "found": len(S.merge_candidates(found)), "searches": len(plan)})
     first_angles = set(frame.angles[:sc.angles] or used)
     first = [x for x in found if x[0].split(S.BY)[0] in first_angles]
-    comp = S.completeness(S.merge_candidates(first), min(len(used), sc.angles) * len(hunters))
+    comp = S.completeness(S.merge_candidates(first), first_pairs)
     entities = S.merge_candidates(found, seeds)
     for e in entities:  # какие модели нашли кандидата
         e["models"] = sorted({a.split(S.BY)[-1] for a in e["angles"] if S.BY in a})
