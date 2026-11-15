@@ -42,6 +42,8 @@ def pick_scouts(models: list[dict[str, Any]] | None, providers: tuple[str, ...] 
             low = mid.lower()
             if not low.startswith(f"{p}/") or SKIP.search(low) or not any(h in low for h in hints):
                 continue
+            if ":" in low:  # варианты «…:batch», «…:thinking», «…:online» — особые режимы, в обычном запросе не работают
+                continue
             if not _text_model(m) or int(m.get("context_length") or 128_000) < 100_000:
                 continue
             params = m.get("supported_parameters")

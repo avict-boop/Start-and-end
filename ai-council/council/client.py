@@ -179,6 +179,19 @@ STALL_S = 150
 SEARCH_ENGINES = ("exa", "auto", "native", "parallel", "perplexity", "firecrawl")
 
 
+def _error_text(body: str) -> str:
+    """Суть ошибки из ответа OpenRouter (поле message), без служебного JSON и номера пользователя."""
+    try:
+        d = json.loads(body)
+        err = d.get("error") if isinstance(d, dict) else None
+        msg = (err.get("message") if isinstance(err, dict) else None) or (d.get("message") if isinstance(d, dict) else None)
+        if msg:
+            return str(msg)[:400]
+    except ValueError:
+        pass
+    return body[:500]
+
+
 def _hides_reasoning(model: str) -> bool:
     """Модели OpenAI не показывают рассуждения: до первого слова у них молчание — норма, а не медленный поставщик."""
     return model.startswith("openai/") and not model.startswith("openai/gpt-oss")
@@ -591,7 +604,7 @@ class OpenRouterClient:
                 if resp.status_code >= 400:
                     body = (await resp.aread()).decode("utf-8", "replace")
                     raise _key_error(resp.status_code, body, model) or ProviderError(
-                        f"{model}: HTTP {resp.status_code}: {body[:500]}")
+                        f"{model}: HTTP {resp.status_code}: {_error_text(body)}")
                 if "text/event-stream" not in resp.headers.get("content-type", ""):
                     try:
                         data = json.loads(await resp.aread())

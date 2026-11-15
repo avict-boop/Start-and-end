@@ -472,6 +472,8 @@ CATALOG = [
     {"id": "google/gemini-3-flash", "created": 200, "context_length": 1_000_000, "pricing": {"prompt": "0.0000003"}},
     {"id": "google/gemini-3-flash-image", "created": 300, "context_length": 1_000_000, "pricing": {"prompt": "0.0000003"}},
     {"id": "google/gemini-3-pro", "created": 250, "context_length": 1_000_000, "pricing": {"prompt": "0.000002"}},
+    {"id": "google/gemini-3-flash:batch", "created": 400, "context_length": 1_000_000, "pricing": {"prompt": "0.00000015"}},
+    {"id": "anthropic/claude-haiku-5.5:batch", "created": 400, "context_length": 200_000, "pricing": {"prompt": "0.0000005"}},
     {"id": "openai/gpt-6-mini", "created": 220, "context_length": 400_000, "pricing": {"prompt": "0.00000025"},
      "supported_parameters": ["tools", "reasoning"]},
     {"id": "openai/gpt-6-nano", "created": 230, "context_length": 400_000, "pricing": {"prompt": "0.00000005"}},
