@@ -129,13 +129,34 @@ function renderReview(s) {
   const pl = rv.payload || {};
   let body = "";
   if (rv.gate === "frame") {
-    const attrs = (pl.frame || {}).attributes || [];
-    body = `<p class="muted small">Снимите галочку — признак уберётся; вес 0 — только для сведения; «отсев» — короткая проверка у всех кандидатов.</p>
-      <div class="table-wrap"><table class="sel-review"><thead><tr><th class="c-chk" title="Оставить признак">✓</th><th>Признак</th><th class="c-kind">Тип</th><th class="c-w">Вес</th><th class="c-scr">Отсев</th></tr></thead><tbody>
-      ${attrs.map((a) => `<tr><td class="c-chk"><input type="checkbox" data-keep="${esc(a.id)}" checked aria-label="Оставить «${esc(a.name)}»"></td>
-        <td><div>${esc(a.name)}</div><div class="muted small"><span class="kind-inline">${esc(SEL_KIND[a.kind] || a.kind)}${a.unit ? " · " : ""}</span>${a.unit ? `единица: ${esc(a.unit)}` : ""}${a.evidence ? `<span class="hide-sm">${a.unit ? " · " : ""}доказательство: ${esc(a.evidence)}</span>` : ""}</div></td>
+    const fr = pl.frame || {};
+    const attrs = fr.attributes || [];
+    const li = (xs) => xs.map((x) => `<li>${esc(x)}</li>`).join("");
+    body = `${selFrameSummary(fr, li)}
+      <details class="sel-help"${innerWidth > 640 ? " open" : ""}><summary>Что значат вес, отсев и тип</summary>
+        <dl>
+          <dt>Вес 0–10</dt><dd>Насколько признак влияет на место в ранге. Справа от веса — его доля в итоговом балле: признак с весом 6
+            влияет вдвое сильнее, чем с весом 3. <b>0</b> — значение соберём и покажем в таблице, но на ранг оно не влияет.
+            Веса можно спокойно менять и после заседания ползунками — бесплатно, без моделей.</dd>
+          <dt>Отсев</dt><dd>Быстрая дешёвая проверка <b>всех</b> найденных кандидатов по этому признаку ещё до подробной проверки;
+            кто не проходит условие — выбывает (его можно вернуть на следующей остановке). Ставьте только на обязательные условия
+            («производит сам, а не перепродаёт», «есть лицензия»). Каждый признак отсева удорожает этап отсева.</dd>
+          <dt>Тип</dt><dd>Как сравниваем: <b>число</b> — по величине (больше или меньше — лучше); <b>да/нет</b>; <b>дата</b> — позже или раньше;
+            <b>список</b> — сколько нужных пунктов есть (формы, сертификаты); <b>текст</b> — только для чтения, на ранг не влияет.</dd>
+          <dt>Балл</dt><dd>Для каждого признака объект получает от 0 до 1 (лучший из найденных — 1), это умножается на надёжность
+            источника (документ 1, сайт компании 0,8, вторичный 0,6, без цитаты 0,4) и на вес; сумма — балл из 100.</dd>
+        </dl></details>
+      <p class="muted small">Снимите галочку — признак уберётся совсем.</p>
+      <div class="table-wrap"><table class="sel-review"><thead><tr><th class="c-chk" title="Оставить признак">✓</th><th>Признак и как он влияет</th><th class="c-kind">Тип</th><th class="c-w">Вес</th><th class="c-scr" title="Короткая проверка всех кандидатов: не прошёл — выбывает">Отсев</th></tr></thead><tbody>
+      ${attrs.map((a) => `<tr data-attr="${esc(a.id)}" data-kind="${esc(a.kind)}"><td class="c-chk"><input type="checkbox" data-keep="${esc(a.id)}" checked aria-label="Оставить «${esc(a.name)}»"></td>
+        <td><div><b>${esc(a.name)}</b></div>
+          <div class="sel-effect small">${selEffect(a)}</div>
+          <div class="muted small"><span class="kind-inline">${esc(SEL_KIND[a.kind] || a.kind)}${a.unit || a.evidence ? " · " : ""}</span>${a.unit ? `в единицах: ${esc(a.unit)}` : ""}${a.evidence ? `<span class="hide-sm">${a.unit ? " · " : ""}доказательство: ${esc(a.evidence)}</span>` : ""}</div>
+          ${a.knockout ? `<div class="small sel-ko">Отсев выбивает, если: ${esc(a.knockout)}</div>` : ""}</td>
         <td class="c-kind muted small">${esc(SEL_KIND[a.kind] || a.kind)}</td>
-        <td class="c-w"><input type="number" min="0" max="10" step="1" value="${Number(a.weight)}" data-w="${esc(a.id)}" class="sel-w" aria-label="Вес «${esc(a.name)}»"></td>
+        <td class="c-w">${a.kind === "text" ? '<span class="muted small" title="Текст не сравнивается — на ранг не влияет">—</span>'
+          : `<input type="number" min="0" max="10" step="1" value="${Number(a.weight)}" data-w="${esc(a.id)}" class="sel-w" aria-label="Вес «${esc(a.name)}»">`}
+          <div class="sel-share muted small" data-share="${esc(a.id)}"></div></td>
         <td class="c-scr"><input type="checkbox" data-screen="${esc(a.id)}" ${a.screen ? "checked" : ""} aria-label="Отсев по «${esc(a.name)}»"></td></tr>`).join("")}</tbody></table></div>
       <label class="field"><span>Добавить признаки (через запятую)</span><input id="rvAddAttr" type="text" placeholder="например: MOQ, срок изготовления"></label>`;
   } else {
@@ -166,6 +187,45 @@ function renderReview(s) {
   if ($("rvAll")) $("rvAll").addEventListener("click", () => all(true));
   if ($("rvNone")) $("rvNone").addEventListener("click", () => all(false));
   $("rvGo").addEventListener("click", () => sendReview(s, rv));
+  if (rv.gate === "frame") {
+    const upd = () => {
+      const rows = [...box.querySelectorAll("tr[data-attr]")];
+      const on = (r) => r.querySelector("input[data-keep]").checked;
+      const w = (r) => { const i = r.querySelector("input[data-w]"); return i && on(r) ? Math.max(0, Number(i.value) || 0) : 0; };
+      const total = rows.reduce((t, r) => t + w(r), 0);
+      for (const r of rows) {
+        const cell = r.querySelector("[data-share]");
+        r.classList.toggle("sel-off", !on(r));
+        if (r.dataset.kind === "text") { cell.textContent = "не в ранге"; continue; }
+        cell.textContent = !on(r) ? "убран" : w(r) && total ? `${Math.round((w(r) / total) * 100)}% балла` : "не в ранге";
+      }
+    };
+    box.querySelectorAll("input[data-w], input[data-keep]").forEach((i) => i.addEventListener("input", upd));
+    upd();
+  }
+}
+
+// как признак влияет на ранг — простыми словами
+const SEL_BETTER = { high: "больше — лучше", low: "меньше — лучше", yes: "лучше, если «да»", no: "лучше, если «нет»",
+  newer: "чем позже, тем лучше", older: "чем раньше, тем лучше" };
+function selEffect(a) {
+  if (a.kind === "text") return '<span class="muted">для чтения: на ранг не влияет</span>';
+  const better = a.kind === "list"
+    ? `чем больше нужных пунктов, тем лучше${(a.wanted || []).length ? `: ${esc(a.wanted.slice(0, 6).join(", "))}` : ""}`
+    : SEL_BETTER[a.better] || (a.kind === "bool" ? SEL_BETTER.yes : a.kind === "date" ? SEL_BETTER.newer : SEL_BETTER.high);
+  return `<span class="sel-arrow" aria-hidden="true">↗</span> ${better}${Number(a.weight) ? "" : ' <span class="muted">(вес 0 — сейчас не влияет)</span>'}`;
+}
+
+// кого ищем: кто считается кандидатом, кто нет, где ищем
+function selFrameSummary(fr, li) {
+  const parts = [];
+  if ((fr.inclusion || []).length) parts.push(`<div><h4>Кто подходит</h4><ul>${li(fr.inclusion)}</ul></div>`);
+  if ((fr.exclusion || []).length) parts.push(`<div><h4>Кто не подходит</h4><ul>${li(fr.exclusion)}</ul></div>`);
+  if ((fr.angles || []).length) parts.push(`<div><h4>Где ищем (${fr.angles.length} ${plural(fr.angles.length, "направление", "направления", "направлений")})</h4><ul>${li(fr.angles)}</ul></div>`);
+  if (!parts.length) return "";
+  const n = [fr.top_n ? `в первую группу — ${fr.top_n}` : "", fr.shortlist ? `подробно проверяем до ${fr.shortlist}` : ""].filter(Boolean).join(" · ");
+  return `<details class="sel-help"><summary>Кого ищем ${fr.object_kind ? `(${esc(fr.object_kind)})` : ""}${n ? ` <small>${esc(n)}</small>` : ""}</summary>
+    <div class="sel-frame-grid">${parts.join("")}</div></details>`;
 }
 
 async function sendReview(s, rv) {

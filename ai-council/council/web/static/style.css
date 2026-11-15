@@ -1095,6 +1095,23 @@ details[open] > summary .params-edit { visibility: hidden; }
 .link.danger { color: var(--bad); }
 .bad-input { outline: 2px solid var(--bad); outline-offset: 1px; }
 .sel-review .kind-inline { display: none; }
+/* пояснения на остановке «признаки и веса» */
+.sel-help { margin: .5rem 0 .7rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.sel-help > summary { cursor: pointer; padding: .55rem .8rem; font-weight: 650; }
+.sel-help > summary small { font-weight: 400; color: var(--muted); }
+.sel-help dl { margin: 0; padding: 0 .9rem .7rem; display: grid; grid-template-columns: 7rem minmax(0, 1fr); gap: .45rem .9rem; font-size: .9rem; }
+.sel-help dt { font-weight: 650; }
+.sel-help dd { margin: 0; color: var(--text); }
+@media (max-width: 640px) { .sel-help dl { grid-template-columns: 1fr; gap: .1rem; } .sel-help dd { margin-bottom: .45rem; } }
+.sel-frame-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .3rem 1.2rem; padding: 0 .9rem .6rem; font-size: .9rem; }
+.sel-frame-grid h4 { margin: .3rem 0 .2rem; font-size: .88rem; color: var(--muted); }
+.sel-frame-grid ul { margin: 0; padding-left: 1.1rem; }
+.sel-effect { color: var(--ok); margin: .1rem 0; }
+.sel-arrow { font-weight: 700; }
+.sel-ko { color: var(--bad); margin-top: .1rem; }
+.sel-share { margin-top: .2rem; white-space: nowrap; }
+@media (max-width: 640px) { .sel-share { white-space: normal; font-size: .75rem; } .sel-review .c-w { width: 3.6rem; } }
+.sel-review tr.sel-off td:not(.c-chk) { opacity: .45; }
 @media (max-width: 640px) {
   .sel-review .c-kind { display: none; }
   .sel-review .kind-inline { display: inline; }
