@@ -530,3 +530,17 @@ def test_open_models_cheapest_full_precision_provider(_fresh_features):
     seen.clear()
     asyncio.run(c.complete("anthropic/claude-x", [], temperature=0, max_tokens=100))
     assert seen[0].get("provider", {}).get("sort") != "price"  # закрытые модели — как в настройках
+
+
+def test_chair_calls_skip_cheapest_provider(_fresh_features):
+    """Запросы председателя (на пути всего заседания) — к быстрому поставщику, а не к самому дешёвому."""
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=ok_body('{"a":1}'))
+
+    c = make(handler)
+    c.cheap_open = True
+    asyncio.run(c.complete("moonshotai/kimi-k3", [], temperature=0, max_tokens=100, cheap=False))
+    assert seen[0].get("provider", {}).get("sort") != "price"

@@ -1988,7 +1988,7 @@ function phaseText(c) {
 function readyCount(s) {
   const names = Object.keys(s.work);
   return [names.filter((n) => s.work[n] !== "work"
-    || (s.calls[n] && s.calls[n].stage === s.stage && ["done", "failed"].includes(s.calls[n].phase))).length, names.length];
+    || (sameStage(s.calls[n], s.stage) && ["done", "failed"].includes(s.calls[n].phase))).length, names.length];
 }
 
 // подписи под пройденными этапами — что получилось
@@ -2009,11 +2009,16 @@ function stageResult(s, key) {
   return "готово";
 }
 
+// у «Отбора» внутренние имена запросов не совпадают с этапами на экране (frame ↔ framing, conclusion ↔ verdict…)
+const CALL_STAGE = { frame: "framing", conclusion: "verdict", angles: "discover", lists: "discover", list_read: "discover",
+  sources: "fill" };
+const sameStage = (call, stage) => !!call && (call.stage === stage || CALL_STAGE[call.stage] === stage);
+
 function workerRows(s, now) {
   const rows = [];
   for (const name of Object.keys(s.work)) {
     const c = s.calls[name];
-    if (!c || c.stage !== s.stage) {
+    if (!sameStage(c, s.stage)) {
       const why = s.budgetWarn && !s.done ? "ждёт: бюджет почти исчерпан — запросы идут по два" : "ожидает запуска";
       const sp = typeof selMemberProgress === "function" ? selMemberProgress(s, name) : "";
       rows.push(`<li class="w idle"><span class="dot"></span><b>${esc(memberName(s, name))}</b><span class="w-phase">${sp ? esc(sp) : why}</span><span class="w-time"></span></li>`);
@@ -2097,7 +2102,7 @@ function renderActivity(s) {
   }
 
   // подсказка, если модель долго молчит
-  const slow = finished ? [] : Object.entries(s.calls).filter(([n, c]) => c.stage === s.stage && ["sent", "thinking"].includes(c.phase)
+  const slow = finished ? [] : Object.entries(s.calls).filter(([n, c]) => sameStage(c, s.stage) && ["sent", "thinking"].includes(c.phase)
     && (now - c.since) / 1000 > STALL_SEC && s.work[n] === "work").map(([n]) => n);
   const connOk = now - s.lastMsg < 25000;
   $("activity").hidden = !slow.length;
@@ -2167,7 +2172,7 @@ $("retryBtn").addEventListener("click", async () => {
 let thoughtTimer = null;
 function thinkingNow(s) {
   // кто сейчас в работе на текущем этапе: отправлен запрос, думает, пишет
-  return Object.entries(s.calls || {}).filter(([, c]) => c.stage === s.stage && ["sent", "thinking", "writing", "checking"].includes(c.phase))
+  return Object.entries(s.calls || {}).filter(([, c]) => sameStage(c, s.stage) && ["sent", "thinking", "writing", "checking"].includes(c.phase))
     .map(([n]) => n);
 }
 function renderThoughts(s) {
@@ -2893,7 +2898,7 @@ function updateTitle() {
   else if (s.stage) {
     const names = Object.keys(s.work);
     const ready = names.filter((n) => s.work[n] !== "work"
-      || (s.calls[n] && s.calls[n].stage === s.stage && ["done", "failed"].includes(s.calls[n].phase))).length;
+      || (sameStage(s.calls[n], s.stage) && ["done", "failed"].includes(s.calls[n].phase))).length;
     document.title = `⏳ ${STAGE_NAME[s.stage] || s.stage} ${ready}/${names.length} — Совет`;
   } else document.title = "⏳ Запуск — Совет";
 }

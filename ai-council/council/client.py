@@ -319,6 +319,7 @@ class OpenRouterClient:
         search_uses: int = SEARCH_USES,
         search_results: int = 5,
         search_unlimited: bool = False,
+        cheap: bool = True,
     ) -> Completion:
         """Запрос к модели с потоковой передачей ответа.
 
@@ -367,7 +368,7 @@ class OpenRouterClient:
                           "parameters": {"max_uses": int(web_fetch), "max_content_tokens": FETCH_TOKENS}})
         if tools:
             payload["tools"] = tools
-        if self.cheap_open and model.startswith(OPEN_WEIGHT):
+        if self.cheap_open and cheap and model.startswith(OPEN_WEIGHT):
             # одну и ту же открытую модель держат несколько поставщиков с разной ценой: берём дешёвого, но только
             # полноточную версию (без сжатия до 4–6 бит, от которого ответы хуже)
             payload["provider"] = {"sort": "price", "quantizations": list(FULL_QUANT)}

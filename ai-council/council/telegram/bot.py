@@ -113,6 +113,11 @@ ARCHIVE_PAGE = 8
 # ---------------------------------------------------------------- состояние
 
 
+# у «Отбора» внутренние имена запросов не совпадают с этапами хода (frame ↔ framing, conclusion ↔ verdict…)
+CALL_STAGE = {"frame": "framing", "conclusion": "verdict", "angles": "discover", "lists": "discover",
+              "list_read": "discover", "sources": "fill"}
+
+
 @dataclass
 class ChatSettings:
     mode: str = "debate"
@@ -255,7 +260,8 @@ class Progress:
                 hint = f"раунд {round_.group(1)} из {round_.group(2)} — {hint}"
             lines.append(f"<i>{esc(hint)} · готово {ready} из {len(self.work)} · {_fmt_secs(stage_secs)}</i>")
             lines += [self._member_line(n) for n in self.work]
-            slow = [n for n, c in self.calls.items() if c.get("stage") == self.stage and self.work.get(n) == "work"
+            slow = [n for n, c in self.calls.items() if CALL_STAGE.get(c.get("stage"), c.get("stage")) == self.stage
+                    and self.work.get(n) == "work"
                     and c.get("phase") in ("sent", "thinking") and time.monotonic() - c["since"] > 40]
             if slow:
                 lines.append(f"<i>⏳ {esc(', '.join(slow))}: «думающие» модели рассуждают до 1–3 минут — "

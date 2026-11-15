@@ -726,7 +726,10 @@ class Council:
                         meta: dict[str, Any], progress: Any, extra: dict[str, Any]) -> Completion:
         return await self.client.complete(member.model, messages, temperature=temperature, max_tokens=max_tokens,
                                           reasoning_effort=None if effort == "none" else effort, meta=meta,
-                                          on_progress=progress, **extra)
+                                          on_progress=progress,
+                                          # председатель — на пути всего заседания (рамка, итог): его запросы идут к
+                                          # быстрому поставщику, а не к самому дешёвому
+                                          **({"cheap": False} if member.name == self.cfg.chair else {}), **extra)
 
     SEARCH_RESERVE_USD = 0.02  # поиск в интернете на запрос — оценка сверху (у OpenRouter оплачивается отдельно)
     CHARS_PER_TOKEN = 3.0      # для оценки входа: русский текст ~2,5–3 знака на токен, английский ~4
