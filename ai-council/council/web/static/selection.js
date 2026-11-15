@@ -15,6 +15,8 @@ const SEL_STAGE = {
 };
 // ссылки приходят от моделей и поиска: в href — только http(s), иначе «javascript:…» выполнился бы по нажатию
 const selUrl = (u) => (/^https?:\/\//i.test(String(u || "")) ? String(u) : "");
+// короткий заголовок колонки: до скобки или запятой, не длиннее 34 знаков (полное название — при наведении)
+const selShort = (n) => { const s = String(n || "").split(/\s*[(（]|\s+—\s+|,\s/)[0].trim() || String(n || ""); return s.length > 34 ? s.slice(0, 33) + "…" : s; };
 const SEL_KIND = { number: "число", bool: "да/нет", list: "список", date: "дата", text: "текст" };
 const SEL_GATE_TITLE = { frame: "Проверьте признаки и веса", candidates: "Проверьте найденных кандидатов",
   shortlist: "Утвердите короткий список" };
@@ -106,7 +108,7 @@ function renderSelLive(s) {
   box.innerHTML = `<h2>Таблица заполняется</h2>
     <p class="muted small">Готово ${done} из ${s.selObjs.length}. Д — документ, С — сайт компании, В — вторичный, ? — цитата не найдена,
       «спор» — источники расходятся (решит совет), ⚖ — решено советом. Наведите на ячейку — цитата.</p>
-    <div class="table-wrap"><table class="sel-table"><thead><tr>${Object.keys(rank).length ? "<th>№</th>" : ""}<th>Объект</th>${attrs.map((a) => `<th>${esc(a.name)}</th>`).join("")}</tr></thead><tbody>
+    <div class="table-wrap"><table class="sel-table"><thead><tr>${Object.keys(rank).length ? "<th>№</th>" : ""}<th>Объект</th>${attrs.map((a) => `<th title="${esc(a.name)}">${esc(selShort(a.name))}</th>`).join("")}</tr></thead><tbody>
     ${[...s.selObjs].sort((x, y) => (rank[x.id] || 999) - (rank[y.id] || 999)).map((o) => `<tr class="${busy[o.id] ? "sel-busy" : ""}">${Object.keys(rank).length ? `<td>${rank[o.id] || ""}</td>` : ""}
       <td><b>${esc(o.name)}</b>${busy[o.id] ? ' <span class="muted small">заполняется…</span>' : !cells[o.id] ? ' <span class="muted small">в очереди</span>' : ""}</td>
       ${attrs.map((a) => td(o.id, a)).join("")}</tr>`).join("")}</tbody></table></div>`;
@@ -267,7 +269,7 @@ function selTable(id) {
   };
   const top = d.top_n || (d.ranking || []).length;
   const w = st.weights;
-  $("selTableBox").innerHTML = `<div class="table-wrap"><table class="sel-table"><thead><tr><th>№</th><th>Объект</th><th>Балл</th>${attrs.map((a) => `<th>${esc(a.name)}${a.scorable_kind ? ` <span class="muted small">×${w[a.id] ?? a.weight}</span>` : ""}</th>`).join("")}</tr></thead>
+  $("selTableBox").innerHTML = `<div class="table-wrap"><table class="sel-table"><thead><tr><th>№</th><th>Объект</th><th>Балл</th>${attrs.map((a) => `<th title="${esc(a.name)}">${esc(selShort(a.name))}${a.scorable_kind ? ` <span class="muted small">×${w[a.id] ?? a.weight}</span>` : ""}</th>`).join("")}</tr></thead>
     <tbody>${(d.ranking || []).map((r) => `<tr class="${r.rank <= top ? "sel-top" : ""}"><td>${r.rank}${r.rank <= top ? " ✓" : ""}</td>
       <td><b>${esc(names[r.object] || r.object)}</b></td><td>${String(r.score).replace(".", ",")}</td>${attrs.map((a) => cell(r.object, a)).join("")}</tr>`).join("")}</tbody></table></div>
     ${(d.voi || []).length ? `<h4>Что выяснить, чтобы выбор не поменялся неожиданно</h4><ul>${d.voi.map((v) => `<li>${esc(names[v.object] || v.object)}: ${esc(v.text)}</li>`).join("")}</ul>` : ""}

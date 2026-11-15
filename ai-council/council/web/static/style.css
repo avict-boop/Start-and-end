@@ -1016,7 +1016,19 @@ details[open] > summary .params-edit { visibility: hidden; }
 .sel-weights label.switch { grid-template-columns: auto 1fr; }
 .sel-actions { display: flex; gap: .8rem; align-items: center; margin: .4rem 0 .6rem; flex-wrap: wrap; }
 .table-wrap { overflow-x: auto; max-width: 100%; }
-.sel-table { border-collapse: collapse; font-size: .86rem; min-width: 100%; }
+.sel-table { border-collapse: separate; border-spacing: 0; font-size: .86rem; width: max-content; min-width: 100%; }
+.sel-table th, .sel-table td { min-width: 8.5rem; max-width: 17rem; overflow-wrap: anywhere; word-break: normal; }
+.sel-table th:nth-child(1), .sel-table td:nth-child(1) { min-width: 2.6rem; max-width: 3.5rem; }
+.sel-table th:nth-child(3), .sel-table td:nth-child(3) { min-width: 3.5rem; max-width: 4.5rem; }
+.sel-table th:nth-child(2), .sel-table td:nth-child(2) { position: sticky; left: 0; z-index: 1; background: var(--surface);
+  min-width: 10rem; max-width: 14rem; box-shadow: 1px 0 0 var(--line); }
+.sel-table th:nth-child(2) { z-index: 2; background: var(--surface-2); }
+.sel-table th { font-size: .8rem; line-height: 1.25; }
+#selLiveSec .sel-table th:nth-child(1), #selLiveSec .sel-table td:nth-child(1) { position: sticky; left: 0; z-index: 1;
+  background: var(--surface); min-width: 10rem; max-width: 14rem; box-shadow: 1px 0 0 var(--line); }
+/* таблицы в тексте итога с 6+ колонками — тоже шириной по содержимому, с прокруткой */
+.answer table:has(th:nth-child(6)) { width: max-content; min-width: 100%; }
+.answer table:has(th:nth-child(6)) th, .answer table:has(th:nth-child(6)) td { min-width: 7rem; max-width: 16rem; }
 .sel-table th, .sel-table td { padding: .3rem .45rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
 .sel-table th { background: var(--surface-2); position: sticky; top: 0; }
 .sel-table tr.sel-top td:first-child { color: var(--ok); font-weight: 650; }

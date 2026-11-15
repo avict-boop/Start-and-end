@@ -1280,13 +1280,22 @@ def esc(s: Any) -> str:
     return str(s or "").replace("|", "∣").replace("\n", " ").strip()
 
 
+COLS_PER_TABLE = 4  # признаков в одной таблице отчёта: шире — на странице A4 текст ломается по буквам
+
+
+def short_name(name: str, limit: int = 34) -> str:
+    """Короткое название для заголовка таблицы: до скобки или первой запятой, не длиннее limit."""
+    n = re.split(r"\s*[(（]|\s+—\s+|,\s", name or "", maxsplit=1)[0].strip() or name
+    return n if len(n) <= limit else n[:limit - 1].rstrip() + "…"
+
+
 def cell_text(c: dict[str, Any], short: bool = False, attr: "Attribute | None" = None) -> str:
     if not c or c.get("status") in (None, "none"):
         return "—"
     odd = " ≠" if attr is not None and not comparable(attr, c) else ""
     v = f"{c.get('value', '')}{(' ' + c['unit']) if c.get('unit') and c['unit'] not in c.get('value', '') else ''}"
-    if short and len(v) > 60:
-        v = v[:57] + "…"
+    if short and len(v) > 48:
+        v = v[:45].rstrip() + "…"
     return f"{esc(v)} ({STATUS_MARK.get(c.get('status', ''), '?')}){odd}"
 
 
@@ -1307,12 +1316,15 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
                "Ранг считает программа: оценка значения × надёжность источника (документ 1; сайт компании 0,8; "
                "вторичный 0,6; не подтверждено 0,4; не найдено 0), веса — " +
                ", ".join(f"{a.name} {_fmt_w(a.weight)}" for a in scored) + ".\n\n"
-               "| № | Объект | Балл | " + " | ".join(esc(a.name) for a in scored) + " |\n|---|---|---|"
-               + "---|" * len(scored) + "\n" +
-               "\n".join(f"| {r['rank']}{' ✓' if r['rank'] <= top_n else ''} | {esc(names.get(r['object']))} | "
-                         f"{str(r['score']).replace('.', ',')} | "
-                         + " | ".join(cell_text(table[r["object"]].get(a.id) or {}, True, a) for a in scored) + " |"
-                         for r in rank)
+               + "\n\n".join(
+                   ("" if i == 0 else f"*Ранг, продолжение ({i // COLS_PER_TABLE + 1}):*\n\n")
+                   + "| № | Объект | Балл | " + " | ".join(esc(short_name(a.name)) for a in part) + " |\n|---|---|---|"
+                   + "---|" * len(part) + "\n"
+                   + "\n".join(f"| {r['rank']}{' ✓' if r['rank'] <= top_n else ''} | {esc(short_name(names.get(r['object']) or '', 40))} | "
+                                f"{str(r['score']).replace('.', ',')} | "
+                                + " | ".join(cell_text(table[r["object"]].get(a.id) or {}, True, a) for a in part) + " |"
+                                for r in rank)
+                   for i, part in ((i, scored[i:i + COLS_PER_TABLE]) for i in range(0, max(1, len(scored)), COLS_PER_TABLE)))
                + ("\n\n≠ — величина или период несопоставимы с единицей признака (деньги вместо штук, в сутки вместо "
                   "в год): в ранг не идёт." if any(not comparable(a, table[r["object"]].get(a.id) or {})
                                                    for r in rank for a in scored if a.kind == "number") else ""))
@@ -1323,11 +1335,12 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
         out.append("### Устойчивость ранга к весам\n\n" + "\n".join(f"- {s['text']}" for s in sel["sensitivity"]))
     info = [a for a in attrs if not a.scorable]
     if info:
-        out.append("### Признаки для сведения\n\n| Объект | " + " | ".join(esc(a.name) for a in info) + " |\n|---|"
-                   + "---|" * len(info) + "\n" +
-                   "\n".join(f"| {esc(names.get(r['object']))} | " +
-                             " | ".join(cell_text(table[r["object"]].get(a.id) or {}, True) for a in info) + " |"
-                             for r in rank))
+        out.append("### Признаки для сведения\n\n" + "\n\n".join(
+            "| Объект | " + " | ".join(esc(short_name(a.name)) for a in part) + " |\n|---|" + "---|" * len(part) + "\n"
+            + "\n".join(f"| {esc(short_name(names.get(r['object']) or '', 40))} | "
+                         + " | ".join(cell_text(table[r["object"]].get(a.id) or {}, True) for a in part) + " |"
+                         for r in rank)
+            for part in (info[i:i + COLS_PER_TABLE] for i in range(0, len(info), COLS_PER_TABLE))))
     cards = []
     for r in rank:
         oid = r["object"]
