@@ -211,8 +211,8 @@ function renderSettings() {
         <select id="sProvSort" ${ro}>${[["throughput", "самый быстрый (рекомендуем)"], ["price", "самый дешёвый"], ["latency", "быстрее начинает отвечать"], ["", "как решит OpenRouter"]]
           .map(([v, t]) => `<option value="${v}" ${(d.provider_sort ?? "throughput") === v ? "selected" : ""}>${t}</option>`).join("")}</select>
         <small class="hint">одну и ту же модель обслуживают разные серверы; скорость у них различается в разы, ответ — тот же. Завис один — следующая попытка идёт к другому</small></label>
-      <label class="switch-row"><input type="checkbox" data-kb="cheap_open_models" ${d.cheap_open_models ?? true ? "checked" : ""} ${ro}> открытые модели (Kimi, GLM, DeepSeek, Qwen…) — у самого дешёвого поставщика, только полноточные версии</label>
-      <small class="hint">та же модель, те же ответы, цена ниже в 1,5–3 раза; ответ бывает медленнее. Сжатые до 4–6 бит версии (хуже отвечают) не берутся</small>
+      <label class="switch-row"><input type="checkbox" data-kb="cheap_open_models" ${d.cheap_open_models ?? true ? "checked" : ""} ${ro}> сначала самый дешёвый поставщик, а если долго не начинает отвечать — самый быстрый</label>
+      <label class="field" style="max-width:360px"><span>Ждать начала ответа от дешёвого поставщика, с</span><input type="number" data-k="cheap_wait_s" min="10" max="600" step="5" value="${d.cheap_wait_s ?? 45}" ${ro}><small class="hint">с поиском в интернете — втрое дольше; у моделей OpenAI (не показывают рассуждения) не ограничивается. Модель та же, ответы те же; у открытых моделей (Kimi, GLM, DeepSeek…) — только полноточные версии. Выключено — всегда поставщик из списка выше</small></label>
       <label class="field" style="max-width:360px"><span>Глубина рассуждений на голосовании</span>
         <select id="sVoteReason" ${ro}>${[["", "как у участника"], ["low", "низкая — дешевле (рекомендуем)"], ["medium", "средняя"], ["high", "высокая"]]
           .map(([v, t]) => `<option value="${v}" ${(d.vote_reasoning ?? "low") === v ? "selected" : ""}>${t}</option>`).join("")}</select>

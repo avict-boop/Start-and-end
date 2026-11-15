@@ -529,7 +529,7 @@ def test_open_models_cheapest_full_precision_provider(_fresh_features):
     assert seen[1]["provider"] == {"sort": "price"}  # полноточной нет ни у кого — любой дешёвый
     seen.clear()
     asyncio.run(c.complete("anthropic/claude-x", [], temperature=0, max_tokens=100))
-    assert seen[0].get("provider", {}).get("sort") != "price"  # закрытые модели — как в настройках
+    assert seen[0]["provider"] == {"sort": "price"}  # закрытые модели — тоже дешёвый, но без фильтра точности
 
 
 def test_chair_calls_skip_cheapest_provider(_fresh_features):
@@ -544,3 +544,25 @@ def test_chair_calls_skip_cheapest_provider(_fresh_features):
     c.cheap_open = True
     asyncio.run(c.complete("moonshotai/kimi-k3", [], temperature=0, max_tokens=100, cheap=False))
     assert seen[0].get("provider", {}).get("sort") != "price"
+
+
+def test_silent_cheap_provider_switches_to_fastest(_fresh_features):
+    """Дешёвый поставщик не начал отвечать за cheap_wait — следующая попытка у самого быстрого, попыткой не считается."""
+    seen = []
+
+    def handler(req):
+        body = json.loads(req.content)
+        seen.append(body)
+        if body["provider"]["sort"] == "price":
+            return httpx.Response(200, headers={"content-type": "text/event-stream"},
+                                  content=(b": OPENROUTER PROCESSING\n\n" * 3))
+        return sse({"choices": [{"delta": {"content": '{"a":1}'}, "finish_reason": "stop"}]})
+
+    c = make(handler)
+    c.cheap_open, c.cheap_wait = True, 0.0001
+    events = []
+    comp = asyncio.run(c.complete("z-ai/glm-x", [], temperature=0, max_tokens=100, on_progress=events.append))
+    assert comp.text == '{"a":1}'
+    assert [b["provider"]["sort"] for b in seen] == ["price", "throughput"]
+    assert seen[1]["provider"]["quantizations"]  # быстрый — тоже только полноточный
+    assert any(e.get("phase") == "retry" and "самого быстрого" in (e.get("detail") or "") for e in events)

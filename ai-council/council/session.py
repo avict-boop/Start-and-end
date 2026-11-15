@@ -178,6 +178,7 @@ class Council:
         if hasattr(client, "provider_sort"):  # какого поставщика той же модели выбирать (быстрый / дешёвый)
             client.provider_sort = config.provider_sort
             client.cheap_open = config.cheap_open_models
+            client.cheap_wait = float(config.cheap_wait_s)
         self.on_event = on_event or (lambda *a, **k: None)
         if seed is None and session_id:
             # порядок меток и вариантов у судей — тот же при продолжении и «Доделать»: иначе запросы отличаются
@@ -726,10 +727,7 @@ class Council:
                         meta: dict[str, Any], progress: Any, extra: dict[str, Any]) -> Completion:
         return await self.client.complete(member.model, messages, temperature=temperature, max_tokens=max_tokens,
                                           reasoning_effort=None if effort == "none" else effort, meta=meta,
-                                          on_progress=progress,
-                                          # председатель — на пути всего заседания (рамка, итог): его запросы идут к
-                                          # быстрому поставщику, а не к самому дешёвому
-                                          **({"cheap": False} if member.name == self.cfg.chair else {}), **extra)
+                                          on_progress=progress, **extra)
 
     SEARCH_RESERVE_USD = 0.02  # поиск в интернете на запрос — оценка сверху (у OpenRouter оплачивается отдельно)
     CHARS_PER_TOKEN = 3.0      # для оценки входа: русский текст ~2,5–3 знака на токен, английский ~4

@@ -48,8 +48,9 @@ class _Retryable(Exception):
     """Временная ошибка: стоит повторить запрос."""
 
     def __init__(self, message: str, *, retry_after: float | None = None, credits: bool = False,
-                 slow: bool = False, provider: str = "") -> None:
+                 slow: bool = False, provider: str = "", cheap_slow: bool = False) -> None:
         super().__init__(message)
+        self.cheap_slow = cheap_slow  # дешёвый поставщик не начал отвечать вовремя — переключиться на быстрого
         self.retry_after = retry_after
         self.credits = credits  # OpenRouter зарезервировал баланс под другие идущие запросы
         self.slow = slow  # ответ шёл слишком долго / модель замолчала — поставщик завис
@@ -178,6 +179,11 @@ STALL_S = 150
 SEARCH_ENGINES = ("exa", "auto", "native", "parallel", "perplexity", "firecrawl")
 
 
+def _hides_reasoning(model: str) -> bool:
+    """Модели OpenAI не показывают рассуждения: до первого слова у них молчание — норма, а не медленный поставщик."""
+    return model.startswith("openai/") and not model.startswith("openai/gpt-oss")
+
+
 # открытые модели, которые обслуживают несколько поставщиков (цены различаются в 1,5–3 раза)
 OPEN_WEIGHT = ("moonshotai/", "z-ai/", "deepseek/", "qwen/", "meta-llama/", "mistralai/", "minimax/", "nousresearch/",
                "thudm/", "baidu/", "tencent/", "inclusionai/", "stepfun-ai/", "nvidia/", "openai/gpt-oss")
@@ -283,7 +289,8 @@ class OpenRouterClient:
         # Какого поставщика той же модели выбирает OpenRouter: throughput — самый быстрый по выдаче (модель и ответ те
         # же, сервер другой), price — самый дешёвый, latency — быстрее всего начинает; "" — как решит OpenRouter
         self.provider_sort = "throughput"
-        self.cheap_open = False  # открытые модели (Kimi, GLM, DeepSeek…) — у самого дешёвого поставщика без сжатия
+        self.cheap_open = False  # сначала самый дешёвый поставщик модели; не начал отвечать — самый быстрый
+        self.cheap_wait = 45.0   # сколько ждать начала ответа от дешёвого поставщика, с (с поиском — втрое дольше)
         self.slow_limit = 2  # после стольких «завис» подряд — сбой (дальше «Повторить не ответивших»), а не 4 × 9 мин
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
@@ -368,10 +375,13 @@ class OpenRouterClient:
                           "parameters": {"max_uses": int(web_fetch), "max_content_tokens": FETCH_TOKENS}})
         if tools:
             payload["tools"] = tools
-        if self.cheap_open and cheap and model.startswith(OPEN_WEIGHT):
-            # одну и ту же открытую модель держат несколько поставщиков с разной ценой: берём дешёвого, но только
-            # полноточную версию (без сжатия до 4–6 бит, от которого ответы хуже)
-            payload["provider"] = {"sort": "price", "quantizations": list(FULL_QUANT)}
+        cheap_first = self.cheap_open and cheap
+        if cheap_first:
+            # одну и ту же модель держат несколько поставщиков с разной ценой: сначала самый дешёвый; у открытых
+            # моделей — только полноточные версии (без сжатия до 4–6 бит, от которого ответы хуже). Не начал
+            # отвечать за cheap_wait — следующая попытка у самого быстрого (_from_stream → cheap_slow)
+            payload["provider"] = ({"sort": "price", "quantizations": list(FULL_QUANT)} if model.startswith(OPEN_WEIGHT)
+                                   else {"sort": "price"})
         elif self.provider_sort:
             payload["provider"] = {"sort": self.provider_sort}
         # OpenAI не принимает строгий JSON вместе с поиском («Web Search cannot be used with JSON mode») — не тратим
@@ -416,6 +426,14 @@ class OpenRouterClient:
             except _Retryable as e:
                 last_error = str(e)
                 log.warning("HTTP ✗ %s попытка %d: %s (повтор)", model, attempt, e)
+                if e.cheap_slow and (payload.get("provider") or {}).get("sort") == "price":
+                    # дешёвый поставщик молчит — сразу к самому быстрому (попыткой не считается: это не сбой)
+                    prov = {k: v for k, v in (payload.get("provider") or {}).items() if k != "sort"}
+                    payload["provider"] = {**prov, "sort": "throughput"}
+                    report({"phase": "retry", "attempt": attempt, "wait": 0, "detail": last_error})
+                    attempt -= 1
+                    wait = 0.0
+                    continue
                 if e.slow:
                     slow_runs += 1
                     if slow_runs >= self.slow_limit:  # дважды завис — не держим совет ещё 2 × 9 минут
@@ -552,8 +570,12 @@ class OpenRouterClient:
                     return self._from_json(data, model)
                 # с поиском и чтением страниц модель надолго замолкает: идут поиск и чтение найденного (12.11
                 # gemini с поиском обрывался на всех 4 попытках) — там действуют только общие пределы времени
+                first = (self.cheap_wait * (3 if payload.get("tools") else 1)
+                         if (payload.get("provider") or {}).get("sort") == "price" and self.cheap_wait > 0
+                         and not _hides_reasoning(model) else 0)
                 return await self._from_stream(resp, model, report, started, stall=not payload.get("tools"),
-                                               cap=self.timeout * (6 if payload.get("tools") else 3) * self.patience)
+                                               cap=self.timeout * (6 if payload.get("tools") else 3) * self.patience,
+                                               first=first)
         except httpx.TransportError as e:
             raise _Retryable(f"сетевая ошибка: {e.__class__.__name__}") from e
 
@@ -594,7 +616,7 @@ class OpenRouterClient:
         return (text if isinstance(text, str) else ""), hidden
 
     async def _from_stream(self, resp: httpx.Response, model: str, report: ProgressFn,
-                           started: float, stall: bool = True, cap: float = 0) -> dict[str, Any]:
+                           started: float, stall: bool = True, cap: float = 0, first: float = 0) -> dict[str, Any]:
         text: list[str] = []
         chars = reasoning_chars = 0
         finish = None
@@ -616,6 +638,10 @@ class OpenRouterClient:
             if now - started > (cap or self.timeout * 3):
                 raise _Retryable(f"ответ идёт слишком долго (более {int(cap or self.timeout * 3)} с)", slow=True,
                                  provider=provider)
+            if first and not (chars + reasoning_chars) and now - started > first:
+                # дешёвый поставщик за это время не прислал ни слова, ни рассуждений — к самому быстрому
+                raise _Retryable(f"дешёвый поставщик не начал отвечать за {int(first)} с — переключаюсь на самого "
+                                 "быстрого", cheap_slow=True, provider=provider)
             if chars + reasoning_chars > seen:
                 seen, moved = chars + reasoning_chars, now
             elif stall and seen and now - moved > STALL_S:

@@ -298,9 +298,11 @@ class CouncilConfig(BaseModel):
     # Какого поставщика модели выбирает OpenRouter: throughput — самый быстрый по выдаче (модель та же), price — самый
     # дешёвый, latency — быстрее начинает отвечать, "" — как решит OpenRouter
     provider_sort: Literal["throughput", "price", "latency", ""] = "throughput"
-    # Открытые модели (Kimi, GLM, DeepSeek, Qwen, Mistral, Llama…) — у самого дешёвого поставщика, только полноточные
-    # версии (без сжатия до 4–6 бит). Модель та же, ответы те же, цена ниже в 1,5–3 раза; ответ бывает медленнее
+    # Сначала самый дешёвый поставщик модели (у открытых — Kimi, GLM, DeepSeek, Qwen… — только полноточные версии, без
+    # сжатия до 4–6 бит); не начал отвечать за cheap_wait_s секунд (с поиском — втрое дольше) — следующая попытка у самого
+    # быстрого. Модель та же, ответы те же. Выключено — всегда как provider_sort
     cheap_open_models: bool = True
+    cheap_wait_s: int = Field(default=45, ge=10, le=600)
     framing_max_tokens: int = Field(default=24000, ge=0, le=128000)
     critique_max_tokens: int = Field(default=32000, ge=0, le=128000)
     vote_max_tokens: int = Field(default=12000, ge=0, le=128000)
