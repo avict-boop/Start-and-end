@@ -266,9 +266,11 @@ function selFrameSummary(fr, li) {
   const parts = [];
   if ((fr.inclusion || []).length) parts.push(`<div><h4>Кто подходит</h4><ul>${li(fr.inclusion)}</ul></div>`);
   if ((fr.exclusion || []).length) parts.push(`<div><h4>Кто не подходит</h4><ul>${li(fr.exclusion)}</ul></div>`);
+  if ((fr.benchmarks || []).length) parts.push(`<div><h4>Не кандидаты (конкуренты, примеры, исключённые)</h4><ul>${li(fr.benchmarks)}</ul></div>`);
   if ((fr.angles || []).length) parts.push(`<div><h4>Где ищем (${fr.angles.length} ${plural(fr.angles.length, "направление", "направления", "направлений")})</h4><ul>${li(fr.angles)}</ul></div>`);
   if (!parts.length) return "";
-  const n = [fr.top_n ? `в первую группу — ${fr.top_n}` : "", fr.shortlist ? `подробно проверяем до ${fr.shortlist}` : ""].filter(Boolean).join(" · ");
+  const what = { find: "ищем кандидатов", check: "проверяем список из задания", extend: "проверяем список и ищем недостающих" }[fr.start] || "";
+  const n = [what, fr.top_n ? `в первую группу — ${fr.top_n}` : "", fr.shortlist ? `подробно проверяем до ${fr.shortlist}` : ""].filter(Boolean).join(" · ");
   return `<details class="sel-help"><summary>Кого ищем ${fr.object_kind ? `(${esc(fr.object_kind)})` : ""}${n ? ` <small>${esc(n)}</small>` : ""}</summary>
     <div class="sel-frame-grid">${parts.join("")}</div></details>`;
 }

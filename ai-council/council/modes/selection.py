@@ -345,10 +345,10 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     try:
         # этапы «Отбора» — свои имена в журнале и в истории длин ответов (не путать с «framing» и «verdict» других
         # режимов: короткий вывод отбора иначе занижал бы резерв длинного итога исследования)
+        # что просит задание — найти кандидатов, проверить данный список или и то и другое — решает председатель:
+        # названия в тексте бывают конкурентами, примерами и исключёнными, а не списком на проверку
         frame = await c._ask(chair, "frame",
-                             S.frame_prompt(question, context, criteria, hint,
-                                            start0 if start0 != "auto" else ("check" if len(hint) >= 3 else "find"),
-                                            sc.max_attributes, sc.angles),
+                             S.frame_prompt(question, context, criteria, hint, start0, sc.max_attributes, sc.angles),
                              S.SelectionFrame, meta=META)
     except (ProviderError, InvalidResponse) as e:
         if not _soft(e):
@@ -356,8 +356,19 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         raise S.CouncilError(f"рамка отбора не получилась: {e}") from e
     if not frame.attributes:
         raise S.CouncilError("рамка отбора без признаков — нечего сравнивать")
-    seeds = list(dict.fromkeys([*hint, *frame.objects]))
-    start = start0 if start0 != "auto" else ("check" if len(seeds) >= 3 else "find")
+    bench = {S.norm_name(b) for b in frame.benchmarks if S.norm_name(b)}
+    named = list(c.fixed_objects) or (hint if start0 in ("check", "extend") and not frame.objects else [])
+    seeds = [o for o in dict.fromkeys([*named, *frame.objects]) if S.norm_name(o) not in bench]
+    if start0 != "auto":
+        start = start0
+    elif c.fixed_objects:  # объекты части серии — всегда проверка данного списка
+        start = "check"
+    else:
+        start = frame.start or ("check" if len(seeds) >= 3 else "find")
+    if start == "check" and not seeds:
+        start = "find"  # проверять нечего — ищем
+    log.info("%sотбор: председатель — «%s», кандидатов в задании %d, не кандидаты (конкуренты, исключённые): %s",
+             c._tag, frame.start or "—", len(seeds), ", ".join(frame.benchmarks) or "—")
     frame = apply_frame_edits(frame, gate(c, "frame", {"frame": frame.model_dump()}))
     attrs = frame.attributes
     if not attrs:
@@ -719,6 +730,9 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     first = [x for x in found if x[0].split(S.BY)[0] in first_angles]
     comp = S.completeness(S.merge_candidates(first), first_pairs)
     entities = S.merge_candidates(found, seeds)
+    bench = {S.norm_name(b) for b in frame.benchmarks if S.norm_name(b)}
+    if bench:  # конкуренты и исключённые, названные в задании, — не кандидаты, даже если поиск их принёс
+        entities = [e for e in entities if not any(S.norm_name(n) in bench for n in e.get("names") or [e["name"]])]
     for e in entities:  # какие модели нашли кандидата
         # кто нашёл: модели поиска по направлениям; найденное в готовом списке — «список: …» (а не читавшая модель)
         e["models"] = sorted({a.split(S.BY)[0] if a.startswith("список: ") else a.split(S.BY)[-1]

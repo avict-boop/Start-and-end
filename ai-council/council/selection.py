@@ -100,7 +100,10 @@ class SelectionFrame(BaseModel):
     exclusion: list[str] = Field(default_factory=list)   # кто точно не подходит
     attributes: list[Attribute] = Field(default_factory=list)
     angles: list[str] = Field(default_factory=list)      # направления поиска кандидатов
-    objects: list[str] = Field(default_factory=list)     # объекты, названные в задании
+    objects: list[str] = Field(default_factory=list)     # объекты, которые задание даёт как кандидатов на проверку
+    # названные в задании, но НЕ кандидаты: конкуренты для сравнения, примеры, исключённые — их не проверяем и не ищем
+    benchmarks: list[str] = Field(default_factory=list)
+    start: str = ""                                      # что просит задание: find | check | extend (решает председатель)
     shortlist: int = 0                                   # сколько проверять подробно (0 — всех прошедших отсев)
     top_n: int = 0                                       # сколько в «первой группе» (например 12 на переговоры)
     notes: str = ""
@@ -110,10 +113,16 @@ class SelectionFrame(BaseModel):
     def _t(cls, v: Any) -> str:
         return _txt(v)
 
-    @field_validator("inclusion", "exclusion", "angles", "objects", mode="before")
+    @field_validator("inclusion", "exclusion", "angles", "objects", "benchmarks", mode="before")
     @classmethod
     def _l(cls, v: Any) -> list[str]:
         return [x.strip() for x in to_list(v) if x.strip()]
+
+    @field_validator("start", mode="before")
+    @classmethod
+    def _s(cls, v: Any) -> str:
+        t = _txt(v).lower()
+        return t if t in ("find", "check", "extend") else ""
 
     @field_validator("shortlist", "top_n", mode="before")
     @classmethod
@@ -1157,13 +1166,14 @@ def _attrs_block(attrs: list[Attribute]) -> str:
 
 def frame_prompt(question: str, context: str | None, criteria: list[str] | None, objects_hint: list[str],
                  start: str, max_attrs: int, n_angles: int = 8) -> str:
-    hint = ("\n\nObjects named in the task (keep their spelling in \"objects\"):\n" + "\n".join(f"- {o}" for o in objects_hint[:300])
-            if objects_hint else "")
+    hint = ("\n\nObjects named in the task — the program found these names in the text; they may be candidates to evaluate, "
+            "competitors or benchmarks to compare with, examples, or explicitly excluded companies (decide from the task):\n"
+            + "\n".join(f"- {o}" for o in objects_hint[:300])) if objects_hint else ""
     return f"""Task for a SELECTION study (compare many objects attribute by attribute, every cell backed by a source):
 
 {question}{f"{chr(10)}{chr(10)}Context: {context}" if context else ""}{f"{chr(10)}{chr(10)}User criteria: {'; '.join(criteria)}" if criteria else ""}{hint}
 
-Start: {"find candidates from scratch" if start == "find" else "check the user's list only" if start == "check" else "check the user's list and find missing candidates"}.
+{"Start: decide from the task and put it in \"start\": \"find\" — the task asks to FIND candidates (the usual case even if it names some companies as competitors, examples or exclusions); \"check\" — the task gives a list of candidates and asks only to evaluate them; \"extend\" — evaluate the given candidates AND find more." if start == "auto" else "Start: " + ("find candidates from scratch" if start == "find" else "check the user's list only" if start == "check" else "check the user's list and find missing candidates") + "."}
 
 Build the frame of the study:
 - "object_kind": what an object is (e.g. "contract manufacturer");
@@ -1178,13 +1188,18 @@ Build the frame of the study:
 - "angles": {n_angles} different directions to find candidates (exhibitor lists, stock exchange filings, registries,
   industry rankings and associations, searches in the local language, B2B platforms, certification databases) —
   each a concrete instruction for a web search, different from the others;
-- "objects": objects named in the task (exact spelling), empty if none;
+- "objects": ONLY the objects the task gives as CANDIDATES to evaluate (exact spelling), empty if none — never
+  competitors to beat, benchmarks, examples or excluded companies;
+- "benchmarks": companies named in the task that are NOT candidates (competitors to compare with, examples,
+  excluded ones) — they are not checked and are not to be found as candidates;
+- "start": "find" | "check" | "extend" (see Start above);
 - "shortlist": how many objects deserve the detailed check if the task says so (else 0);
 - "top_n": how many the task wants in the first group (e.g. 12 for negotiations; else 0);
 - "refined_question": one sentence.
 Return JSON: {{"refined_question": "...", "object_kind": "...", "inclusion": [], "exclusion": [], "attributes":
 [{{"name": "...", "kind": "number", "unit": "...", "evidence": "...", "keywords": [], "weight": 5, "better": "high",
-"wanted": [], "screen": false, "knockout": ""}}], "angles": [], "objects": [], "shortlist": 0, "top_n": 0}}"""
+"wanted": [], "screen": false, "knockout": ""}}], "angles": [], "objects": [], "benchmarks": [], "start": "find",
+"shortlist": 0, "top_n": 0}}"""
 
 
 def discover_prompt(frame: SelectionFrame, angle: str, per_angle: int, exclude: list[str] | None = None) -> str:
@@ -1192,7 +1207,7 @@ def discover_prompt(frame: SelectionFrame, angle: str, per_angle: int, exclude: 
     return f"""Find candidates for this selection study by searching the web.
 
 Study: {frame.refined_question}
-A candidate is: {frame.object_kind}. Inclusion rules: {'; '.join(frame.inclusion) or '—'}. Exclude: {'; '.join(frame.exclusion) or '—'}.
+A candidate is: {frame.object_kind}. Inclusion rules: {'; '.join(frame.inclusion) or '—'}. Exclude: {'; '.join(frame.exclusion) or '—'}.{f"{chr(10)}Not candidates (competitors, benchmarks or excluded companies named in the task — do not list them): {', '.join(frame.benchmarks)}." if frame.benchmarks else ""}
 
 Search direction (use ONLY this direction): {angle}
 

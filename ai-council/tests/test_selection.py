@@ -607,3 +607,29 @@ def test_ready_made_lists_add_candidates_and_count_for_completeness():
     assert "stand a" in cand.quote
     c2 = _council("find", lists=0)
     assert asyncio.run(SM.harvest_lists(c2, fr, SM.discover_hunters(c2))) == ([], 0)
+
+
+def test_named_competitors_do_not_turn_search_into_check():
+    """Задание называет конкурентов (Эвалар, GLS) и исключённую площадку (ORZAX), а просит НАЙТИ заводы: председатель
+    решает «find», названные — не кандидаты: поиск идёт, они в список не попадают (случай 15.11)."""
+    from council.modes import selection as SM
+    c = _council()
+    orig = c._ask
+
+    async def ask(m, stage, prompt, schema, **kw):
+        if stage == "frame":
+            fr = await orig(m, stage, prompt, schema, **kw)
+            return fr.model_copy(update={"objects": [], "benchmarks": ["Эвалар", "GLS", "ORZAX", "Demo Plant 7"],
+                                         "start": "find"})
+        return await orig(m, stage, prompt, schema, **kw)
+
+    c._ask = ask
+    q = ("Найди крупные заводы в Китае. Конкуренты для сравнения — Эвалар и GLS.\n"
+         "Не включай ранее исключённую площадку ORZAX.\n| 1 | Эвалар |\n| 2 | GLS |\n| 3 | ORZAX |")
+    r = asyncio.run(c.run(q, mode="selection"))
+    sel = r.selection
+    names = [o["name"] for o in sel["objects"]]
+    assert sel["start"] == "find"
+    assert "discover" in {e.get("stage") for e in r.transcript}
+    assert not {"Эвалар", "GLS", "ORZAX", "Demo Plant 7"} & set(names)  # названные «не кандидаты» отброшены
+    assert names and all(n.startswith("Demo Plant") for n in names)

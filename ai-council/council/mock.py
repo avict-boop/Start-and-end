@@ -265,6 +265,14 @@ async def mock_pages(urls: list[str], *, texts: bool = False, **kw: Any) -> dict
     return out
 
 
+def _named(text: str) -> list[str]:
+    """Демо-председатель: объекты из списка «Objects named in the task» (строки «- …» после заголовка)."""
+    if "Objects named in the task" not in text:
+        return []
+    tail = text.split("Objects named in the task", 1)[1].split("\n\n", 1)[0]
+    return [ln[2:].strip() for ln in tail.splitlines() if ln.startswith("- ") and ln[2:].strip()]
+
+
 def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[str, Any]:
     import re as _re
     if stage == "frame":
@@ -282,8 +290,7 @@ def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[st
                      "keywords": ["gmp", "valid until"]},
                     {"name": "Примечание", "kind": "text", "weight": 0}],
                 "angles": ["демо: участники выставки", "демо: биржевые отчёты", "демо: реестр сертификатов"],
-                "objects": heuristic_objects(text.split("Objects named in the task")[-1]) if "Objects named in the task"
-                in text else [], "shortlist": 0, "top_n": 3}
+                "objects": _named(text), "shortlist": 0, "top_n": 3}
     if stage == "lists":
         return {"lists": [{"url": "https://expo.example.com/exhibitors", "title": "Демо-выставка: участники",
                            "kind": "exhibitors", "size": "11"}]}
