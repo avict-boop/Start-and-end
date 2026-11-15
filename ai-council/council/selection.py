@@ -374,8 +374,13 @@ LEGAL = re.compile(
     r"technology|technologies|tech|biotech|biotechnology|bio|biology|biological|pharma|pharmaceuticals?|health|"
     r"healthcare|nutrition|industry|industrial|science|sciences|manufacturing|products?|the|and)\b")
 LEGAL_ZH = re.compile(r"(股份有限公司|有限责任公司|有限公司|集团|控股|科技|生物|医药|制药|健康|保健|食品|技术|实业|"
-                      r"发展|工程|营养|药业|股份)")
-LEGAL_RU = re.compile(r"\b(ооо|оао|зао|пао|ао|группа|компания|холдинг)\b")
+                      r"发展|工程|营养|药业|股份|株式会社|有限会社|合同会社|주식회사|유한회사)")
+# формы собственности других стран (после удаления точек: «S.p.A.» → «s p a»)
+LEGAL_INTL = re.compile(  # длинные формы раньше коротких: «S.A.S.» не должно стать «S.A.» + «s»
+    r"\b(sp\s*z\s*o\s*o|s\s*a\s*r\s*l|s\s*a\s*s|s\s*p\s*a|s\s*r\s*l|s\s*r\s*o|d\s*o\s*o|gmbh\s*co|"
+    r"limitada|ltda|sarl|srl|spa|sas|pjsc|jsc|oyj|asa|aps|kft|zrt|pte|pvt|bhd|sdn|tbk|ohg|cia|cie|"
+    r"s\s*a|s\s*l|a\s*ş|a\s*s|b\s*v|n\s*v|ag|kg|ug|oy|ab|kk)\b")
+LEGAL_RU = re.compile(r"\b(ооо|оао|зао|пао|ао|нао|ип|тов|пат|ат|група|группа|компания|компанія|холдинг|завод|фабрика)\b")
 MARKETPLACES = {"alibaba.com", "1688.com", "made-in-china.com", "globalsources.com", "amazon.com", "tradekey.com",
                 "indiamart.com", "linkedin.com", "facebook.com", "youtube.com", "wikipedia.org", "baidu.com",
                 "zhihu.com", "qcc.com", "tianyancha.com", "aiqicha.baidu.com", "google.com", "bing.com",
@@ -390,6 +395,7 @@ def norm_name(s: str) -> str:
     t = re.sub(r"[^\w\s]", " ", t)
     t = LEGAL.sub(" ", t)
     t = LEGAL_RU.sub(" ", t)
+    t = LEGAL_INTL.sub(" ", t)
     return re.sub(r"\s+", "", t)
 
 

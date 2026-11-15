@@ -301,6 +301,22 @@ function renderSettings() {
         <label class="field"><span>…и не меньше, токенов (и не меньше общего лимита ответа)</span><input type="number" data-rn="author_min_tokens" min="1000" max="64000" step="500" value="${d.research.author_min_tokens}" ${ro}>
           <div class="muted small">думающим моделям нужно место на скрытые рассуждения</div></label>
       </div>
+      <h2 style="margin-top:1.2rem">Страницы, PDF и сканы</h2>
+      <p class="muted small">Как программа читает страницы и файлы: ссылки авторов в «Исследовании», источники «Отбора», вложения и ответы заводов. Распознавание и браузер нужны процессору и памяти — на сервере от 4 ядер и 8 ГБ держите включёнными.</p>
+      ${(() => { const F = d.fetch || {}; const v = (k, def) => (F[k] ?? def); return `
+      <label class="switch"><input type="checkbox" data-fb="ocr" ${v("ocr", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Распознавать сканы</b><small>PDF без текстового слоя и картинки (сертификаты, лицензии, страницы отчётов) — по-китайски, по-английски и по-русски</small></span></label>
+      <label class="switch"><input type="checkbox" data-fb="browser" ${v("browser", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Браузер для «трудных» страниц</b><small>сайты на JavaScript и с защитой от программ: открываются в браузере, только если обычное скачивание не дало текста</small></span></label>
+      <div class="row2">
+        <label class="field"><span>Страниц PDF читать, до</span><input type="number" data-fn="pdf_pages" min="10" max="2000" value="${v("pdf_pages", 300)}" ${ro}><small class="hint">годовые отчёты — сотни страниц; мощности часто на 60–150-й</small></label>
+        <label class="field"><span>Размер PDF, до МБ</span><input type="number" data-fn="pdf_mb" min="2" max="200" value="${v("pdf_mb", 40)}" ${ro}></label>
+        <label class="field"><span>Страниц скана распознавать, до</span><input type="number" data-fn="ocr_pages" min="1" max="300" value="${v("ocr_pages", 20)}" ${ro}><small class="hint">страница — несколько секунд процессора</small></label>
+        <label class="field"><span>Страниц распознавать одновременно</span><input type="number" data-fn="ocr_parallel" min="1" max="16" value="${v("ocr_parallel", 4)}" ${ro}><small class="hint">не больше числа ядер сервера</small></label>
+        <label class="field"><span>Языки распознавания</span><input type="text" data-ft="ocr_langs" value="${esc(v("ocr_langs", "auto"))}" ${ro}><small class="hint">auto — программа сама определяет письменность (иероглифы, кириллица, латиница, японская, корейская, арабская…); или коды Tesseract через «+»: chi_sim+eng+rus</small></label>
+        <label class="field"><span>Вкладок браузера одновременно</span><input type="number" data-fn="browser_pages" min="1" max="10" value="${v("browser_pages", 3)}" ${ro}><small class="hint">≈300–500 МБ памяти каждая</small></label>
+        <label class="field"><span>Ждать страницу в браузере, с</span><input type="number" data-fn="browser_timeout" min="10" max="180" value="${v("browser_timeout", 45)}" ${ro}></label>
+        <label class="field"><span>Одна ссылка с распознаванием — не дольше, с</span><input type="number" data-fn="link_deadline" min="10" max="600" value="${v("link_deadline", 120)}" ${ro}></label>
+        <label class="field"><span>Все ссылки этапа — не дольше, с</span><input type="number" data-fn="total_deadline" min="30" max="1800" value="${v("total_deadline", 420)}" ${ro}></label>
+      </div>`; })()}
       <h2 style="margin-top:1.2rem">Отбор</h2>
       <p class="muted small">Режим «Отбор»: таблица «объекты × признаки», в каждой ячейке — значение, источник и дословная цитата, которую программа находит на скачанной странице. Совет решает только спорные ячейки, ранг по весам считает программа.</p>
       ${(() => { const S = d.selection || {}; const v = (k, def) => (S[k] ?? def); return `
@@ -433,6 +449,10 @@ function bindSettings() {
   for (const el of $("setBody").querySelectorAll("[data-r]")) el.addEventListener("change", () => { d.research[el.dataset.r] = el.checked; setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-rn]")) el.addEventListener("input", () => { d.research[el.dataset.rn] = num(el.value); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-rs]")) el.addEventListener("change", () => { d.research[el.dataset.rs] = el.value; setDirty(); });
+  d.fetch = d.fetch || {};
+  for (const el of $("setBody").querySelectorAll("[data-fn]")) el.addEventListener("input", () => { d.fetch[el.dataset.fn] = num(el.value); setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-ft]")) el.addEventListener("input", () => { d.fetch[el.dataset.ft] = el.value.trim(); setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-fb]")) el.addEventListener("change", () => { d.fetch[el.dataset.fb] = el.checked; setDirty(); });
   d.selection = d.selection || {};
   for (const el of $("setBody").querySelectorAll("[data-sn]")) el.addEventListener("input", () => { d.selection[el.dataset.sn] = num(el.value); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-ss]")) el.addEventListener("change", () => { d.selection[el.dataset.ss] = el.value; setDirty(); });

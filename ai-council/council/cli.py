@@ -27,6 +27,8 @@ def load_config(path):
     """Конфиг + фирменное оформление отчётов."""
     cfg = _load_config(path)
     set_brand(cfg.branding, Path(path).resolve().parent)
+    from .links import configure as configure_fetch
+    configure_fetch(cfg.fetch)  # как читать страницы и сканы
     return cfg
 
 

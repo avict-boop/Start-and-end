@@ -151,6 +151,29 @@ class ResearchConfig(BaseModel):
             raise ValueError("длина варианта: 0 (без ограничения) или от 300 слов")
         return v
 
+class FetchConfig(BaseModel):
+    """Как программа читает страницы и файлы (ссылки авторов в «Исследовании», источники «Отбора», вложения).
+    Сканы и браузер нужны память и процессор: на сервере от 4 ядер и 8 ГБ — включены; на слабом их можно выключить."""
+
+    pdf_pages: int = Field(default=300, ge=10, le=2000)     # сколько страниц PDF читать (годовые отчёты — сотни)
+    pdf_mb: int = Field(default=40, ge=2, le=200)            # PDF больше — читается только начало файла
+    # Распознавание сканов (Tesseract): PDF без текстового слоя и картинки на страницах. Без программы tesseract на
+    # сервере (она ставится в Docker-образ) ничего не делает
+    ocr: bool = True
+    # языки распознавания (Tesseract): auto — программа определяет письменность скана (иероглифы, кириллица, латиница,
+    # японская, корейская, арабская…) и берёт её языки; или явно, например «chi_sim+eng+rus»
+    ocr_langs: str = "auto"
+    ocr_pages: int = Field(default=20, ge=1, le=300)       # сколько страниц скана распознавать
+    ocr_parallel: int = Field(default=4, ge=1, le=16)      # страниц одновременно
+    # Браузер (Chromium) для страниц, которые не отдают текст простому запросу: сайты на JavaScript и с защитой от
+    # программ. Включается только там, где обычное скачивание не дало текста
+    browser: bool = True
+    browser_pages: int = Field(default=3, ge=1, le=10)     # вкладок одновременно (≈300–500 МБ каждая)
+    browser_timeout: int = Field(default=45, ge=10, le=180)
+    link_deadline: int = Field(default=120, ge=10, le=600)   # одна ссылка вместе с распознаванием — не дольше, с
+    total_deadline: int = Field(default=420, ge=30, le=1800)  # все ссылки этапа — не дольше, с
+
+
 class SelectionConfig(BaseModel):
     """Режим «Отбор»: таблица «объекты × признаки», в каждой ячейке — значение, источник и дословная цитата,
     которую программа сама находит на скачанной странице. Совет обсуждает только спорные ячейки."""
@@ -308,6 +331,7 @@ class CouncilConfig(BaseModel):
     fact_check: FactCheckConfig = Field(default_factory=FactCheckConfig)
     research: ResearchConfig = Field(default_factory=ResearchConfig)
     selection: SelectionConfig = Field(default_factory=SelectionConfig)
+    fetch: FetchConfig = Field(default_factory=FetchConfig)
     advisor: AdvisorConfig = Field(default_factory=AdvisorConfig)
     transcribe_model: str = "google/gemini-2.5-flash"  # модель OpenRouter для расшифровки голосовых
     members: list[MemberConfig]

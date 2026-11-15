@@ -29,7 +29,7 @@ from ..attachments import (ACCEPT, MAX_FILE_BYTES, MAX_FILES, AttachmentError, a
                            limit_total, load_attachment, merge, safe_name)
 from ..report import make_stem, save
 from ..reports.brand import set_brand
-from ..links import check_links
+from ..links import check_links, configure as configure_fetch
 from ..checkpoint import Checkpoint, Journal, classify
 from ..session import Council, CouncilError
 from .auth import BasicAuth
@@ -408,6 +408,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         except (OSError, ValueError) as e:
             raise HTTPException(500, f"ошибка в {config_path.name}: {e}") from e
         set_brand(cfg.branding, config_path.parent)  # правки оформления подхватываются без перезапуска
+        configure_fetch(cfg.fetch)  # как читать страницы и сканы — тоже без перезапуска
         return cfg
 
     def runs_dir(cfg: CouncilConfig) -> Path:

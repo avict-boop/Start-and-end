@@ -232,6 +232,15 @@ def load_attachment(data: bytes, name: str, file: str = "") -> Attachment:
     if ext == ".pdf":
         att.mime = "application/pdf"
         text, att.pages = _pdf_text(data)
+        from . import links, ocr
+        if links.OPTIONS["ocr"] and ocr.looks_scanned(text, att.pages or 1):  # скан — распознаём страницы
+            scanned = ocr.pdf_text(data, langs=links.OPTIONS["ocr_langs"], pages=int(links.OPTIONS["ocr_pages"]),
+                                   parallel=int(links.OPTIONS["ocr_parallel"]))
+            if len(scanned.strip()) > len(text.strip()):
+                text = scanned
+                att.warning = (f"PDF — скан: текст распознан программой (страниц: "
+                               f"{min(att.pages or 0, int(links.OPTIONS['ocr_pages'])) or '?'}); возможны ошибки "
+                               "распознавания")
         if not text.strip():
             att.warning = ("в PDF нет текстового слоя (похоже на скан) — приложите страницы картинками, "
                            "чтобы модели их увидели")

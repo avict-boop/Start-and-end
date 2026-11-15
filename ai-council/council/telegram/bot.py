@@ -331,6 +331,8 @@ class CouncilBot:
     def base_config(self) -> CouncilConfig:
         cfg = load_config(self.config_path)
         set_brand(cfg.branding, self.config_path.parent)
+        from ..links import configure as configure_fetch
+        configure_fetch(cfg.fetch)  # как читать страницы и сканы
         return cfg
 
     def _load_settings(self) -> dict[int, ChatSettings]:

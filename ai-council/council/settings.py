@@ -16,7 +16,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
 from .config import (AdvisorConfig, BrandingConfig, CouncilConfig, FactCheckConfig, MemberConfig, ResearchConfig,
-                     SelectionConfig)
+                     SelectionConfig, FetchConfig)
 
 TOP_KEYS = ("language", "mode", "debate_rounds", "min_quorum", "max_cost_usd", "temperature", "max_tokens",
             "reasoning_effort", "chair", "chair_proposes", "chair_follows_vote", "devil_advocate", "transcribe_model",
@@ -24,7 +24,7 @@ TOP_KEYS = ("language", "mode", "debate_rounds", "min_quorum", "max_cost_usd", "
             "max_requirements", "quick_keep", "evaluate_allow_none", "budget_reserve", "reserve_output_share", "answer_size", "chair_critiques", "chair_votes", "key_reserve", "web_tools", "search_engine", "search_uses", "search_unlimited", "search_results", "json_mode", "vote_reasoning", "critique_reasoning", "revision_reasoning", "log_level", "log_file_mb", "log_files", "quorum_large", "reports_memory_mb",
             "pilot_solo_model")
 SECTIONS = {"branding": BrandingConfig, "fact_check": FactCheckConfig, "research": ResearchConfig,
-            "advisor": AdvisorConfig, "selection": SelectionConfig}
+            "advisor": AdvisorConfig, "selection": SelectionConfig, "fetch": FetchConfig}
 MEMBER_KEYS = ("name", "model", "enabled", "reasoning_effort", "temperature", "max_tokens", "web_search")
 MAX_BACKUPS = 20
 
@@ -151,10 +151,15 @@ def save(path: Path, data: dict[str, Any], *, backups: Path | None = None) -> Co
     new_text = out.getvalue()
     CouncilConfig.model_validate(_plain(yaml.load(new_text)))  # итоговый файл должен читаться
     if backups is not None:
-        backups.mkdir(parents=True, exist_ok=True)
-        (backups / f"config-{time.strftime('%Y%m%d-%H%M%S')}.yaml").write_text(text, encoding="utf-8")
-        for old in sorted(backups.glob("config-*.yaml"))[:-MAX_BACKUPS]:
-            old.unlink(missing_ok=True)
+        try:
+            backups.mkdir(parents=True, exist_ok=True)
+            (backups / f"config-{time.strftime('%Y%m%d-%H%M%S')}.yaml").write_text(text, encoding="utf-8")
+            for old in sorted(backups.glob("config-*.yaml"))[:-MAX_BACKUPS]:
+                old.unlink(missing_ok=True)
+        except PermissionError as e:  # папку данных скопировали от root (перенос на новый сервер)
+            raise SettingsError(
+                "нет прав на запись в папку данных (runs). На сервере выполните: cd /opt/ai-council/ai-council && "
+                "docker compose exec -u root bot chown -R 1000:1000 /app/runs") from e
     try:
         # запись поверх (не через переименование): файл подключён в контейнер отдельным томом
         with open(path, "w", encoding="utf-8") as f:

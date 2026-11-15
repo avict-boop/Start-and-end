@@ -193,7 +193,13 @@ def register(app: FastAPI, *, base_config: Callable, runs_dir: Callable, archive
         atts = await asyncio.to_thread(load_uploads, body.attachments) if body.attachments else []
         docs = "\n\n".join(f"=== {a.name} ===\n{a.text}" for a in atts if a.kind == "document" and a.text)
         images = [a for a in atts if a.kind == "image"]
-        text = "\n\n".join(x for x in (body.text.strip(), docs) if x)
+        from .. import links as L
+        ocr_txt = []
+        for a in images:  # фото сертификата: распознанный текст — модели в помощь к самой картинке
+            t = await asyncio.to_thread(L.image_text, a.raw or b"", a.mime or "")
+            if t.strip():
+                ocr_txt.append(f"=== {a.name} (распознанный текст) ===\n{t}")
+        text = "\n\n".join(x for x in (body.text.strip(), docs, *ocr_txt) if x)
         if not text and not images:
             raise HTTPException(400, "вставьте текст ответа или приложите файл")
         parsed, cost = await ask(P.reply_prompt(p, s, text or "(see images)"), P.ReplyParsed, "reply", body.mock,
