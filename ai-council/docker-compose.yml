@@ -36,6 +36,7 @@ services:
       - council-runs:/app/runs
       - ./branding:/app/branding
       - ./control:/app/control
+      - ./backups:/app/backups:ro   # резервные копии (делает служба на сервере) — список и скачивание на сайте
     environment:
       TRUST_PROXY: "1"   # реальный IP клиента берётся из X-Forwarded-For (для защиты от перебора пароля)
     # Наружу порт открыт только на самом сервере; из интернета — через Caddy (профиль https)

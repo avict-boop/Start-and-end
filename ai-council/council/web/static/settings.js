@@ -664,7 +664,7 @@ async function renderSystem(first) {
       </div>
     </div>
     ${upd}
-    ${st.action ? `<div class="sys-status"><b>${st.action === "update" ? "Обновление" : "Перезапуск"}:</b> ${stText}
+    ${st.action ? `<div class="sys-status"><b>${{ update: "Обновление", restart: "Перезапуск", backup: "Резервная копия" }[st.action] || st.action}:</b> ${stText}
       ${st.at ? `<span class="muted small">${esc(when(st.at))}</span>` : ""}${st.message && st.state === "failed" ? `<div class="bad-text">${esc(st.message)}</div>` : ""}</div>` : ""}
     ${sys.log ? `<details ${running || st.state === "failed" ? "open" : ""}><summary class="small">Журнал</summary><pre class="sys-log">${esc(sys.log)}</pre></details>` : ""}
     <p class="muted small">Обновление: программа скачивает новую версию, пересобирается и перезапускается (обычно 1–5 минут).
@@ -675,6 +675,13 @@ async function renderSystem(first) {
       в его «Журнале событий».</p>
     <a class="btn secondary" href="/api/diagnostics"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>Скачать журналы программы</a>
     <div id="failedList" class="small" style="margin-top:.6rem"></div>
+    <h2 style="margin-top:1.2rem">Резервные копии всего</h2>
+    <p class="muted small">Каждую ночь (около 3:30 по времени сервера) служба на сервере сохраняет ключи, настройки, логотип,
+      архив заседаний и проекты закупки — хранятся последние 14 копий. Скачайте копию себе на компьютер: с ней программу
+      можно восстановить на любом сервере (<code>sudo bash /opt/ai-council/ai-council/deploy/web-control.sh restore backups/ИМЯ</code>).
+      В копии — ключи: храните её как пароль.</p>
+    <div id="fullBackups" class="small muted">Загружаю список…</div>
+    <button type="button" class="secondary" id="backupNow" ${!sys.control || running ? "disabled" : ""}>Сделать копию сейчас</button>
     <h2 style="margin-top:1.2rem">Резервные копии настроек</h2>
     <p class="muted small">Перед каждым сохранением прежняя версия config.yaml сохраняется — можно вернуть.</p>
     <div id="backups"><button type="button" class="link" id="showBackups">Показать копии</button></div>`;
@@ -682,10 +689,35 @@ async function renderSystem(first) {
   $("sysUpdate").addEventListener("click", () => requestAction("update"));
   $("sysRestart").addEventListener("click", () => requestAction("restart"));
   $("showBackups").addEventListener("click", showBackups);
+  $("backupNow").addEventListener("click", backupNow);
+  loadFullBackups();
   loadFailed();
   if (first && v && !SET.check) checkVersion(false);
   if (running && !SET.poll) startPolling();
   if (!running && SET.poll && !SET.restarting) { clearInterval(SET.poll); SET.poll = null; }
+}
+
+async function loadFullBackups() {
+  const box = $("fullBackups");
+  if (!box) return;
+  try {
+    const r = await api("/api/system/backups");
+    const size = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} ГБ` : `${Math.max(1, Math.round(b / 1e6))} МБ`);
+    box.innerHTML = (r.items.length ? `<ul class="backup-list">${r.items.map((x) => `<li>${esc(new Date(x.at * 1000).toLocaleString("ru-RU"))} · ${size(x.size)}
+        ${x.readable ? `· <a href="/api/system/backups/${encodeURIComponent(x.name)}">скачать</a>` : "· <span class=\"muted\">нет доступа на чтение</span>"}</li>`).join("")}</ul>`
+      : `<p>${r.visible ? "Копий пока нет — первая появится этой ночью или по кнопке ниже." : "Папка копий появится после обновления программы и первой копии."}</p>`)
+      + (r.log ? `<details><summary>Журнал копий</summary><pre class="sys-log">${esc(r.log)}</pre></details>` : "");
+  } catch (e) { box.textContent = e.message; }
+}
+
+async function backupNow() {
+  try {
+    await api("/api/system/backup", { method: "POST" });
+    notice("⏳ Делаю резервную копию — обычно меньше минуты. Список обновится сам.", "warn");
+    startPolling();
+    setTimeout(loadFullBackups, 15000);
+    setTimeout(loadFullBackups, 45000);
+  } catch (e) { notice(esc(e.message), "bad"); }
 }
 
 async function checkVersion(force) {

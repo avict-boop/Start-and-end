@@ -847,3 +847,22 @@ def test_procurement_project_from_selection(client):
     assert p["recheck_done"] and isinstance(p["recheck_diff"], list)
     assert any(x["id"] == pid for x in client.get("/api/projects").json()["items"])
     assert client.delete(f"/api/projects/{pid}").json()["ok"]
+
+
+def test_full_backups_list_download_and_request(client, tmp_path):
+    """Резервные копии делает служба на сервере (deploy/web-control.sh); сайт показывает список, отдаёт файл и
+    оставляет заявку «сделать копию сейчас»."""
+    assert client.get("/api/system/backups").json() == {"items": [], "visible": False, "log": ""}
+    d = tmp_path / "backups"
+    d.mkdir()
+    (d / "ai-council-2026-11-15_0330.tgz").write_bytes(b"\x1f\x8bdemo")
+    (d / "чужой.tgz").write_bytes(b"x")
+    items = client.get("/api/system/backups").json()["items"]
+    assert [x["name"] for x in items] == ["ai-council-2026-11-15_0330.tgz"] and items[0]["readable"]
+    r = client.get("/api/system/backups/ai-council-2026-11-15_0330.tgz")
+    assert r.status_code == 200 and r.content == b"\x1f\x8bdemo"
+    assert client.get("/api/system/backups/..%2Fconfig.yaml").status_code in (400, 404)
+    (tmp_path / "control").mkdir(exist_ok=True)
+    r = client.post("/api/system/backup")
+    assert r.status_code == 200 and (tmp_path / "control" / "request").read_text().strip() == "backup"
+    assert client.post("/api/system/backup").status_code == 409  # заявка уже есть

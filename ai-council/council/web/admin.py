@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import httpx
+from fastapi.responses import FileResponse
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
@@ -559,6 +560,44 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
     async def restart() -> dict[str, Any]:
         log.info("запрошен перезапуск программы с сайта")
         return request_action("restart")
+
+    # ------------------------------------------------------------ резервные копии (делает служба на сервере)
+    backups_dir = config_path.parent / "backups"
+    BACKUP_NAME = re.compile(r"ai-council-\d{4}-\d{2}-\d{2}_\d{4}\.tgz")
+
+    @app.get("/api/system/backups")
+    async def backups_list() -> dict[str, Any]:
+        def scan() -> list[dict[str, Any]]:
+            if not backups_dir.is_dir():
+                return []
+            out = []
+            for f in sorted(backups_dir.glob("ai-council-*.tgz"), reverse=True):
+                if BACKUP_NAME.fullmatch(f.name):
+                    st = f.stat()
+                    out.append({"name": f.name, "size": st.st_size, "at": st.st_mtime,
+                                "readable": os.access(f, os.R_OK)})
+            return out
+        items = await asyncio.to_thread(scan)
+        blog = ""
+        try:
+            blog = "\n".join((control / "backup.log").read_text(encoding="utf-8", errors="replace").splitlines()[-6:])
+        except OSError:
+            pass
+        return {"items": items, "visible": backups_dir.is_dir(), "log": blog}
+
+    @app.get("/api/system/backups/{name}")
+    async def backup_download(name: str) -> FileResponse:
+        if not BACKUP_NAME.fullmatch(name):
+            raise HTTPException(400, "неверное имя копии")
+        f = backups_dir / name
+        if not f.is_file():
+            raise HTTPException(404, "копии нет")
+        return FileResponse(f, media_type="application/gzip", filename=name)
+
+    @app.post("/api/system/backup")
+    async def backup_now() -> dict[str, Any]:
+        log.info("запрошена резервная копия с сайта")
+        return request_action("backup")
 
 
 def _diff(a: Any, b: Any, path: str = "") -> list[str]:

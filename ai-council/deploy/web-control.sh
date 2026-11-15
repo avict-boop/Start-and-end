@@ -10,6 +10,8 @@
 #   sudo bash deploy/web-control.sh update-now  — обновить сейчас из терминала (то же, что кнопка в вебе)
 #   bash deploy/web-control.sh run              — выполнить заявку (вызывает служба)
 #   bash deploy/web-control.sh version          — записать сведения о версии
+#   sudo bash deploy/web-control.sh backup-now  — резервная копия сейчас (сама делается каждую ночь)
+#   sudo bash deploy/web-control.sh restore ФАЙЛ — восстановить из копии (backups/ai-council-….tgz)
 
 set -Euo pipefail
 
@@ -19,6 +21,8 @@ CONTROL="$APP_DIR/control"
 APP_UID=1000   # пользователь внутри контейнера (см. Dockerfile)
 UNIT=ai-council-control
 LOG="$CONTROL/update.log"
+BACKUPS="$APP_DIR/backups"     # резервные копии: ключи, настройки, логотип, архив заседаний, проекты
+BACKUP_LOG="$CONTROL/backup.log"
 
 compose() {
   local mode P=()
@@ -105,7 +109,86 @@ do_update() {
   echo "== Перезапуск"
   compose up -d --force-recreate || { echo "!! Ошибка перезапуска"; return 1; }
   write_version
+  install_backup_timer
   echo "== Готово"
+}
+
+env_get() { grep -E "^$1=" "$APP_DIR/.env" 2>/dev/null | tail -n1 | cut -d= -f2- || true; }
+
+do_backup() {
+  # Копия всего, что нужно для восстановления на любом сервере: .env (ключи), config.yaml, branding/ и данные
+  # программы (архив заседаний, отчёты, проекты закупки, копии страниц). Хранятся последние BACKUP_KEEP (14).
+  local keep stamp tmp out remote free need vol
+  keep="$(env_get BACKUP_KEEP)"; [[ "$keep" =~ ^[0-9]+$ ]] || keep=14
+  stamp="$(date +%Y-%m-%d_%H%M)"
+  out="$BACKUPS/ai-council-$stamp.tgz"
+  echo "== Резервная копия — $(now)"
+  mkdir -p "$BACKUPS"
+  tmp="$(mktemp -d)"
+  if ! compose cp bot:/app/runs "$tmp/runs" >/dev/null 2>&1; then
+    # бот остановлен — данные берём прямо из тома Docker
+    vol="$(docker volume ls -q | grep -E '(^|_)council-runs$' | head -n1)"
+    if [[ -z "$vol" ]] || ! docker run --rm -v "$vol:/from:ro" -v "$tmp:/to" alpine sh -c 'cp -a /from /to/runs' >/dev/null 2>&1; then
+      echo "!! Не удалось скопировать данные программы"; rm -rf "$tmp"; return 1
+    fi
+  fi
+  cp "$APP_DIR/.env" "$APP_DIR/config.yaml" "$tmp/" 2>/dev/null || true
+  if [[ -d "$APP_DIR/branding" ]]; then cp -r "$APP_DIR/branding" "$tmp/branding"; fi
+  need="$(du -sm "$tmp" | cut -f1)"; free="$(df -Pm "$BACKUPS" | awk 'NR==2 {print $4}')"
+  if ((free < need + 500)); then
+    echo "!! Мало места на диске (свободно ${free} МБ, нужно ~${need} МБ) — копия не сделана"; rm -rf "$tmp"; return 1
+  fi
+  if ! tar czf "$out.part" -C "$tmp" .; then
+    echo "!! Не удалось упаковать копию"; rm -rf "$tmp" "$out.part"; return 1
+  fi
+  mv -f "$out.part" "$out"; rm -rf "$tmp"
+  # в копии ключи: файлы читает только владелец (сайт в контейнере — пользователь 1000 — отдаёт их на скачивание)
+  chown -R "$APP_UID" "$BACKUPS"; chmod 700 "$BACKUPS"; chmod 600 "$BACKUPS"/ai-council-*.tgz
+  ls -1t "$BACKUPS"/ai-council-*.tgz 2>/dev/null | tail -n +$((keep + 1)) | xargs -r rm -f
+  # по желанию — копия вне сервера (rclone: Google Drive, Яндекс Диск, S3…; BACKUP_RCLONE=имя:папка в .env)
+  remote="$(env_get BACKUP_RCLONE)"
+  if [[ -n "$remote" ]]; then
+    if command -v rclone >/dev/null 2>&1 && rclone copy "$out" "$remote" >/dev/null 2>&1; then
+      echo "== Копия отправлена в $remote"
+    else
+      echo "!! Копия не отправлена в $remote (нет rclone или он не настроен) — на сервере она есть"
+    fi
+  fi
+  echo "== Готово: $(basename "$out"), $(du -h "$out" | cut -f1); хранятся последние $keep"
+}
+
+do_restore() {  # do_restore ФАЙЛ — восстановление поверх текущих данных
+  local file="$1" tmp
+  [[ -f "$file" ]] || { echo "!! Нет файла $file"; return 1; }
+  echo "== Восстановление из $(basename "$file") — $(now)"
+  tmp="$(mktemp -d)"
+  tar xzf "$file" -C "$tmp" || { echo "!! Не удалось распаковать копию"; rm -rf "$tmp"; return 1; }
+  if [[ -f "$tmp/.env" ]]; then cp "$tmp/.env" "$APP_DIR/.env"; chmod 600 "$APP_DIR/.env"; fi
+  if [[ -f "$tmp/config.yaml" ]]; then cp "$tmp/config.yaml" "$APP_DIR/config.yaml"; fi
+  if [[ -d "$tmp/branding" ]]; then mkdir -p "$APP_DIR/branding"; cp -r "$tmp/branding/." "$APP_DIR/branding/"; fi
+  fix_permissions
+  compose up -d bot >/dev/null
+  if [[ -d "$tmp/runs" ]]; then
+    compose cp "$tmp/runs/." bot:/app/runs || { echo "!! Не удалось вернуть данные программы"; rm -rf "$tmp"; return 1; }
+  fi
+  rm -rf "$tmp"
+  compose up -d --force-recreate >/dev/null   # при запуске программа вернёт себе права на данные
+  echo "== Готово: данные восстановлены, программа перезапущена"
+}
+
+install_backup_timer() {  # ночная резервная копия (systemd); повторный вызов ничего не ломает
+  if ! command -v systemctl >/dev/null 2>&1 || [[ ! -d /run/systemd/system ]]; then return 0; fi
+  printf '%s\n' "[Unit]" "Description=AI Council: резервная копия (ключи, настройки, архив заседаний)" "" \
+    "[Service]" "Type=oneshot" "ExecStart=/usr/bin/env bash $APP_DIR/deploy/web-control.sh backup-now" \
+    >/etc/systemd/system/ai-council-backup.service
+  printf '%s\n' "[Unit]" "Description=AI Council: резервная копия каждую ночь" "" \
+    "[Timer]" "OnCalendar=*-*-* 03:30:00" "RandomizedDelaySec=20min" "Persistent=true" "" \
+    "[Install]" "WantedBy=timers.target" >/etc/systemd/system/ai-council-backup.timer
+  systemctl daemon-reload
+  if systemctl enable --now ai-council-backup.timer >/dev/null 2>&1; then
+    echo "== Ночные резервные копии включены (папка $BACKUPS)"
+  fi
+  return 0
 }
 
 do_restart() {
@@ -120,6 +203,7 @@ run_action() {  # run_action update|restart  (вывод — в журнал)
   case "$action" in
     update)  do_update >>"$LOG" 2>&1 || rc=$? ;;
     restart) do_restart >>"$LOG" 2>&1 || rc=$? ;;
+    backup)  do_backup >>"$LOG" 2>&1 || rc=$? ;;
     *) echo "неизвестная заявка: $action" >>"$LOG"; rc=2 ;;
   esac
   if ((rc == 0)); then
@@ -131,6 +215,7 @@ run_action() {  # run_action update|restart  (вывод — в журнал)
 }
 
 cmd_run() {
+  install_backup_timer >/dev/null 2>&1 || true   # после обновления — ночные копии включаются при первой заявке
   [[ -f "$CONTROL/request" ]] || exit 0
   local action
   action="$(tr -cd 'a-z\n' <"$CONTROL/request" | head -n1)"
@@ -169,6 +254,7 @@ EOF
   else
     echo "! systemd не найден: настройки из веба работают, а обновление — только командой: sudo bash $0 update-now" >&2
   fi
+  install_backup_timer
   # помощник ai-council update тоже обновляет с сохранением ваших настроек
   local helper=/usr/local/bin/ai-council
   if [[ -f "$helper" ]] && ! grep -q 'web-control.sh update-now' "$helper"; then
@@ -176,6 +262,16 @@ EOF
   fi
   # пересоздать контейнеры, чтобы веб получил доступ на запись к настройкам
   compose up -d >/dev/null 2>&1 || true
+}
+
+cmd_backup_now() {  # ночная копия (таймер) и из терминала: свой журнал, статус кнопок сайта не трогает
+  mkdir -p "$CONTROL"
+  local rc=0
+  do_backup >>"$BACKUP_LOG" 2>&1 || rc=$?
+  tail -n 200 "$BACKUP_LOG" >"$BACKUP_LOG.tmp" 2>/dev/null && mv -f "$BACKUP_LOG.tmp" "$BACKUP_LOG"
+  chmod 644 "$BACKUP_LOG" 2>/dev/null || true
+  tail -n 2 "$BACKUP_LOG"
+  return "$rc"
 }
 
 cmd_update_now() {
@@ -187,5 +283,8 @@ case "${1:-}" in
   run)        cmd_run ;;
   update-now) cmd_update_now ;;
   version)    write_version ;;
-  *) sed -n '2,13p' "$0"; exit 2 ;;
+  backup-now) cmd_backup_now ;;
+  restore)    [[ -n "${2:-}" ]] || { echo "Укажите файл: restore backups/ai-council-ДАТА.tgz" >&2; exit 2; }
+              do_restore "$2" ;;
+  *) sed -n '2,15p' "$0"; exit 2 ;;
 esac
