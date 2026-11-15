@@ -317,6 +317,11 @@ async def _ask(args) -> int:
         if go is not None:
             return go
         council = Council(cfg, client, on_event=_on_event, seed=args.seed, vision=getattr(args, "vision", None))
+        if mode == "selection":  # «Отбор»: программа сама скачивает страницы и ищет цитаты; копии — в runs/sources
+            from .links import check_links
+            from .mock import mock_pages
+            council.link_checker = mock_pages if getattr(args, "mock", False) else check_links
+            council.snapshot_dir = _runs_dir(cfg) / "sources"
 
         async def ticker() -> None:  # секундомеры в живой строке идут, даже пока модели молчат
             while True:
@@ -354,10 +359,13 @@ async def _ask(args) -> int:
         await client.aclose()
 
     v = res.verdict
-    win = res.proposals[v.winner]
-    console.print(Panel(Markdown(v.final_answer), title=f"Решение: {v.winner} — {win.title} "
-                        f"({res.authors.get(v.winner) or 'пользователь'})", border_style="green"))
-    console.print(Markdown(f"**Почему:** {v.why}"))
+    if res.mode == "selection":  # «Отбор»: вариантов нет — итог: вывод, ранг, карточки с цитатами
+        console.print(Panel(Markdown(v.final_answer), title=f"Итог отбора: первым — {v.winner}", border_style="green"))
+    else:
+        win = res.proposals[v.winner]
+        console.print(Panel(Markdown(v.final_answer), title=f"Решение: {v.winner} — {win.title} "
+                            f"({res.authors.get(v.winner) or 'пользователь'})", border_style="green"))
+        console.print(Markdown(f"**Почему:** {v.why}"))
     if v.dissent:
         console.print(Markdown("**Особые мнения:**\n" + "\n".join(f"- {x}" for x in v.dissent)))
     if v.risks:
@@ -568,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
 
     a = sub.add_parser("ask", help="провести заседание совета")
     a.add_argument("question", help='вопрос (или "-" чтобы прочитать из stdin)')
-    a.add_argument("--mode", choices=["quick", "debate", "evaluate", "research", "creative"], help="режим (по умолчанию из конфига)")
+    a.add_argument("--mode", choices=["quick", "debate", "evaluate", "research", "creative", "selection"], help="режим (по умолчанию из конфига)")
     a.add_argument("--rounds", type=int, help="число раундов критики/доработки в режиме debate")
     a.add_argument("--criteria", help='свои критерии через запятую, напр. "цена,скорость,риск"')
     a.add_argument("--option", action="append", help="готовый вариант для оценки (можно несколько раз)")

@@ -26,7 +26,7 @@ from .config import CouncilConfig
 
 DOSSIER_FILE = "model_dossiers.json"  # в runs/notes/
 DOSSIER_BATCH = 6
-MODES = ("debate", "quick", "evaluate", "research", "creative")
+MODES = ("debate", "quick", "evaluate", "research", "creative", "selection")
 # известные разработчики: из них берём свежие модели, даже если в совете их нет («какие ещё модели лучше»)
 NOTABLE = ("anthropic", "openai", "google", "deepseek", "moonshotai", "x-ai", "qwen", "mistralai", "z-ai", "meta-llama")
 SHORT_NAME = {"anthropic": "claude", "openai": "chatgpt", "google": "gemini", "moonshotai": "kimi", "deepseek": "deepseek",
@@ -57,6 +57,13 @@ MODE_PICK_RULES = {
                  "one or two authors (they study the landscape), the rest stay independent so ideas do not anchor on "
                  "what search found; otherwise no search; (h) a cheaper lineup is usually fine: creativity does not scale "
                  "with price."),
+    "selection": ("SELECTION mode (compare many objects attribute by attribute; every cell is backed by a verbatim quote "
+                  "found by the program on a downloaded page). The chair frames the table and writes a short conclusion: "
+                  "strong reasoning and strict JSON, a large max_out is NOT needed. The two CHEAPEST members fill the "
+                  "table from page texts (long context, careful extraction, strict JSON, good with Chinese/foreign "
+                  "text) — prefer inexpensive models with long context here; reasoning depth matters little. Judges of "
+                  "disputed cells (chair + others) need careful reading. Search is done by the fact-check model, not by "
+                  "authors: no web search for members is needed."),
 }
 
 # Что нужно ролям в каждом режиме — это видит советник (и правила ниже)
@@ -77,6 +84,11 @@ MODE_ROLES = {
                  "разным направлениям, критика «да, и…», ремикс, голосование по силе лучших идей, итог — шорт-лист из "
                  "всех вариантов. Без поиска и проверки фактов. Ценнее всего разнообразие моделей разных "
                  "разработчиков и хорошее чувство языка; председателю — вкус и аккуратная сборка шорт-листа."),
+    "selection": ("Отбор: сравнить много объектов (заводы, поставщики, продукты) по признакам. Председатель задаёт "
+                  "рамку и пишет короткий вывод по таблице; две самые дешёвые модели заполняют ячейки по скачанным "
+                  "страницам (длинный контекст, аккуратность, строгий JSON, понимание китайского и других языков); "
+                  "спорные ячейки решают председатель и другие участники; ищет модель проверки фактов. Подходит, когда "
+                  "в задании список объектов или нужно найти и сравнить кандидатов."),
 }
 ROLE_TEXT = {"chair": "председатель", "member": "участник", "devil": "адвокат дьявола"}
 BASIS = ("catalog", "history", "reviews", "knowledge")
