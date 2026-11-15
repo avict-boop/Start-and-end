@@ -352,7 +352,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         # отчёты PDF/DOCX/MD для заседаний, проведённых до обновления программы
         archive().ensure_all_in_background()
         cleanup_uploads()
+        tasks = [asyncio.create_task(f()) for f in getattr(_app.state, "startup", [])]  # фоновые задачи разделов
         yield
+        for t in tasks:
+            t.cancel()
 
     app = FastAPI(title="Совет нейросетей", docs_url="/api/docs", lifespan=lifespan)
 
@@ -423,6 +426,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 
     from .admin import register as register_admin
     register_admin(app, config_path, base_config, runs_dir, catalog)
+    from .projects import register as register_projects
+    register_projects(app, base_config=base_config, runs_dir=runs_dir, archive=lambda: archive(),
+                      load_uploads=lambda ids: load_uploads(ids), make_client=lambda c, m: make_client(c, m),
+                      create_session=lambda req: create_session(req, spec_extra={"allow_split": False}), jsonable=jsonable)
 
     archives: dict[Path, Archive] = {}
 
@@ -1104,7 +1111,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     async def selection_rank(sid: str, body: RankRequest) -> dict[str, Any]:
         """«Отбор»: пересчитать ранг готового заседания с другими весами — без моделей и без денег."""
         from ..modes.selection import rerank
-        d = await asyncio.to_thread(archive().load, sid)
+        try:
+            d = await asyncio.to_thread(archive().load, sid)
+        except (KeyError, OSError, ValueError):
+            d = {}
         if not d or not d.get("selection"):
             raise HTTPException(404, "это не заседание «Отбора»")
         sel = d["selection"]
@@ -1126,7 +1136,10 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     async def selection_xlsx(sid: str, weights: str = "") -> Response:
         """Таблица отбора в Excel: ранг, полная таблица со статусами, карточки (источник и цитата), исключённые."""
         from ..reports.xlsx import selection_xlsx as build
-        d = await asyncio.to_thread(archive().load, sid)
+        try:
+            d = await asyncio.to_thread(archive().load, sid)
+        except (KeyError, OSError, ValueError):
+            d = {}
         if not d or not d.get("selection"):
             raise HTTPException(404, "это не заседание «Отбора»")
         w = {}

@@ -809,3 +809,41 @@ def test_selection_estimate(client):
     assert r.status_code == 200
     names = [m["name"] for m in r.json()["members"]]
     assert "факт-чек" in names and r.json()["calls"] > 0
+
+
+def test_procurement_project_from_selection(client):
+    """Проект закупки: из «Отбора» — поставщики первой группы; письмо-запрос; ответ завода → цены и документы;
+    сверка документа (другое юрлицо, срок); сравнение цен с курсом; перепроверка и «что изменилось»."""
+    r = client.post("/api/sessions", json={"question": "Найти контрактных производителей софтгелей", "mode": "selection",
+                                           "mock": True, "members": ["a", "b", "c"], "chair": "a",
+                                           "selection": {"start": "find", "review": [], "top_n": 3}})
+    sid = r.json()["id"]
+    assert read_events(client, sid)[-1]["type"] == "done"
+    assert client.post("/api/projects", json={"session": "нет-такого"}).status_code in (400, 404)
+    pid = client.post("/api/projects", json={"session": sid}).json()["id"]
+    p = client.get(f"/api/projects/{pid}").json()
+    assert len(p["suppliers"]) == 3 and p["suppliers"][0]["rank"] == 1 and p["suppliers"][0]["cells"]
+    s1, s2 = p["suppliers"][0]["id"], p["suppliers"][1]["id"]
+    p = client.put(f"/api/projects/{pid}", json={"skus": [{"name": "Omega-3 1000 mg", "spec": "softgel, 60 caps"}],
+                                                  "rates": {"CNY": 0.14}, "company": "ООО Тест",
+                                                  "suppliers": {s1: {"status": "sent", "contact": "a@b.c"}}}).json()
+    assert p["suppliers"][0]["status"] == "sent" and p["suppliers"][0]["sent_at"]
+    p = client.post(f"/api/projects/{pid}/rfq", json={"mock": True}).json()
+    assert "{supplier}" not in p["suppliers"][0]["letter_en"]["body"] and p["suppliers"][0]["name"] in p["suppliers"][0]["letter_en"]["body"]
+    assert p["letters"]["body_zh"]
+    p = client.post(f"/api/projects/{pid}/suppliers/{s1}/reply",
+                    json={"text": "Price 1.10 USD per bottle. SC valid 2020-01-01, holder: Other Trading Co", "mock": True}).json()
+    sup = p["suppliers"][0]
+    assert sup["status"] == "replied" and sup["replies"][0]["items"][0]["price"] == "1.10"
+    flags = sup["documents"][0]["flags"]
+    assert any("другое юрлицо" in f for f in flags) and any("истёк" in f for f in flags)
+    assert any("истёк" in a["text"] for a in p["alerts"])
+    p = client.post(f"/api/projects/{pid}/suppliers/{s2}/reply", json={"text": "Цена 7.5 CNY за флакон", "mock": True}).json()
+    rows = p["compare"][0]["rows"]
+    assert len(rows) == 2 and rows[0]["best"] and rows[0]["base"] == 1.05  # 7,5 CNY × 0,14 дешевле 1,10 USD
+    rc = client.post(f"/api/projects/{pid}/recheck", json={"mock": True}).json()
+    assert read_events(client, rc["session"])[-1]["type"] == "done"
+    p = client.get(f"/api/projects/{pid}").json()
+    assert p["recheck_done"] and isinstance(p["recheck_diff"], list)
+    assert any(x["id"] == pid for x in client.get("/api/projects").json()["items"])
+    assert client.delete(f"/api/projects/{pid}").json()["ok"]

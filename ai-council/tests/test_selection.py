@@ -188,3 +188,27 @@ def test_frame_edits_and_list_edits():
     ents = [{"id": "O1", "name": "A", "names": ["A"]}, {"id": "O2", "name": "B", "names": ["B"]}]
     out = M.apply_list_edits(ents, {"drop": ["O1"], "add": ["C", "b"]})
     assert [e["name"] for e in out] == ["B", "C"]
+
+
+def test_procurement_alerts_compare_and_diff():
+    from datetime import date
+
+    from council import procurement as P
+    sup = {"id": "O1", "name": "Weihai Baihe Biotechnology", "names": ["Weihai Baihe Biotechnology", "威海百合"],
+           "status": "sent", "sent_at": "2026-11-01T10:00:00+00:00", "replies": [], "documents": [],
+           "cells": {"Сертификат GMP действует до": {"value": "2026-12-01", "status": "official"}}}
+    p = {"suppliers": [sup], "skus": [{"name": "Omega-3"}], "rates": {"CNY": 0.14}, "base_currency": "USD"}
+    today = date(2026, 11, 15)
+    texts = [a["text"] for a in P.alerts(p, today)]
+    assert any("нет ответа 14 дн." in t for t in texts) and any("истекает" in t for t in texts)
+    assert P.doc_flags({"kind": "SC", "number": "1", "holder": "威海百合生物技术股份有限公司", "valid_until": "2028-01-01"}, sup, today) == []
+    assert "нет номера" in P.doc_flags({"kind": "GMP", "holder": "Baihe", "valid_until": "2028-01-01"}, sup, today)
+    P.add_reply(p, "O1", P.ReplyParsed(items=[P.QuoteItem(sku="omega-3 softgel", price="8,0", currency="CNY", unit="per bottle")]),
+                source="письмо", text="…")
+    rows = P.compare(p)[0]
+    assert rows["sku"] == "Omega-3" and rows["rows"][0]["base"] == 1.12 and sup["status"] == "replied"
+    d = {"selection": {"objects": [{"id": "X", "name": "Weihai Baihe Biotechnology"}],
+                       "attributes": [{"id": "A1", "name": "Сертификат GMP действует до", "kind": "date"}],
+                       "table": {"X": {"A1": {"status": "document", "value": "2028-12-01"}}}}}
+    ch = P.diff(p, d)
+    assert ch and ch[0]["old"] == "2026-12-01" and ch[0]["new"] == "2028-12-01"

@@ -187,6 +187,7 @@ function selDraw(id) {
       <label class="switch"><input type="checkbox" id="selTrust" ${st.trust !== false ? "checked" : ""}><span class="sw" aria-hidden="true"></span>
         <span>Учитывать надёжность источника</span></label></div>
     <div class="sel-actions"><a class="btn small" id="selXlsx" href="#">⬇ Excel с этими весами</a>
+      <button type="button" class="btn small" id="selProject">📦 Создать проект закупки</button>
       <button type="button" class="link small" id="selReset">Веса как в заседании</button></div>
     <div class="table-wrap"><table class="sel-table"><thead><tr><th>№</th><th>Объект</th><th>Балл</th>${attrs.map((a) => `<th>${esc(a.name)}${a.scorable_kind ? ` <span class="muted small">×${st.weights[a.id] ?? a.weight}</span>` : ""}</th>`).join("")}</tr></thead>
     <tbody>${(d.ranking || []).map((r) => `<tr class="${r.rank <= top ? "sel-top" : ""}"><td>${r.rank}${r.rank <= top ? " ✓" : ""}</td>
@@ -203,6 +204,7 @@ function selDraw(id) {
   }));
   $("selTrust").addEventListener("change", () => selRank(id, st.weights, $("selTrust").checked));
   $("selReset").addEventListener("click", () => selRank(id, null, null));
+  $("selProject").addEventListener("click", () => createProject(id));
   $("selXlsx").href = `/api/sessions/${encodeURIComponent(id)}/selection.xlsx?weights=${encodeURIComponent(Object.entries(st.weights).map(([k, v]) => `${k}:${v}`).join(","))}`;
   box.querySelectorAll(".sel-cell").forEach((b) => b.addEventListener("click", () => selCell(id, b.dataset.o, b.dataset.a)));
 }

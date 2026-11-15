@@ -987,9 +987,9 @@ const FORMAT_NAME = { pdf: "PDF", docx: "Word", md: "Markdown" };
 
 function showView(name) {
   view = name;
-  for (const v of ["empty", "session", "archive", "stats", "settings", "series"]) $(v).hidden = name !== v;
+  for (const v of ["empty", "session", "archive", "stats", "settings", "series", "projects"]) $(v).hidden = name !== v;
   // в меню подсвечен текущий раздел; заседание открывается из «Нового» или архива — подсвечиваем «Архив»
-  const navOf = { empty: "newBtn", archive: "archiveBtn", stats: "statsBtn", settings: "settingsBtn", session: "archiveBtn", series: "archiveBtn" };
+  const navOf = { empty: "newBtn", archive: "archiveBtn", stats: "statsBtn", settings: "settingsBtn", session: "archiveBtn", series: "archiveBtn", projects: "projectsBtn" };
   for (const b of document.querySelectorAll(".nav-item")) {
     if (b.id === navOf[name]) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   }
@@ -2711,6 +2711,7 @@ async function openStats() {
     ${pilotHtml(d)}`;
 }
 $("statsBtn").addEventListener("click", async () => { await openStats(); markAllScroll($("statsBody")); });
+$("projectsBtn").addEventListener("click", () => openProjects());
 
 // пилот «исследование против обсуждения»: показатели исследований и тот же вопрос в разных режимах
 function pilotHtml(d) {
@@ -3055,6 +3056,11 @@ function route() {
   } else if (/^#\/series\/[^/]+$/.test(location.hash)) {
     const id = decodeURIComponent(location.hash.slice("#/series/".length));
     if (view !== "series") openSeries(id); else renderSeries(id);
+  } else if (location.hash === "#/projects") {
+    if (view !== "projects" || prCurrent) { prCurrent = null; openProjects(); }
+  } else if (/^#\/projects\/[^/]+$/.test(location.hash)) {
+    const id = decodeURIComponent(location.hash.slice("#/projects/".length));
+    if (!prCurrent || prCurrent.id !== id || view !== "projects") openProject(id);
   } else if (location.hash === "#/archive") {
     if (view !== "archive") openArchive();
   } else if (location.hash === "#/stats") {

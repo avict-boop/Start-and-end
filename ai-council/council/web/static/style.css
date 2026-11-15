@@ -1022,3 +1022,11 @@ details[open] > summary .params-edit { visibility: hidden; }
 .sel-copy pre { white-space: pre-wrap; max-height: 20rem; overflow: auto; font-size: .8rem; background: var(--surface); padding: .5rem; border-radius: 6px; }
 .decisions .sel-opts { grid-column: 1 / -1; }
 .sel-table td:nth-child(1), .sel-table td:nth-child(3) { white-space: nowrap; }
+/* проекты закупки */
+.proj-sup { margin: .8rem 0; }
+.proj-sup header { display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
+.proj-sup h3 { margin: 0; }
+.proj-letter pre { white-space: pre-wrap; background: var(--surface-2); padding: .5rem; border-radius: 6px; font-size: .85rem; }
+.row3 { display: grid; grid-template-columns: 2fr 3fr 2fr; gap: .4rem; margin: .25rem 0; }
+@media (max-width: 640px) { .row3 { grid-template-columns: 1fr; } }
+.link.danger { color: var(--bad); }
