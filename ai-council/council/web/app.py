@@ -33,6 +33,7 @@ from ..links import check_links, configure as configure_fetch
 from ..checkpoint import Checkpoint, Journal, classify
 from ..session import Council, CouncilError
 from .auth import BasicAuth
+from .push import Push
 
 log = logging.getLogger("council.web")
 from .. import series as SR  # noqa: E402
@@ -907,6 +908,28 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 "failed": failed,
                 "message": info["message"], "spent": info["spent"], "budget": info["budget"], "stage": info["stage"]}
 
+    def pusher() -> Push:
+        return Push(runs_dir(base_config()) / "push")
+
+    async def push_finished(sid: str, question: str, final: str, cp: Checkpoint) -> None:
+        """Уведомление на подписанные устройства: решение готово, нужна проверка или пауза."""
+        try:
+            p = pusher()
+            if not p.subs():
+                return
+            title = (question.strip().splitlines() or [""])[0][:90]
+            if final == "done":
+                head, urgent = "Совет вынес решение", True
+            else:
+                info = await asyncio.to_thread(cp.summary)
+                review = info.get("reason") == "review"
+                head = "Нужна ваша проверка" if review else "Заседание на паузе"
+                title = f"{title}\n{info.get('reason_text') or ''}".strip()
+                urgent = review
+            await p.send({"title": head, "body": title, "url": f"/#/s/{sid}", "tag": sid, "urgent": urgent})
+        except Exception as e:  # noqa: BLE001
+            log.warning("уведомление о заседании %s не отправлено: %s", sid, e)
+
     def launch(cp: Checkpoint, client: Any) -> RunState:
         """Запускает новое или продолженное заседание по его «паспорту» на диске."""
         sid = cp.id
@@ -1042,6 +1065,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     await asyncio.to_thread(save_events, runs_dir(cfg), sid, st.events)
                     st.finish(final)  # статус «завершено» — только когда журнал уже на диске
                     await client.aclose()
+                    if not auto_retry:
+                        asyncio.create_task(push_finished(sid, sp["question"], final, cp))
             if auto_retry:
                 async def again() -> None:
                     for _ in range(20):  # блокировка «паспорта» снимается чуть позже — пробуем несколько раз
@@ -1884,14 +1909,77 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 
     # метка версии статики: после обновления программы браузер сразу берёт новые app.js и style.css, а не старые из кэша
     import hashlib
-    static_tag = hashlib.sha1(b"".join((STATIC / n).read_bytes() for n in ("app.js", "settings.js", "style.css"))).hexdigest()[:10]
+    static_names = sorted(f.name for f in STATIC.glob("*.js") if f.name != "sw.js") + ["style.css"]
+    static_tag = hashlib.sha1(b"".join((STATIC / n).read_bytes() for n in static_names)).hexdigest()[:10]
     index_html = (STATIC / "index.html").read_text(encoding="utf-8")
-    for name in ("app.js", "settings.js", "style.css"):
+    for name in static_names:
         index_html = index_html.replace(f'"/static/{name}"', f'"/static/{name}?v={static_tag}"')
 
     @app.get("/")
     async def index() -> HTMLResponse:
         return HTMLResponse(index_html, headers={"Cache-Control": "no-cache"})
+
+    # ---- приложение на телефоне (PWA)
+    sw_tag = hashlib.sha1(static_tag.encode() + (STATIC / "index.html").read_bytes() + (STATIC / "sw.js").read_bytes()).hexdigest()[:10]
+    sw_js = ((STATIC / "sw.js").read_text(encoding="utf-8").replace("__VERSION__", sw_tag)
+             .replace('"__SHELL__"', json.dumps(["/", *(f"/static/{n}?v={static_tag}" for n in static_names),
+                                                 "/static/icons/icon-192.png", "/static/brand/icon.svg"])))
+
+    @app.get("/sw.js")
+    async def service_worker() -> Response:
+        return Response(sw_js, media_type="text/javascript",
+                        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+    @app.get("/manifest.webmanifest")
+    async def manifest() -> Response:
+        icons = [{"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+                 {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+                 {"src": "/static/icons/maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+                 {"src": "/static/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}]
+        sc = lambda name, short, url: {"name": name, "short_name": short, "url": url,  # noqa: E731
+                                       "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192"}]}
+        body = {"id": "/", "name": "Совет нейросетей", "short_name": "Совет", "lang": "ru", "dir": "ltr",
+                "description": "Несколько нейросетей отвечают, проверяют друг друга и выносят общее решение",
+                "start_url": "/?source=app", "scope": "/", "display": "standalone",
+                "display_override": ["standalone", "minimal-ui"], "orientation": "any",
+                "background_color": "#f7f8fb", "theme_color": "#ffffff", "categories": ["productivity", "business"],
+                "icons": icons,
+                "shortcuts": [sc("Новый вопрос", "Новый", "/?source=app"), sc("Архив", "Архив", "/#/archive"),
+                              sc("Закупки", "Закупки", "/#/projects")]}
+        return Response(json.dumps(body, ensure_ascii=False), media_type="application/manifest+json",
+                        headers={"Cache-Control": "no-cache"})
+
+    @app.get("/logout")
+    async def logout_open() -> Response:  # без пароля выходить не из чего
+        return Response(status_code=303, headers={"Location": "/"})
+
+    @app.get("/api/push/key")
+    async def push_key() -> dict[str, Any]:
+        p = pusher()
+        return {"key": await asyncio.to_thread(p.public_key), "devices": len(p.subs())}
+
+    @app.post("/api/push/subscribe")
+    async def push_subscribe(request: Request) -> dict[str, Any]:
+        d = await request.json()
+        try:
+            await asyncio.to_thread(pusher().add, d.get("subscription") or {}, str(d.get("label") or ""))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        return {"ok": True, "devices": len(pusher().subs())}
+
+    @app.post("/api/push/unsubscribe")
+    async def push_unsubscribe(request: Request) -> dict[str, Any]:
+        d = await request.json()
+        return {"ok": await asyncio.to_thread(pusher().remove, str(d.get("endpoint") or ""))}
+
+    @app.post("/api/push/test")
+    async def push_test(request: Request) -> dict[str, Any]:
+        d = await request.json()
+        r = await pusher().send({"title": "Совет нейросетей", "body": "Уведомления работают — так придёт весть о готовом решении.",
+                                 "url": "/", "tag": "test"}, only=str(d.get("endpoint") or "") or None)
+        if not r["sent"]:
+            raise HTTPException(502, "Служба уведомлений не приняла сообщение — включите уведомления заново")
+        return r
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
 

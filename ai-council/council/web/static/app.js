@@ -2917,12 +2917,7 @@ function notifyFinished(s, ok) {
   const body = ok && s.verdict
     ? (s.verdict.acceptable === false ? "Ни один вариант не подходит" : `Решение: ${(s.proposals[s.verdict.winner] || {}).title || s.verdict.winner}`)
     : (s.error || "Заседание прервано");
-  if ("Notification" in window && Notification.permission === "granted") {
-    try {
-      const n = new Notification(ok ? "✅ Совет вынес решение" : "⚠️ Заседание прервано", { body: `${shortTitle(s.question)}\n${body}`, tag: s.id });
-      n.onclick = () => { window.focus(); n.close(); };
-    } catch { /* например, Safari без разрешения */ }
-  }
+  if (typeof pwaNotify === "function") pwaNotify(ok ? "Совет вынес решение" : "Заседание прервано", `${shortTitle(s.question)}\n${body}`, s.id, `/#/s/${encodeURIComponent(s.id)}`);
 }
 
 /* ------------------------------------------------------------ полноэкранное окно */

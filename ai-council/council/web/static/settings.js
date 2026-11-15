@@ -383,12 +383,12 @@ function renderSettings() {
       <button type="button" class="secondary" id="bRebuild">Пересобрать отчёты архива</button>
       <span class="muted small" id="bRebuildState"></span>`;
   } else if (SET.tab === "system") {
-    html = `<div id="sysBox"><div class="muted">Загрузка…</div></div>`;
+    html = `<div id="pwaBox" class="pwa-box"></div><div id="sysBox"><div class="muted">Загрузка…</div></div>`;
   }
   $("setBody").innerHTML = html;
   bindSettings();
   requestAnimationFrame(() => markAllScroll($("setBody")));
-  if (SET.tab === "system") renderSystem(true);
+  if (SET.tab === "system") { renderSystem(true); if (typeof pwaRender === "function") pwaRender(); }
   if (SET.tab === "members" && SET.upgrades) renderUpgrades();
 }
 

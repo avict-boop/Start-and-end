@@ -16,3 +16,4 @@ openpyxl>=3.1,<4
 pillow>=10.0,<13
 av>=12,<20
 playwright>=1.44,<2
+cryptography>=42,<60   # уведомления на телефон (Web Push)

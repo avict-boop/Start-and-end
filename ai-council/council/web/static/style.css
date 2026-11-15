@@ -1095,6 +1095,21 @@ details[open] > summary .params-edit { visibility: hidden; }
 .link.danger { color: var(--bad); }
 .bad-input { outline: 2px solid var(--bad); outline-offset: 1px; }
 .sel-review .kind-inline { display: none; }
+/* приложение на телефоне */
+.pwa-box { margin-bottom: 1.6rem; padding-bottom: 1.2rem; border-bottom: 1px solid var(--line); }
+.pwa-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 1rem 1.6rem; }
+.pwa-grid h3 { margin: 0 0 .25rem; font-size: 1rem; }
+.pwa-steps { margin: .3rem 0; padding-left: 1.2rem; font-size: .92rem; }
+.pwa-steps li { margin: .2rem 0; }
+.pwa-share { width: 1.05em; height: 1.05em; vertical-align: -3px; color: var(--accent); }
+.pwa-banner { display: flex; align-items: center; gap: .7rem; padding: .65rem .7rem .65rem .8rem; margin: 0 0 .8rem;
+  border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+.pwa-banner[hidden] { display: none; }
+.pwa-banner img { border-radius: 10px; flex: none; }
+.pwa-banner > span { display: flex; flex-direction: column; min-width: 0; flex: 1; line-height: 1.3; }
+/* открыто как приложение: без выделения текста на кнопках и «резинки» страницы */
+.standalone body { overscroll-behavior-y: none; }
+.standalone .nav-item, .standalone button { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 /* пояснения на остановке «признаки и веса» */
 .sel-help { margin: .5rem 0 .7rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .sel-help > summary { cursor: pointer; padding: .55rem .8rem; font-weight: 650; }
