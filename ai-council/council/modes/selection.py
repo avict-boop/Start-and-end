@@ -38,6 +38,13 @@ def _soft(e: BaseException) -> bool:
     return isinstance(e, (ProviderError, InvalidResponse)) and not isinstance(e, OutOfCredits)
 
 
+NATIVE_SEARCH = ("openai/", "google/", "anthropic/", "x-ai/")  # у этих разработчиков свой поисковик в OpenRouter
+
+
+def has_native_search(model: str) -> bool:
+    return model.startswith(NATIVE_SEARCH) or model.startswith("perplexity/")
+
+
 def searcher(c: Council) -> MemberConfig:
     sc = c.cfg.selection
     fc = c.cfg.fact_check
@@ -390,6 +397,14 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     # кто ищет: модель поиска и (по умолчанию) все участники — каждый по всем направлениям, своим поисковиком
     hunters = [searcher(c)] + (list(c.cfg.active_members) if sc.discover_by == "all" else [])
     c.stage_search_engine["discover"] = sc.discover_engine
+    if sc.discover_engine == "native":
+        pool = list(sc.discover_engines) or ["exa"]
+        others = [m for m in hunters if m.name != FACT_CHECKER and not has_native_search(m.model)]
+        for i, m in enumerate(others):
+            c.stage_search_engine[f"discover:{m.name}"] = pool[i % len(pool)]
+        engines = {m.name: c.stage_search_engine.get(f"discover:{m.name}", "свой") for m in hunters
+                   if m.name != FACT_CHECKER}
+        log.info("%sпоиск кандидатов: поисковики %s", c._tag, engines)
     found: list[tuple[str, S.Candidate]] = []
     used: list[str] = []
     rounds_meta = []

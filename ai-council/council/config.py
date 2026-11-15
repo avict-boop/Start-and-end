@@ -195,6 +195,10 @@ class SelectionConfig(BaseModel):
     # Поисковик участников на этом этапе: native — собственный поиск модели, где он есть (OpenAI, Google, Anthropic,
     # xAI), у остальных — поиск OpenRouter; exa — у всех один поиск OpenRouter (дешевле, но одинаковые слепые зоны)
     discover_engine: Literal["native", "exa", "auto"] = "native"
+    # Моделям без своего поиска (DeepSeek, Qwen, Kimi, Mistral…) поисковики OpenRouter раздаются по очереди — чтобы
+    # и они искали независимо друг от друга; не принят поисковик — запрос сам перейдёт на Exa
+    discover_engines: list[Literal["exa", "parallel", "firecrawl", "perplexity"]] = Field(
+        default_factory=lambda: ["exa", "parallel"])
     # Отсев: короткая проверка признаков отсева у всех кандидатов (пачками по screen_batch)
     screen: bool = True
     screen_batch: int = Field(default=5, ge=1, le=15)
@@ -401,7 +405,7 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
-                     "discover_by", "discover_engine",
+                     "discover_by", "discover_engine", "discover_engines",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",
                      "use_trust", "snapshots")

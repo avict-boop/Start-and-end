@@ -546,7 +546,8 @@ class Council:
                     async with self._budget_gate(name, stage, started):
                         extra: dict[str, Any] = ({"web_search": True, "web_tools": self.cfg.web_tools,
                                                   "search_engine": self.stage_search_engine.get(
-                                                      stage, self.cfg.search_engine),
+                                                      f"{stage}:{name}",
+                                                      self.stage_search_engine.get(stage, self.cfg.search_engine)),
                                                   "search_uses": self.cfg.search_uses,
                                                   # председатель при итоге читает всё заседание — его поиск с пределом
                                                   "search_unlimited": self.cfg.search_unlimited

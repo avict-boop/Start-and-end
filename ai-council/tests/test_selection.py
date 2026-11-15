@@ -270,3 +270,21 @@ def test_all_models_search_candidates_with_own_engine():
     c2 = _council("find", discover_by="search")
     r2 = asyncio.run(c2.run("Найти производителей", mode="selection"))
     assert {e.get("member") for e in r2.transcript if e.get("stage") == "discover"} == {"факт-чек"}
+
+
+def test_models_without_own_search_get_different_engines():
+    c = _council("find")
+    cfg = c.cfg
+    for m, model in zip(cfg.members, ["openai/gpt-x", "moonshotai/kimi-x", "deepseek/ds-x", "qwen/q-x", "google/g-x"]):
+        m.model = model
+    asyncio.run(c.run("Найти производителей", mode="selection"))
+    eng = {k.split(":", 1)[1]: v for k, v in c.stage_search_engine.items() if k.startswith("discover:")}
+    others = [m.name for m in cfg.active_members if not m.model.startswith(("openai/", "google/"))]
+    assert set(eng) == set(others) and len(set(eng.values())) == min(2, len(others))
+
+
+def test_unknown_engine_falls_back_to_exa_not_off():
+    from council.client import _drop_unsupported
+    payload = {"tools": [{"type": "openrouter:web_search", "parameters": {"engine": "parallel"}}]}
+    what = _drop_unsupported(payload, "m/x", "HTTP 400: invalid engine 'parallel' for web search")
+    assert what.startswith("поисковик") and payload["tools"][0]["parameters"]["engine"] == "exa"

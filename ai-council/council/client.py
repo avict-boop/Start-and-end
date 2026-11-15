@@ -194,6 +194,10 @@ def _drop_unsupported(payload: dict[str, Any], model: str, err: str) -> str:
             payload.pop("tools")
         _NO_FEATURE["fetch"].add(model)
         return "чтение страниц (web_fetch)"
+    ws = next((t for t in tools if t["type"] == "openrouter:web_search"), None)
+    if ws and (ws.get("parameters") or {}).get("engine") not in (None, "exa") and "engine" in low:
+        ws["parameters"]["engine"] = "exa"  # этот поисковик не принят — ищем через Exa, поиск не теряем
+        return "поисковик (возврат к Exa)"
     if any(t["type"] == "openrouter:web_search" for t in tools) and ("tool" in low or "search" in low):
         payload["tools"] = [t for t in tools if t["type"] != "openrouter:web_search"]
         if not payload["tools"]:
