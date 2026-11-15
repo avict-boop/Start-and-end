@@ -9,6 +9,7 @@ if [ "$(id -u)" = "0" ]; then
   for p in /app/config.yaml /app/control /app/branding; do
     [ -e "$p" ] && chown -R 1000:1000 "$p" 2>/dev/null || true   # том только для чтения — пропускается
   done
-  exec setpriv --reuid=1000 --regid=1000 --init-groups "$@"
+  # переход на council средствами Python (он в образе всегда; setpriv есть не в каждой версии Debian)
+  exec python -c 'import os, sys; os.setgroups([]); os.setgid(1000); os.setuid(1000); os.execvp(sys.argv[1], sys.argv[1:])' "$@"
 fi
 exec "$@"

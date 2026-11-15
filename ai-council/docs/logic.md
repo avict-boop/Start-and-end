@@ -1241,7 +1241,7 @@ object_chars/3); спорное — `judges` × ~30% объектов; моде�
   (`PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`). Не установился браузер — сборка не падает.
 - Права на данные: контейнер стартует от root (`deploy/entrypoint.sh`), возвращает пользователю council (uid 1000)
   файлы `/app/runs`, `config.yaml`, `control`, `branding`, принадлежащие не ему, и сразу переходит на council
-  (`setpriv`). Программа работает без прав root.
+  (средствами Python: setgroups, setgid, setuid, exec). Программа работает без прав root.
 - Склейка дублей кандидатов понимает формы собственности разных стран (`LEGAL_INTL`: S.A., S.p.A., SRL, SAS,
   Sp. z o.o., A.Ş., AG, KG, B.V., N.V., Oy, AB, Kft, Pte, Sdn Bhd, JSC…; `LEGAL_ZH`: 株式会社, 주식회사; `LEGAL_RU`:
   ООО, АО, ТОВ…), длинные формы проверяются раньше коротких.
