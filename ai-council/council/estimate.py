@@ -299,8 +299,9 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
     page_in = int(sc.object_chars // 3 * 0.8) + 1800     # страницы без повторов (меню, подвалы) — примерно −20%
     for i, m in enumerate(fillers):                      # второе прочтение — примерно у 60% объектов («где нужно»)
         add(m, deep if i == 0 or sc.second_read == "always" else max(1, round(deep * 0.6)), page_in, 1500)
-    for m in judges:
-        add(m, disputes, 3500, 600)                    # спорное
+    need = len(judges) // 2 + 1 if sc.judges_on_demand and len(judges) > 2 else len(judges)
+    for i, m in enumerate(judges):                     # спорное: остальные судьи — только где первые разошлись (~40%)
+        add(m, disputes if i < need else max(1, round(disputes * 0.4)), 3500, 600)
     out = []
     for m in members:
         if m.name not in tokens:

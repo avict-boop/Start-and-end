@@ -141,7 +141,7 @@ function renderSelLive(s) {
     if (!row) return `<td class="muted">${busy[oid] ? "…" : ""}</td>`;
     const c = row[a.id] || {};
     const [k, mark, word] = SEL_STATUS[c.status || "none"] || SEL_STATUS.none;
-    if (c.status === "disputed") return `<td><span class="badge warn" title="источники расходятся — решит совет">спор</span></td>`;
+    if (c.status === "disputed") return `<td><span class="badge warn" title="источники расходятся — решит совет">спор</span></td>`;  // живая таблица
     if (!c.value) return `<td class="muted">—</td>`;
     const v = `${c.value}${c.unit && !c.value.includes(c.unit) ? ` ${c.unit}` : ""}`;
     return `<td title="${esc(word)}${c.quote ? ` — «${esc(c.quote)}»` : ""}">${esc(v.length > 40 ? v.slice(0, 38) + "…" : v)} <span class="badge ${k}">${mark}</span>${c.ruled ? " ⚖" : ""}</td>`;
@@ -388,7 +388,7 @@ function selCell(id, oid, aid) {
   const box = $("selCellBox");
   box.hidden = false;
   box.innerHTML = `<h4>${esc((d.names || {})[oid] || oid)} · ${esc(a.name || aid)}</h4>
-    <p><b>${esc(c.value || "—")} ${esc(c.unit || "")}</b> <span class="badge ${k}">${esc(word)}</span>${c.as_of ? ` · на ${esc(c.as_of)}` : ""}${c.ruled ? " · решено советом" : c.auto ? ` · источники расходились, ${esc(c.auto)}` : ""}</p>
+    <p><b>${esc(c.value || "—")} ${esc(c.unit || "")}</b> <span class="badge ${k}">${esc(word)}</span>${c.as_of ? ` · на ${esc(c.as_of)}` : ""}${c.ruled ? " · решено советом" : c.auto ? ` · источники расходились, ${esc(c.auto)}` : c.neutral ? " · спорно, на выбор не влияет: при любом значении первая группа и лидер те же — совет не судил" : ""}</p>
     ${c.quote ? `<blockquote>«${esc(c.quote)}»</blockquote>` : ""}
     ${c.url ? `<p>${selUrl(c.url) ? `<a href="${esc(selUrl(c.url))}" target="_blank" rel="noopener noreferrer">${esc(c.url)}</a>` : esc(c.url)}${c.copy ? ` · <button type="button" class="link small" id="selCopy">копия страницы</button>` : ""}</p>` : ""}
     ${c.context ? `<p class="muted small">Вокруг цитаты на странице: ${esc(c.context)}</p>` : ""}

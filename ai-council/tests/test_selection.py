@@ -125,7 +125,7 @@ def _council(start="auto", **sel):
 
 
 def test_selection_find_end_to_end_demo():
-    c = _council("find")
+    c = _council("find", skip_neutral_disputes=False)  # здесь проверяем путь спора через совет
     r = asyncio.run(c.run("Найти контрактных производителей софтгелей", mode="selection"))
     sel = r.selection
     assert r.mode == "selection" and sel["candidates"] >= 5
@@ -517,3 +517,74 @@ def test_scouts_search_every_angle(tmp_path):
     assert len(asked) == 3 * 6 and not any(m.startswith("m/") for _, m, *_ in asked)
     assert "discover:поиск xAI" not in c.stage_search_engine  # свой поиск xAI
     assert all(e == "low" for n, m, _, e in asked if m.startswith(("google/", "openai/", "anthropic/")))
+
+
+def test_neutral_dispute_is_not_judged():
+    """Спорная ячейка, при любом значении которой первая группа и лидер те же, — без судей, оба значения в таблице."""
+    from council.modes.selection import neutral_disputes
+    attrs = [S.Attribute(id="A1", name="Мощность", kind="number", weight=5, better="high"),
+             S.Attribute(id="A2", name="Формы", kind="number", weight=1, better="high")]
+    num = lambda v: {"status": "official", "value": v}  # noqa: E731
+    disp = lambda a, b: {"status": "disputed", "value": "", "options": [  # noqa: E731
+        {"value": a, "found": True, "kind": "official"}, {"value": b, "found": True, "kind": "official"}]}
+    rows = {"O1": {"cells": {"A1": num("9000"), "A2": num("5")}},
+            "O2": {"cells": {"A1": num("5000"), "A2": num("4")}},
+            "O3": {"cells": {"A1": num("1000"), "A2": disp("1", "2")}},      # последний при любом значении
+            "O4": {"cells": {"A1": disp("8000", "200"), "A2": num("3")}}}   # от значения зависит, попадёт ли в группу
+    got = neutral_disputes(attrs, rows, top_n=2)
+    assert got == [("O3", "A2")]
+    assert rows["O3"]["cells"]["A2"]["neutral"] and rows["O3"]["cells"]["A2"]["value"] == "1 / 2"
+    assert not rows["O4"]["cells"]["A1"].get("neutral")
+
+
+def test_third_judge_only_when_first_two_disagree(tmp_path):
+    import asyncio
+    from council.modes import selection as SM
+    c = _council("find")
+    asked = []
+
+    async def ask(m, stage, prompt, schema, meta=None, **kw):
+        asked.append((m.name, prompt.count("O1:")))
+        pick = {"a": "a", "b": "a" if "O1:A1" in prompt and len(asked) <= 2 else "b"}
+        items = [S.Ruling(key="O1:A1", choice="a", reason="r")]
+        if "O1:A2" in prompt:
+            items.append(S.Ruling(key="O1:A2", choice="a" if len(asked) % 2 else "b", reason="r"))
+        return S.Rulings(items=items)
+
+    c._ask = ask
+    attrs = [S.Attribute(id="A1", name="Мощность", kind="number"), S.Attribute(id="A2", name="Год", kind="number")]
+    opts = [{"value": "1", "found": True, "kind": "official"}, {"value": "2", "found": True, "kind": "official"}]
+    rows = {"O1": {"cells": {"A1": {"status": "disputed", "options": opts}, "A2": {"status": "disputed", "options": opts}}}}
+    c.cfg.selection.judges = 3
+    asyncio.run(SM.resolve_disputes(c, S.SelectionFrame(refined_question="q"), attrs, [{"id": "O1", "name": "Z"}], rows, []))
+    assert len(asked) == 3                       # двое сразу, третий — только из-за A2
+    assert asked[2][1] == 1                      # третьему — только расхождение (одна ячейка)
+    assert rows["O1"]["cells"]["A1"]["value"] == "1"
+
+
+def test_failing_hunter_is_skipped_after_two_strikes(tmp_path):
+    """Модель дважды подряд сбоила на поиске кандидатов — её остальные направления не оплачиваются."""
+    import asyncio
+    from council.client import ProviderError
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.modes import selection as SM
+    from council.session import Council
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path),
+                                        "selection": {"rounds": 1, "discover_waves": False, "discover_by": "all", "discover_models": 0},
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "abc"]})
+    c = Council(cfg, MockClient(delay=0))
+    calls = []
+
+    async def ask(m, stage, prompt, schema, meta=None, **kw):
+        calls.append(m.name)
+        await asyncio.sleep(0)
+        if m.name == "b":
+            raise ProviderError("пустой ответ модели (finish_reason=error)")
+        return SM.S.Candidates(items=[SM.S.Candidate(name=f"Plant {len(calls)}")])
+
+    c._ask = ask
+    fr = SM.S.SelectionFrame(refined_question="q", angles=[f"A{i}" for i in range(8)])
+    asyncio.run(SM.discover(c, fr, []))
+    assert calls.count("b") == 2          # два сбоя — дальше «b» не спрашивают
+    assert calls.count("a") == 8 and calls.count("c") == 8

@@ -178,6 +178,12 @@ STALL_S = 150
 SEARCH_ENGINES = ("exa", "auto", "native", "parallel", "perplexity", "firecrawl")
 
 
+# открытые модели, которые обслуживают несколько поставщиков (цены различаются в 1,5–3 раза)
+OPEN_WEIGHT = ("moonshotai/", "z-ai/", "deepseek/", "qwen/", "meta-llama/", "mistralai/", "minimax/", "nousresearch/",
+               "thudm/", "baidu/", "tencent/", "inclusionai/", "stepfun-ai/", "nvidia/", "openai/gpt-oss")
+FULL_QUANT = ("int8", "fp8", "fp16", "bf16", "fp32", "unknown")  # без int4/fp4/fp6
+
+
 def _drop_unsupported(payload: dict[str, Any], model: str, err: str) -> str:
     """HTTP 400/404/422 из-за новых возможностей — убрать причину из запроса. Возвращает, что убрано ('' — ничего)."""
     if not any(f" {c}" in err for c in (400, 404, 422)):
@@ -205,6 +211,10 @@ def _drop_unsupported(payload: dict[str, Any], model: str, err: str) -> str:
         payload["plugins"] = [{"id": "web"}]
         _NO_FEATURE["tools"].add(model)
         return "инструмент поиска (возврат к плагину)"
+    prov = payload.get("provider") or {}
+    if prov.get("quantizations") and ("quantiz" in low or "endpoint" in low or "provider" in low):
+        prov.pop("quantizations")  # полноточной версии нет ни у кого — дешёвый поставщик любой точности
+        return "фильтр точности модели"
     # выбор поставщика не принят или все быстрые исключены («no endpoints» при списке ignore) — как решит OpenRouter
     if "provider" in payload and (("provider" in low and "sort" in low) or "ignore" in low or ("endpoint" in low and payload["provider"].get("ignore"))):
         payload.pop("provider")  # все быстрые поставщики исключены или выбор не принят — как решит OpenRouter
@@ -273,6 +283,7 @@ class OpenRouterClient:
         # Какого поставщика той же модели выбирает OpenRouter: throughput — самый быстрый по выдаче (модель и ответ те
         # же, сервер другой), price — самый дешёвый, latency — быстрее всего начинает; "" — как решит OpenRouter
         self.provider_sort = "throughput"
+        self.cheap_open = False  # открытые модели (Kimi, GLM, DeepSeek…) — у самого дешёвого поставщика без сжатия
         self.slow_limit = 2  # после стольких «завис» подряд — сбой (дальше «Повторить не ответивших»), а не 4 × 9 мин
         self.max_retries = max_retries
         self.retry_base_delay = retry_base_delay
@@ -356,7 +367,11 @@ class OpenRouterClient:
                           "parameters": {"max_uses": int(web_fetch), "max_content_tokens": FETCH_TOKENS}})
         if tools:
             payload["tools"] = tools
-        if self.provider_sort:
+        if self.cheap_open and model.startswith(OPEN_WEIGHT):
+            # одну и ту же открытую модель держат несколько поставщиков с разной ценой: берём дешёвого, но только
+            # полноточную версию (без сжатия до 4–6 бит, от которого ответы хуже)
+            payload["provider"] = {"sort": "price", "quantizations": list(FULL_QUANT)}
+        elif self.provider_sort:
             payload["provider"] = {"sort": self.provider_sort}
         # OpenAI не принимает строгий JSON вместе с поиском («Web Search cannot be used with JSON mode») — не тратим
         # запрос с ошибкой (и не теряем строгий JSON у этой модели для запросов без поиска)

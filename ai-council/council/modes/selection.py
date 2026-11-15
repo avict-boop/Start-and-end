@@ -353,7 +353,14 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     # 5. Разбор спорного
     disputed = [(oid, a) for oid, row in rows.items() for a in attrs
                 if (row["cells"].get(a.id) or {}).get("status") == "disputed"]
-    if disputed:
+    if disputed and sc.skip_neutral_disputes:
+        quiet = neutral_disputes(attrs, rows, top_n, sc.use_trust)
+        if quiet:
+            c._emit("disputes_neutral", cells=len(quiet), total=len(disputed))
+            log.info("%sспорных ячеек, не меняющих первую группу и лидера: %d из %d — без судей", c._tag,
+                     len(quiet), len(disputed))
+    if any((row["cells"].get(a.id) or {}).get("status") == "disputed" and not row["cells"][a.id].get("neutral")
+           for row in rows.values() for a in attrs):
         await resolve_disputes(c, frame, attrs, shortlist, rows, fillers)
 
     # 6. Решение: ранг, устойчивость, что выяснить — расчётом; вывод председателя
@@ -500,6 +507,8 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     frame_angles = list(angles)
     wave_i = 0
     pairs = first_pairs = 0  # независимых поисков (направление · модель): по ним считается полнота
+    strikes: dict[str, int] = {}  # сбоев подряд у модели на этом этапе
+    gates: dict[str, asyncio.Semaphore] = {}
     for rnd in range(sc.rounds + len(waves) - 1):
         if rnd:
             comp = S.completeness(S.merge_candidates(found), pairs)
@@ -538,6 +547,7 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
         left = {k: v for k, v in left.items() if v}
         by = {k: {"done": 0, "total": v, "found": 0, "failed": 0} for k, v in left.items()}
         prog = {"done": 0, "total": len(plan), "round": rnd + 1}
+        taken = {(a, m.name) for a, m in plan}
         before = len(S.merge_candidates(found)) if rnd else 0
 
         def progress() -> None:
@@ -547,16 +557,38 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
         progress()
 
         async def hunt(a: str, m: MemberConfig) -> Any:
+            gate = gates.setdefault(m.name, asyncio.Semaphore(2))  # у модели не больше двух поисков сразу: успеем
+            m_use = m                                              # заметить, что она сбоит, до остальных запросов
             try:
-                r = await c._ask(m, "discover", S.discover_prompt(frame, a, sc.per_angle, known), S.Candidates,
-                                 meta={**META, "angle": a}, web_search=True)
+                async with gate:
+                    if strikes.get(m.name, 0) >= 2:  # два сбоя подряд — дальше не платим за неё
+                        sub = next((h for h in hunters if h.name != m.name and strikes.get(h.name, 0) < 2
+                                    and (a, h.name) not in taken), None)
+                        if sub is None:
+                            raise ProviderError(f"{m.name}: пропущено после двух сбоев подряд")
+                        log.info("%s%s сбоит — направление «%s» ищет %s", c._tag, m.name, a[:40], sub.name)
+                        taken.add((a, sub.name))
+                        m_use = sub
+                    r = await c._ask(m_use, "discover", S.discover_prompt(frame, a, sc.per_angle, known), S.Candidates,
+                                     meta={**META, "angle": a}, web_search=True)
+                    strikes[m_use.name] = 0
+                    if m_use is not m:
+                        found.extend((f"{a}{S.BY}{m_use.name}", x) for x in r.items)
+                        if m_use.name in by:
+                            by[m_use.name]["found"] += len(r.items)
+                        c._emit("candidates_found", angle=a, by=m_use.name, count=len(r.items))
+                        return S.Candidates()
                 # источник находки — пара «направление · модель»: полнота считается по независимым находкам
                 found.extend((f"{a}{S.BY}{m.name}", x) for x in r.items)
                 by[m.name]["found"] += len(r.items)
                 c._emit("candidates_found", angle=a, by=m.name, count=len(r.items))
                 return r
-            except BaseException:
+            except BaseException as err:
                 by[m.name]["failed"] += 1
+                if isinstance(err, (ProviderError, InvalidResponse)) and m_use is m:
+                    strikes[m.name] = strikes.get(m.name, 0) + 1
+                elif isinstance(err, (ProviderError, InvalidResponse)):
+                    strikes[m_use.name] = strikes.get(m_use.name, 0) + 1
                 raise
             finally:
                 left[m.name] -= 1
@@ -779,10 +811,12 @@ async def resolve_disputes(c: Council, frame: S.SelectionFrame, attrs: list[S.At
     """Совет решает только спорные ячейки: каждый судья выбирает вариант по цитатам; большинство, при равенстве —
     председатель. Выбранный вариант с найденной цитатой — подтверждён, без неё — «не подтверждено»."""
     judges = pick_judges(c, fillers)
+    sc = c.cfg.selection
     by_id = {e["id"]: e for e in objs}
     work = []
     for oid, row in rows.items():
-        ds = [(a, row["cells"][a.id]["options"]) for a in attrs if row["cells"].get(a.id, {}).get("status") == "disputed"]
+        ds = [(a, row["cells"][a.id]["options"]) for a in attrs if row["cells"].get(a.id, {}).get("status") == "disputed"
+              and not row["cells"][a.id].get("neutral")]
         if ds:
             work.append((oid, ds))
     n = sum(len(ds) for _, ds in work)
@@ -792,11 +826,32 @@ async def resolve_disputes(c: Council, frame: S.SelectionFrame, attrs: list[S.At
 
     async def batch(part: list[tuple[str, list[tuple[S.Attribute, list[dict[str, Any]]]]]]) -> None:
         """Споры нескольких объектов — одним запросом к каждому судье (раньше — по запросу на объект)."""
+        votes: dict[str, dict[str, dict[str, tuple[str, str]]]] = {}
+        # сначала столько судей, сколько нужно для большинства; согласны — остальные не нужны (их голос ничего не
+        # изменит); остальных спрашиваем только о ячейках, где первые разошлись
+        need = len(judges) // 2 + 1 if sc.judges_on_demand and len(judges) > 2 else len(judges)
+        await ask(judges[:need], part, votes)
+        if need < len(judges):
+            open_part = []
+            for oid, ds in part:
+                left = []
+                for a, opts in ds:
+                    ch = [x[0] for x in (votes.get(oid, {}).get(a.id) or {}).values()]
+                    if len(ch) < need or len(set(ch)) > 1:
+                        left.append((a, opts))
+                if left:
+                    open_part.append((oid, left))
+            if open_part:
+                await ask(judges[need:], open_part, votes)
+        for oid, ds in part:
+            await one(oid, ds, votes.get(oid) or {})
+
+    async def ask(who: list[MemberConfig], part: list[tuple[str, list[tuple[S.Attribute, list[dict[str, Any]]]]]],
+                  votes: dict[str, dict[str, dict[str, tuple[str, str]]]]) -> None:
         prompt = S.disputes_prompt(frame, [(by_id[oid], ds) for oid, ds in part])
         jobs = {m.name: c._ask(m, "dispute", prompt, S.Rulings, meta={**META, "objects": [oid for oid, _ in part]})
-                for m in judges}
+                for m in who}
         got = await asyncio.gather(*jobs.values(), return_exceptions=True)
-        votes: dict[str, dict[str, dict[str, tuple[str, str]]]] = {}
         for name, r in zip(jobs, got):
             if isinstance(r, (BudgetExceeded, OutOfCredits)):
                 raise r
@@ -848,6 +903,44 @@ async def resolve_disputes(c: Council, frame: S.SelectionFrame, attrs: list[S.At
         if isinstance(r, BaseException):
             raise r
     c._emit("disputes_done", cells=n)
+
+
+def neutral_disputes(attrs: list[S.Attribute], rows: dict[str, dict[str, Any]], top_n: int,
+                     use_trust: bool = True) -> list[tuple[str, str]]:
+    """Спорные ячейки, от которых выбор не зависит: при любом из спорных значений (и без значения) первая группа —
+    те же объекты, а лидер тот же (если первая группа — все объекты, то и весь порядок тот же). Такие ячейки совет не
+    судит: в таблице — оба значения с пометкой «спорно, на выбор не влияет». Отмечает их и возвращает (объект, признак)."""
+    table = {oid: row["cells"] for oid, row in rows.items()}
+    n = len(table)
+    k = min(top_n or n, n)
+
+    def outcome(tb: dict[str, dict[str, dict[str, Any]]]) -> tuple[Any, ...]:
+        order = [r["object"] for r in S.ranking(attrs, tb, use_trust=use_trust)]
+        return tuple(order) if k >= n else (frozenset(order[:k]), order[0] if order else None)
+
+    base = outcome(table)
+    out = []
+    by_id = {a.id: a for a in attrs}
+    for oid, row in rows.items():
+        for aid, cell in list(row["cells"].items()):
+            a = by_id.get(aid)
+            if a is None or cell.get("status") != "disputed" or not a.scorable:
+                continue
+            opts = [o for o in cell.get("options") or [] if (o.get("value") or "").strip()]
+            same = True
+            for o in opts:
+                alt = {**table[oid], aid: {"status": (o.get("kind") or "secondary") if o.get("found") else "unverified",
+                                           "value": o["value"], "unit": o.get("unit", "")}}
+                if outcome({**table, oid: alt}) != base:
+                    same = False
+                    break
+            if same and opts:
+                vals = list(dict.fromkeys(f"{o['value']}{(' ' + o['unit']) if o.get('unit') and o['unit'] not in o['value'] else ''}"
+                                          for o in opts))
+                cell.update(neutral=True, value=" / ".join(vals)[:200],
+                            note="спорно, на выбор не влияет: при любом значении первая группа и лидер те же")
+                out.append((oid, aid))
+    return out
 
 
 def _choice(raw: str) -> str:

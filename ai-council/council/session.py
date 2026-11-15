@@ -177,6 +177,7 @@ class Council:
         self.client = client
         if hasattr(client, "provider_sort"):  # какого поставщика той же модели выбирать (быстрый / дешёвый)
             client.provider_sort = config.provider_sort
+            client.cheap_open = config.cheap_open_models
         self.on_event = on_event or (lambda *a, **k: None)
         if seed is None and session_id:
             # порядок меток и вариантов у судей — тот же при продолжении и «Доделать»: иначе запросы отличаются

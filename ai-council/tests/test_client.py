@@ -511,3 +511,22 @@ def test_search_error_falls_back_to_exa(_fresh_features):
     assert comp.text == '{"a":1}'
     eng = [next(t for t in b["tools"] if t["type"] == "openrouter:web_search")["parameters"].get("engine") for b in seen]
     assert eng == ["native", "exa"]
+
+
+def test_open_models_cheapest_full_precision_provider(_fresh_features):
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        if (seen[-1].get("provider") or {}).get("quantizations"):
+            return httpx.Response(404, json={"error": {"message": "No endpoints found matching your data policy and quantizations"}})
+        return httpx.Response(200, json=ok_body('{"a":1}'))
+
+    c = make(handler)
+    c.cheap_open = True
+    asyncio.run(c.complete("moonshotai/kimi-k3", [], temperature=0, max_tokens=100))
+    assert seen[0]["provider"] == {"sort": "price", "quantizations": ["int8", "fp8", "fp16", "bf16", "fp32", "unknown"]}
+    assert seen[1]["provider"] == {"sort": "price"}  # полноточной нет ни у кого — любой дешёвый
+    seen.clear()
+    asyncio.run(c.complete("anthropic/claude-x", [], temperature=0, max_tokens=100))
+    assert seen[0].get("provider", {}).get("sort") != "price"  # закрытые модели — как в настройках

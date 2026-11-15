@@ -219,6 +219,11 @@ class SelectionConfig(BaseModel):
     # Второе прочтение страниц объекта: need — только признаки, влияющие на ранг и не подтверждённые дословной цитатой
     # из документа или с сайта компании; always — обе модели читают всё (как раньше, дороже)
     second_read: Literal["need", "always"] = "need"
+    # Разбор спорного: сначала судей ровно на большинство; согласны — остальных не спрашивают (их голос ничего не
+    # изменит), разошлись — остальные решают только эти ячейки
+    judges_on_demand: bool = True
+    # Спорные ячейки, при любом значении которых первая группа и лидер те же, совет не судит: в таблице — оба значения
+    skip_neutral_disputes: bool = True
     # Отсев: короткая проверка признаков отсева у всех кандидатов (пачками по screen_batch)
     screen: bool = True
     screen_batch: int = Field(default=5, ge=1, le=15)
@@ -282,6 +287,9 @@ class CouncilConfig(BaseModel):
     # Какого поставщика модели выбирает OpenRouter: throughput — самый быстрый по выдаче (модель та же), price — самый
     # дешёвый, latency — быстрее начинает отвечать, "" — как решит OpenRouter
     provider_sort: Literal["throughput", "price", "latency", ""] = "throughput"
+    # Открытые модели (Kimi, GLM, DeepSeek, Qwen, Mistral, Llama…) — у самого дешёвого поставщика, только полноточные
+    # версии (без сжатия до 4–6 бит). Модель та же, ответы те же, цена ниже в 1,5–3 раза; ответ бывает медленнее
+    cheap_open_models: bool = True
     framing_max_tokens: int = Field(default=24000, ge=0, le=128000)
     critique_max_tokens: int = Field(default=32000, ge=0, le=128000)
     vote_max_tokens: int = Field(default=12000, ge=0, le=128000)
@@ -426,7 +434,7 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
                      "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
-                     "search_results", "search_reasoning", "discover_waves", "second_read",
+                     "search_results", "search_reasoning", "discover_waves", "second_read", "judges_on_demand", "skip_neutral_disputes",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",
                      "use_trust", "snapshots")
