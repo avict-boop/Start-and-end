@@ -301,6 +301,31 @@ function renderSettings() {
         <label class="field"><span>…и не меньше, токенов (и не меньше общего лимита ответа)</span><input type="number" data-rn="author_min_tokens" min="1000" max="64000" step="500" value="${d.research.author_min_tokens}" ${ro}>
           <div class="muted small">думающим моделям нужно место на скрытые рассуждения</div></label>
       </div>
+      <h2 style="margin-top:1.2rem">Отбор</h2>
+      <p class="muted small">Режим «Отбор»: таблица «объекты × признаки», в каждой ячейке — значение, источник и дословная цитата, которую программа находит на скачанной странице. Совет решает только спорные ячейки, ранг по весам считает программа.</p>
+      ${(() => { const S = d.selection || {}; const v = (k, def) => (S[k] ?? def); return `
+      <div class="row2">
+        <label class="field"><span>С чего начинать по умолчанию</span>
+          <select data-ss="start" ${ro}>${[["auto", "сам: есть список — проверить, нет — найти"], ["find", "найти с нуля"], ["check", "проверить список из задания"], ["extend", "список + найти недостающих"]].map(([x, t]) => `<option value="${x}" ${v("start", "auto") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+        <label class="field"><span>Признаков в таблице, до</span><input type="number" data-sn="max_attributes" min="3" max="20" value="${v("max_attributes", 12)}" ${ro}></label>
+        <label class="field"><span>Направлений поиска кандидатов</span><input type="number" data-sn="angles" min="2" max="10" value="${v("angles", 6)}" ${ro}><small class="hint">выставки, биржевые отчёты, реестры, рейтинги, поиск на языке страны…</small></label>
+        <label class="field"><span>Кандидатов на направление, до</span><input type="number" data-sn="per_angle" min="5" max="60" value="${v("per_angle", 25)}" ${ro}></label>
+        <label class="field"><span>Кругов поиска, до</span><input type="number" data-sn="rounds" min="1" max="3" value="${v("rounds", 2)}" ${ro}><small class="hint">ещё круг с новыми направлениями, если список по оценке полон меньше чем на долю ниже</small></label>
+        <label class="field"><span>Полнота списка, достаточная</span><input type="number" data-sn="saturation" min="0.3" max="1" step="0.05" value="${v("saturation", 0.75)}" ${ro}></label>
+        <label class="field"><span>Кандидатов всего, до</span><input type="number" data-sn="max_candidates" min="10" max="400" value="${v("max_candidates", 150)}" ${ro}></label>
+        <label class="field"><span>Проверять подробно, до</span><input type="number" data-sn="max_deep" min="3" max="200" value="${v("max_deep", 40)}" ${ro}><small class="hint">предел подробной проверки; для вопроса можно задать меньше</small></label>
+        <label class="field"><span>Первая группа (0 — как в задании или 12)</span><input type="number" data-sn="top_n" min="0" max="100" value="${v("top_n", 0)}" ${ro}></label>
+        <label class="field"><span>Кто решает спорное — участников</span><input type="number" data-sn="judges" min="1" max="7" value="${v("judges", 3)}" ${ro}><small class="hint">председатель и другие, по возможности не заполнявшие таблицу</small></label>
+        <label class="field"><span>Страниц на объект скачивать, до</span><input type="number" data-sn="pages_per_object" min="1" max="15" value="${v("pages_per_object", 6)}" ${ro}></label>
+        <label class="field"><span>Знаков страницы модели, до</span><input type="number" data-sn="page_chars" min="2000" max="60000" step="1000" value="${v("page_chars", 9000)}" ${ro}><small class="hint">отрывки, где больше всего слов признаков; меньше — дешевле</small></label>
+        <label class="field"><span>Объектов одновременно</span><input type="number" data-sn="parallel" min="1" max="10" value="${v("parallel", 4)}" ${ro}></label>
+        <label class="field"><span>Модель поиска (пусто — модель проверки фактов)</span><input type="text" list="modelList" data-st="search_model" value="${esc(v("search_model", ""))}" ${ro}></label>
+        <label class="field"><span>Заполняют (два участника через запятую; пусто — два самых дешёвых)</span><input type="text" data-sl="fillers" value="${esc((v("fillers", []) || []).join(", "))}" ${ro}></label>
+        <label class="field"><span>Предел папки копий страниц, МБ</span><input type="number" data-sn="snapshot_mb" min="10" max="10000" value="${v("snapshot_mb", 300)}" ${ro}></label>
+      </div>
+      <label class="switch"><input type="checkbox" data-sb="screen" ${v("screen", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Отсев</b><small>короткая проверка 2–4 признаков отсева у всех кандидатов перед подробной</small></span></label>
+      <label class="switch"><input type="checkbox" data-sb="use_trust" ${v("use_trust", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Ранг с учётом надёжности источника</b><small>документ 1; сайт компании 0,8; вторичный 0,6; цитата не найдена 0,4</small></span></label>
+      <label class="switch"><input type="checkbox" data-sb="snapshots" ${v("snapshots", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Хранить копии страниц</b><small>текст скачанных страниц с датой — «копия источника» в таблице; продолжение после паузы читает те же тексты</small></span></label>`; })()}
       <h2 style="margin-top:1.2rem">Пилот</h2>
       <label class="field"><span>Модель для «ответа одной модели с поиском»</span><input type="text" list="modelList" id="pSolo" value="${esc(d.pilot_solo_model || "")}" ${ro}>
         <div class="muted small">контрольная группа к совету: если одиночный ответ не хуже — совет не окупается; пусто — модель председателя</div></label>
@@ -408,6 +433,12 @@ function bindSettings() {
   for (const el of $("setBody").querySelectorAll("[data-r]")) el.addEventListener("change", () => { d.research[el.dataset.r] = el.checked; setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-rn]")) el.addEventListener("input", () => { d.research[el.dataset.rn] = num(el.value); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-rs]")) el.addEventListener("change", () => { d.research[el.dataset.rs] = el.value; setDirty(); });
+  d.selection = d.selection || {};
+  for (const el of $("setBody").querySelectorAll("[data-sn]")) el.addEventListener("input", () => { d.selection[el.dataset.sn] = num(el.value); setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-ss]")) el.addEventListener("change", () => { d.selection[el.dataset.ss] = el.value; setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-st]")) el.addEventListener("input", () => { d.selection[el.dataset.st] = el.value.trim(); setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-sl]")) el.addEventListener("input", () => { d.selection[el.dataset.sl] = el.value.split(",").map((x) => x.trim()).filter(Boolean); setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-sb]")) el.addEventListener("change", () => { d.selection[el.dataset.sb] = el.checked; setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-kb]")) el.addEventListener("change", () => { d[el.dataset.kb] = el.checked; setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-k]")) el.addEventListener("input", () => { d[el.dataset.k] = num(el.value); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-ab]")) el.addEventListener("change", () => { d.advisor[el.dataset.ab] = el.checked; setDirty(); });

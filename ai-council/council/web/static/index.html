@@ -101,6 +101,9 @@
               <label class="mode-card"><input type="radio" name="mode" value="research">
                 <span class="mode-txt"><b>Исследование</b><small>Проверка фактов по источникам. Покажем, что известно, что спорно и что требует уточнения.</small></span>
                 <span class="mode-meta" data-meta="research"></span></label>
+              <label class="mode-card"><input type="radio" name="mode" value="selection">
+                <span class="mode-txt"><b>Отбор</b><small>Сравнить много объектов (заводы, поставщики, продукты) по признакам: таблица, где у каждой цифры — источник и цитата; ранг по вашим весам.</small></span>
+                <span class="mode-meta" data-meta="selection"></span></label>
               <label class="mode-card"><input type="radio" name="mode" value="quick">
                 <span class="mode-txt"><b>Быстрый ответ</b><small>Решения и голосование, без критики. Быстрее и дешевле.</small></span>
                 <span class="mode-meta" data-meta="quick"></span></label>
@@ -123,6 +126,28 @@
                   <option value="catalog">Каталог — проверить каждый объект из списка в задании</option>
                 </select>
                 <small class="hint" id="depthHint"></small></label>
+              <div class="field sel-opts" id="selectionField" hidden>
+                <label class="field"><span class="label">С чего начать</span>
+                  <select id="selStart">
+                    <option value="auto">сам решит: есть список в задании — проверить его, нет — найти</option>
+                    <option value="find">найти кандидатов с нуля</option>
+                    <option value="check">проверить мой список (из задания)</option>
+                    <option value="extend">мой список + найти недостающих</option>
+                  </select></label>
+                <div class="row2">
+                  <label class="field"><span class="label">Проверять подробно</span>
+                    <input id="selShortlist" type="number" min="0" max="200" placeholder="все прошедшие отсев" inputmode="numeric">
+                    <small class="hint">Сколько объектов; пусто — все прошедшие отсев (до предела в настройках).</small></label>
+                  <label class="field"><span class="label">Первая группа</span>
+                    <input id="selTop" type="number" min="0" max="100" placeholder="как в задании или 12" inputmode="numeric">
+                    <small class="hint">Сколько отобрать (например, на переговоры).</small></label>
+                </div>
+                <div class="field"><span class="label">Остановиться и показать мне</span>
+                  <label class="check"><input type="checkbox" id="selRevFrame"> признаки и веса — до поиска</label>
+                  <label class="check"><input type="checkbox" id="selRevCand" checked> найденных кандидатов</label>
+                  <label class="check"><input type="checkbox" id="selRevShort" checked> короткий список после отсева</label>
+                  <small class="hint">На остановке можно убрать лишних, добавить своих, поправить веса; оплаченное не теряется.</small></div>
+              </div>
               <label class="field" id="freshField"><span class="label">Свежие данные из интернета</span>
                 <select id="fresh">
                   <option value="0">не нужны</option>
@@ -312,12 +337,13 @@
           <h2 class="paused-title">Заседание на паузе</h2>
           <p id="pReason"></p>
           <p id="pSpent" class="muted small"></p>
-          <div class="paused-row">
+          <div class="paused-row" id="pResumeRow">
             <label for="pBudget">Бюджет заседания, $</label>
             <input id="pBudget" type="number" min="0.1" step="0.5" inputmode="decimal">
             <button id="pResume" type="button" class="primary">▶ Продолжить</button>
             <button id="pDrop" type="button" class="secondary">Удалить</button>
           </div>
+          <div id="pReview" class="sel-review-box" hidden></div>
           <label class="switch" id="pRetryRow" hidden><input id="pRetry" type="checkbox" checked><span class="sw" aria-hidden="true"></span>
             <span><b>Повторить модели, которые не ответили</b><small id="pRetryHint">Их запросы зададут заново, с вдвое большим временем на ответ; готовые ответы остальных берутся из сохранённого.</small></span></label>
         </div>
@@ -345,6 +371,7 @@
         <div id="vCard"></div>
         <div id="vAnswer" class="md answer"></div>
         <div id="vResearch" class="research" hidden></div>
+        <div id="vSelection" class="selection" hidden></div>
         <div class="rate-row" id="rateRow" hidden>
           <span class="muted small">Насколько полезен результат?</span>
           <span class="stars" id="rateStars" role="radiogroup" aria-label="Оценка пользы от 1 до 5"></span>
@@ -498,6 +525,7 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
+<script src="/static/selection.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/settings.js"></script>
 </body>

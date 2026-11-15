@@ -714,3 +714,24 @@ def test_every_mode_in_bot_with_fact_check_toggle(env, mode):
         assert fc_calls > 0  # включена — работает
     if mode in ("research", "creative"):
         assert not data["request"].get("compact_proposals")
+
+
+def test_selection_mode_in_bot_without_review_stops(env):
+    """«Отбор» в боте: режим выбирается кнопкой, заседание идёт без остановок «проверьте список», итог — первая
+    группа ранга и вывод председателя."""
+    bot, fake, _ = env
+
+    async def scenario():
+        await bot.handle_update(msg("Найти контрактных производителей софтгелей в Китае"))
+        card_id = bot.pending[CHAT].card_id
+        await bot.handle_update(press("view:opts", card_id))
+        assert "mode:selection" in buttons(fake.last("editMessageText"))
+        await bot.handle_update(press("mode:selection", card_id))
+        assert bot.settings[CHAT].mode == "selection"
+        await bot.handle_update(press("go", card_id))
+        await finish(bot)
+
+    asyncio.run(scenario())
+    texts = "\n".join(fake.texts() + [b.get("text", "") for m, b in fake.calls if m == "editMessageText"])
+    assert "Первый в ранге" in texts and "Первая группа" in texts
+    assert "Заполнение таблицы" in texts or "Ранг и вывод" in texts

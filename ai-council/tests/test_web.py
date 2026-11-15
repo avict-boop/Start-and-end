@@ -762,3 +762,50 @@ def test_light_summary_two_authors_whole_council_critiques_and_votes(client):
     critics = {c.get("reviewer") or c.get("member") for c in d["critiques"]} if isinstance(d["critiques"], list) else set(d["critiques"])
     assert {"a", "b", "c"} <= set(d["ballots"]) and len(critics) == 3  # критикуют и голосуют все трое
     assert d["research"]["ledger"]["inherited_parts"] == [1, 2]
+
+
+def test_selection_mode_on_site_with_review_stops(client):
+    """«Отбор» на сайте: остановки «проверьте кандидатов» и «короткий список», продолжение с правкой, таблица
+    с пересчётом весов, Excel и копия страницы."""
+    r = client.post("/api/sessions", json={"question": "Найти контрактных производителей софтгелей", "mode": "selection",
+                                           "mock": True, "members": ["a", "b", "c"], "chair": "a",
+                                           "selection": {"start": "find", "review": ["candidates", "shortlist"]}})
+    assert r.status_code == 200, r.text
+    sid = r.json()["id"]
+    ev = read_events(client, sid)
+    assert ev[-1]["type"] == "paused" and ev[-1]["reason"] == "review"
+    rv = ev[-1]["review"]
+    assert rv["gate"] == "candidates" and rv["payload"]["items"]
+    drop = rv["payload"]["items"][-1]["id"]
+    assert client.post(f"/api/sessions/{sid}/review", json={"gate": "shortlist", "decision": {}}).status_code == 409
+    r = client.post(f"/api/sessions/{sid}/review", json={"gate": "candidates", "decision": {"drop": [drop], "add": ["Demo Plant 9"]}})
+    assert r.status_code == 200, r.text
+    ev = read_events(client, sid)
+    assert ev[-1]["type"] == "paused" and ev[-1]["review"]["gate"] == "shortlist"
+    items = ev[-1]["review"]["payload"]["items"]
+    assert drop not in {x["id"] for x in items}
+    keep = [x["id"] for x in items if x["name"] in ("Demo Plant 9", "Demo Plant 3", "Demo Plant 5")]
+    r = client.post(f"/api/sessions/{sid}/review", json={"gate": "shortlist", "decision": {"keep": keep}})
+    assert r.status_code == 200
+    ev = read_events(client, sid)
+    assert ev[-1]["type"] == "done", ev[-1]
+    types = {e["type"] for e in ev}
+    assert {"resumed", "review_applied", "object_filled", "ranked"} <= types
+    rank = client.post(f"/api/sessions/{sid}/selection/rank", json={"weights": {"A2": 0}}).json()
+    assert len(rank["ranking"]) == 3 and rank["weights"]["A2"] == 0 and rank["attributes"]
+    cells = rank["cells"]
+    some = next(c for row in cells.values() for c in row.values() if c.get("copy"))
+    copy = client.get(f"/api/sources/{some['copy']}").json()
+    assert "demo plant" in copy["text"] and copy["url"] == some["url"]
+    x = client.get(f"/api/sessions/{sid}/selection.xlsx?weights=A2:0,A3:5")
+    assert x.status_code == 200 and x.content[:2] == b"PK"
+    md = client.get(f"/api/sessions/{sid}/report?format=md")
+    assert md.status_code == 200 and "Итог отбора" in md.text
+
+
+def test_selection_estimate(client):
+    r = client.post("/api/estimate", json={"question": "Проверить:\n| 1 | A |\n| 2 | B |\n| 3 | C |", "mode": "selection",
+                                           "mock": True, "members": ["a", "b", "c"]})
+    assert r.status_code == 200
+    names = [m["name"] for m in r.json()["members"]]
+    assert "факт-чек" in names and r.json()["calls"] > 0

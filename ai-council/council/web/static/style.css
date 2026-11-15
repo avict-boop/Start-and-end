@@ -990,3 +990,35 @@ details[open] > summary .params-edit { visibility: hidden; }
 .retry-box { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-top: .6rem; }
 .retry-box > div { flex: 1 1 18rem; min-width: 0; line-height: 1.45; }
 #pRetryRow { margin-top: .6rem; }
+
+/* ---------------------------------------------------------------- режим «Отбор» */
+.sel-opts .check { display: block; margin: .15rem 0; }
+.sel-review-box { margin-top: .8rem; }
+.sel-review-box h3 { margin: .2rem 0 .4rem; }
+.sel-review { border-collapse: collapse; width: 100%; font-size: .92rem; }
+.sel-review td, .sel-review th { padding: .25rem .4rem; border-bottom: 1px solid var(--line); text-align: left; }
+.sel-review .sel-w { width: 4.2rem; }
+.sel-review-list { max-height: 26rem; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: .3rem .5rem; background: var(--surface); }
+.sel-item { display: flex; gap: .55rem; align-items: flex-start; padding: .35rem 0; border-bottom: 1px solid var(--line); }
+.sel-item:last-child { border-bottom: 0; }
+.sel-item > span { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+.sel-item small { overflow-wrap: anywhere; }
+.selection { margin-top: 1.1rem; }
+.selection h3 { margin: .2rem 0 .3rem; }
+.selection h4 { margin: .9rem 0 .35rem; font-size: 1rem; }
+.sel-weights { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: .4rem 1rem; margin: .5rem 0; }
+.sel-weights label { display: grid; grid-template-columns: 1fr 6rem 1.6rem; align-items: center; gap: .4rem; font-size: .9rem; }
+.sel-weights label.switch { grid-template-columns: auto 1fr; }
+.sel-actions { display: flex; gap: .8rem; align-items: center; margin: .4rem 0 .6rem; flex-wrap: wrap; }
+.table-wrap { overflow-x: auto; max-width: 100%; }
+.sel-table { border-collapse: collapse; font-size: .86rem; min-width: 100%; }
+.sel-table th, .sel-table td { padding: .3rem .45rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.sel-table th { background: var(--surface-2); position: sticky; top: 0; }
+.sel-table tr.sel-top td:first-child { color: var(--ok); font-weight: 650; }
+.sel-cell { background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.sel-cell:hover { text-decoration: underline; }
+.sel-cellbox { margin-top: .8rem; padding: .7rem .9rem; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); }
+.sel-cellbox blockquote { margin: .4rem 0; padding-left: .7rem; border-left: 3px solid var(--accent); }
+.sel-copy pre { white-space: pre-wrap; max-height: 20rem; overflow: auto; font-size: .8rem; background: var(--surface); padding: .5rem; border-radius: 6px; }
+.decisions .sel-opts { grid-column: 1 / -1; }
+.sel-table td:nth-child(1), .sel-table td:nth-child(3) { white-space: nowrap; }

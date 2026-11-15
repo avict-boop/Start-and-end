@@ -19,7 +19,9 @@ const LINK_BADGE = { dead: ' <span class="badge bad">ссылка не откр�
   refused: ' <span class="badge bad" title="Ссылка ведёт внутрь сети сервера — такие адреса не открываются">внутренний адрес</span>' };
 const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание изображений", attachments: "Вложения",
   factcheck: "Проверка фактов", arbitration: "Проверяем утверждения по источникам", recheck: "Проверяем новые утверждения",
-  split: "Разбиение задания на части", split_audit: "Проверка полноты списка", conflicts: "Противоречия между частями" };
+  split: "Разбиение задания на части", split_audit: "Проверка полноты списка", conflicts: "Противоречия между частями",
+  discover: "Поиск кандидатов", angles: "Новые направления поиска", screen: "Отсев", sources: "Поиск источников",
+  fill: "Заполнение таблицы", dispute: "Разбор спорного" };
 // что происходит на этапе — простыми словами
 const STAGE_HINT = {
   framing: "председатель уточняет вопрос и критерии",
@@ -50,16 +52,17 @@ const CREATIVE_STAGE = {
   vote: ["Голосование", "модели ранжируют варианты по силе лучших идей, а не по «безопасности»"],
   verdict: ["Шорт-лист", "председатель собирает лучшие, смелые и гибридные идеи из всех вариантов"],
 };
-const MODE_STAGE = { research: RESEARCH_STAGE, creative: CREATIVE_STAGE };
+const MODE_STAGE = { research: RESEARCH_STAGE, creative: CREATIVE_STAGE, selection: SEL_STAGE };
 const stageHint = (s, key) => ((MODE_STAGE[s.mode] || {})[key] ? MODE_STAGE[s.mode][key][1] : STAGE_HINT[key]) || "";
 const MODE_HINT = {
   debate: "Подробное обсуждение: решения, критика, доработка, голосование.",
   quick: "Быстрый ответ: решения и голосование, без критики.",
   evaluate: "Выбор из ваших вариантов: совет их обсуждает и выбирает лучший.",
   research: "Исследование: подвопросы и углы зрения, проверка утверждений всех вариантов поиском, итог «известно / спорно / неизвестно» с источниками.",
+  selection: "Отбор: таблица «объекты × признаки»; у каждого значения — источник и дословная цитата, которую программа нашла на странице; ранг по вашим весам.",
   creative: "Креатив: у каждой модели своя творческая роль, много смелых идей, критика «да, и…», ремикс и шорт-лист из всех вариантов. Поиск по желанию — изучить конкурентов и существующие решения; проверки фактов нет.",
 };
-const MODE_NAME = { debate: "Подробное обсуждение", quick: "Быстрый ответ", evaluate: "Выбор из вариантов", research: "Исследование", creative: "Креатив" };
+const MODE_NAME = { debate: "Подробное обсуждение", quick: "Быстрый ответ", evaluate: "Выбор из вариантов", research: "Исследование", creative: "Креатив", selection: "Отбор" };
 
 /* ------------------------------------------------------------ мелкие помощники интерфейса */
 
@@ -287,18 +290,20 @@ function setMode(m) {
   mode = m;
   if (config && !webTouched && was !== m && $("members").children.length) { lineup.web = defaultWeb(); renderWebMembers(); }
   if ($("depthField")) $("depthField").hidden = m !== "research";
-  if ($("freshField")) $("freshField").hidden = m === "evaluate";
+  if ($("freshField")) $("freshField").hidden = m === "evaluate" || m === "selection";
+  if ($("selectionField")) $("selectionField").hidden = m !== "selection";
   for (const r of $("modeSeg").querySelectorAll("input[name=mode]")) r.checked = r.value === m;
   $("roundsField").hidden = m !== "debate";
+  // «Отбор»: ищет модель поиска, заполняют две модели, спорное решает совет — длины вариантов и проверки фактов нет
   $("optionsField").hidden = m !== "evaluate";
   // у исследования своя длина варианта (Настройки → Исследование) — «компактные варианты» к нему не относятся
   // «Компактные варианты» (до N слов) противоречат «12–20 идей» «Креатива» и длине варианта исследования
-  $("compact").closest("label").hidden = m === "research" || m === "creative" || m === "evaluate";
+  $("compact").closest("label").hidden = ["research", "creative", "evaluate", "selection"].includes(m);
   // в «Выборе из вариантов» вариантов авторов нет — сжимать и предлагать председателю нечего
-  $("chairProposes").closest("label").hidden = m === "evaluate";
+  $("chairProposes").closest("label").hidden = m === "evaluate" || m === "selection";
   $("researchLen").hidden = m !== "research";
   // в исследовании вместо неё — арбитраж доказательств; в «Креативе» проверять нечего
-  $("factCheckRow").hidden = m === "research" || m === "creative";
+  $("factCheckRow").hidden = ["research", "creative", "selection"].includes(m);
   if ($("splitBtn")) $("splitBtn").hidden = m !== "research";
   if ($("webField") && config) renderWebMembers();
   $("modeHint").textContent = MODE_HINT[m];
@@ -550,12 +555,13 @@ function payload() {
     members: selectedMembers(),
     models: Object.keys(lineup.models).length ? lineup.models : null,
     extra_members: lineup.extra.length ? lineup.extra : null,
-    web_search: mode === "evaluate" ? [] : [...lineup.web].filter((n) => selectedMembers().includes(n)),
+    web_search: mode === "evaluate" || mode === "selection" ? [] : [...lineup.web].filter((n) => selectedMembers().includes(n)),
     chair: $("chair").value || null,
     devil_advocate: $("devil").value,
     chair_proposes: $("chairProposes").checked,
     fact_check: mode === "creative" ? false : $("factCheck").checked,
-    compact: ["research", "creative", "evaluate"].includes(mode) ? false : $("compact").checked,
+    compact: ["research", "creative", "evaluate", "selection"].includes(mode) ? false : $("compact").checked,
+    selection: mode === "selection" ? selectionRequest() : null,
     research_words: mode === "research" ? (noLimit() ? 0 : Number($("researchWords").value) || null) : null,
     research_shorten: mode === "research" ? $("researchShorten").checked : null,
     // «разбивать на части» передаётся всегда: этот запрос — как выбрано на экране, а не как в настройках
@@ -596,6 +602,7 @@ function applyLineup(r) {
     updateShortenHint();
   }
   if (r.research_shorten !== undefined) $("researchShorten").checked = !!r.research_shorten;
+  if (r.selection_overrides) selectionRestore(r.selection_overrides);
   researchTuned = { ...(r.research_overrides || {}) };
   if (researchTuned.auto_split !== undefined) { $("researchSplit").checked = !!researchTuned.auto_split; delete researchTuned.auto_split; }
   else resetSplit();
@@ -669,7 +676,7 @@ $("repeatBtn").addEventListener("click", async () => {
   catch (e) { toast(e.message); return; }
   const r = data.request || {};
   $("question").value = r.question || "";
-  setMode(["debate", "quick", "evaluate", "research", "creative"].includes(r.mode) ? r.mode : "debate");
+  setMode(["debate", "quick", "evaluate", "research", "creative", "selection"].includes(r.mode) ? r.mode : "debate");
   if (r.rounds) $("rounds").value = r.rounds;
   $("criteria").value = (r.criteria || []).join(", ");
   $("options").value = (r.options || []).join("\n---\n");
@@ -1464,6 +1471,7 @@ const approxTokens = (chars) => Math.max(1, Math.round(chars / 3.2));
 function apply(s, ev) {
   // когда событие случилось на сервере; часы браузера могут спешить — не позже «сейчас»
   s.at = ev.ts ? Math.min(ev.ts * 1000, Date.now()) : Date.now();
+  if (selEvent(s, ev)) return;  // события «Отбора» — selection.js
   switch (ev.type) {
     case "ping":
       break;
@@ -1573,7 +1581,7 @@ function apply(s, ev) {
       s.stageTitle[ev.stage] = ev.title;
       if (ev.stage === "proposal") s.chairJudge = ev.chair_proposes === false;
       // председатель без своего варианта не участвует в предложениях и доработке
-      const who = ev.stage === "factcheck" ? ["факт-чек"]
+      const who = ev.stage === "factcheck" || ["discover", "screen"].includes(ev.stage) ? ["факт-чек"]
         : ["framing", "verdict"].includes(ev.stage) ? [s.chair].filter(Boolean)
         : ["proposal", "revision"].includes(ev.stage) && s.chairJudge ? s.members.filter((m) => m !== s.chair) : s.members;
       s.work = Object.fromEntries(who.map((n) => [n, "work"]));
@@ -1683,6 +1691,11 @@ function stagePlan(s) {
     return plan.map(([k, t]) => [k, RESEARCH_STAGE[k] ? RESEARCH_STAGE[k][0] : t]);
   }
   if (s.mode === "creative") return plan.map(([k, t]) => [k, CREATIVE_STAGE[k] ? CREATIVE_STAGE[k][0] : t]);
+  if (s.mode === "selection") {  // свои этапы: рамка, поиск, отсев, заполнение, спорное, ранг
+    const check = s.selFrame && !s.stageTitle.discover && (s.stageTitle.fill || s.doneStages.has("fill"));
+    return Object.entries(SEL_STAGE).filter(([k]) => !(check && ["discover", "screen"].includes(k))
+      && !(k === "dispute" && (s.done || s.stage === "verdict") && !s.stageTitle.dispute)).map(([k, v]) => [k, v[0]]);
+  }
   if (s.stageTitle.factcheck || s.facts || s.factPlanned) plan.splice(plan.length - 1, 0, ["factcheck", STAGE_NAME.factcheck]);
   return plan;
 }
@@ -1773,6 +1786,7 @@ const PAUSE_HELP = {
 function renderPaused(s) {
   const p = s.paused;
   $("sPaused").hidden = !p;
+  renderReview(s);  // «Отбор»: остановка «проверьте список» — свой блок вместо «Продолжить»
   if (!p) return;
   $("pReason").innerHTML = `<b>Причина:</b> ${esc(p.reason_text || "")}${p.message && ["error", "credits", "key_limit"].includes(p.reason) ? ` — <span class="muted">${esc(p.message)}</span>` : ""}. ${PAUSE_HELP[p.reason] || ""}`;
   $("pSpent").textContent = `Потрачено ${money(p.spent || s.cost)} из бюджета ${money(p.budget || s.budget)}`
@@ -2210,10 +2224,14 @@ function renderVerdict(s) {
   if (!v) return;
   const p = s.proposals[v.winner];
   $("vTitle").textContent = s.mode === "research" ? "Итог исследования" : s.mode === "creative" ? "Шорт-лист идей"
+    : s.mode === "selection" ? "Итог отбора"
     : (p && p.title ? p.title : `Вариант ${v.winner}`);
   const row = s.tally && s.tally.find((r) => r.label === v.winner);
   const firsts = row && row.ballots ? `${row.first_places} из ${row.ballots} ${plural(row.ballots, "голоса", "голосов", "голосов")} за первое место` : "";
-  if (s.mode === "research") {
+  if (s.mode === "selection") {
+    const r = s.selRank || {};
+    $("vSub").textContent = [v.winner ? `первым в ранге — ${v.winner}` : "", r.stats ? `подтверждено цитатой ${(r.stats.document || 0) + (r.stats.official || 0) + (r.stats.secondary || 0)} из ${r.stats.total} ячеек` : ""].filter(Boolean).join(" · ");
+  } else if (s.mode === "research") {
     const L = s.ledger && s.ledger.claims ? s.ledger.claims.length : 0;
     $("vSub").textContent = [`ответ по ${(s.subq || []).length || "—"} подвопросам`, L ? "" : "поиск по источникам не проводился"].filter(Boolean).join(" · ");
     $("vSub").title = `общий каркас итога — вариант ${v.winner}`;
@@ -2246,6 +2264,7 @@ function renderVerdict(s) {
   $("vAgreeWarn").innerHTML = warns.map(esc).join("<br>");
   $("vAnswer").innerHTML = md(v.final_answer);
   renderResearch(s);
+  renderSelection(s);
 
   $("vFacts").hidden = !s.facts || !Object.keys(s.facts).length;
   $("vFacts").innerHTML = s.facts ? factsHtml(s) : "";

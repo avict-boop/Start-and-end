@@ -15,7 +15,8 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
-from .config import AdvisorConfig, BrandingConfig, CouncilConfig, FactCheckConfig, MemberConfig, ResearchConfig
+from .config import (AdvisorConfig, BrandingConfig, CouncilConfig, FactCheckConfig, MemberConfig, ResearchConfig,
+                     SelectionConfig)
 
 TOP_KEYS = ("language", "mode", "debate_rounds", "min_quorum", "max_cost_usd", "temperature", "max_tokens",
             "reasoning_effort", "chair", "chair_proposes", "chair_follows_vote", "devil_advocate", "transcribe_model",
@@ -23,7 +24,7 @@ TOP_KEYS = ("language", "mode", "debate_rounds", "min_quorum", "max_cost_usd", "
             "max_requirements", "quick_keep", "evaluate_allow_none", "budget_reserve", "reserve_output_share", "answer_size", "chair_critiques", "chair_votes", "key_reserve", "web_tools", "search_engine", "search_uses", "search_unlimited", "search_results", "json_mode", "vote_reasoning", "critique_reasoning", "revision_reasoning", "log_level", "log_file_mb", "log_files", "quorum_large", "reports_memory_mb",
             "pilot_solo_model")
 SECTIONS = {"branding": BrandingConfig, "fact_check": FactCheckConfig, "research": ResearchConfig,
-            "advisor": AdvisorConfig}
+            "advisor": AdvisorConfig, "selection": SelectionConfig}
 MEMBER_KEYS = ("name", "model", "enabled", "reasoning_effort", "temperature", "max_tokens", "web_search")
 MAX_BACKUPS = 20
 
@@ -102,13 +103,15 @@ def apply(doc: CommentedMap, cfg: CouncilConfig) -> None:
         _set(doc, k, new[k], default)
     for k, model in SECTIONS.items():
         section = doc.get(k)
-        changed = {f: v for f, v in new[k].items() if v != model.model_fields[f].default}
+        # значения по умолчанию — и у полей со списком по умолчанию (default_factory: «[]», а не «не задано»)
+        dflt = {f: fi.get_default(call_default_factory=True) for f, fi in model.model_fields.items()}
+        changed = {f: v for f, v in new[k].items() if v != dflt[f]}
         if section is None:
             if changed:
                 doc[k] = CommentedMap(changed)
             continue
         for f, v in new[k].items():
-            _set(section, f, v, model.model_fields[f].default)
+            _set(section, f, v, dflt[f])
 
     old = {m["name"]: m for m in (doc.get("members") or []) if isinstance(m, dict)}
     seq = doc.get("members")

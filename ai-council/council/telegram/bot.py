@@ -41,10 +41,14 @@ STAGES = [("framing", "Уточняем задачу"), ("proposal", "Вариа
           ("arbitration", "Проверка по источникам"), ("revision", "Доработка"),
           ("recheck", "Проверка новых утверждений"), ("vote", "Голосование"), ("factcheck", "Проверка фактов"), ("verdict", "Готовим вывод")]
 MODE_NAME = {"debate": "Дебаты", "quick": "Быстро", "evaluate": "Оценка вариантов", "research": "Исследование",
-             "creative": "Креатив"}
+             "creative": "Креатив", "selection": "Отбор"}
 MODE_FULL = {"debate": "Подробное обсуждение", "quick": "Быстрый ответ", "evaluate": "Выбор из ваших вариантов",
              "research": "Исследование: подвопросы, проверка фактов поиском, «известно / спорно / неизвестно»",
-             "creative": "Креатив: много смелых идей, ремикс и шорт-лист (названия, концепции, слоганы)"}
+             "creative": "Креатив: много смелых идей, ремикс и шорт-лист (названия, концепции, слоганы)",
+             "selection": "Отбор: таблица «объекты × признаки», у каждого значения — источник и цитата; ранг по весам"}
+# «Отбор»: свои этапы (в боте без остановок «проверьте список» — они только на сайте)
+SELECTION_STAGES = [("framing", "Рамка отбора"), ("discover", "Поиск кандидатов"), ("screen", "Отсев"),
+                    ("fill", "Заполнение таблицы"), ("dispute", "Разбор спорного"), ("verdict", "Ранг и вывод")]
 STAGE_HINT = {
     "framing": "председатель уточняет вопрос и критерии",
     "proposal": "каждая модель вслепую предлагает решение",
@@ -231,7 +235,8 @@ class Progress:
             meta += " · демо"
         lines = [head, f"❓ {esc(short_title(self.question))}", f"<i>{esc(meta)}</i>", ""]
         names = MODE_STAGE.get(self.mode, {})
-        plan = [(k, names[k][0] if k in names else n) for k, n in STAGES if k not in self.skipped()]
+        plan = (SELECTION_STAGES if self.mode == "selection"
+                else [(k, names[k][0] if k in names else n) for k, n in STAGES if k not in self.skipped()])
         done = sum(1 for k, _ in plan if k in self.done_stages)
         idx = next((i for i, (k, _) in enumerate(plan) if k == self.stage), None)
         bar = "▰" * done + "▱" * (len(plan) - done)
@@ -364,7 +369,7 @@ class CouncilBot:
             members = [m for m in members if m in known]  # участника могли удалить из config.yaml
         return with_overrides(base, members=members, budget=s.budget,
                               fact_check=False if mode == "creative" else s.fact_check,
-                              compact=False if mode in ("research", "creative", "evaluate") else s.compact)
+                              compact=False if mode in ("research", "creative", "evaluate", "selection") else s.compact)
 
     async def send(self, chat_id: int, text: str, **kw: Any) -> dict[str, Any] | None:
         """Отправка длинного HTML с разбиением; при ошибке разметки — простым текстом."""
@@ -812,9 +817,10 @@ class CouncilBot:
         kb: list[list[dict]] = []
         if with_mode:
             kb.append([self._btn(("● " if s.mode == m else "") + {"debate": "Подробно", "research": "Исследование",
-                                                                   "quick": "Быстро", "creative": "Креатив"}[m],
+                                                                   "quick": "Быстро", "creative": "Креатив",
+                                                                   "selection": "Отбор"}[m],
                                              f"{prefix}mode:{m}")
-                       for m in ("debate", "research", "quick", "creative")])
+                       for m in ("debate", "research", "quick", "creative", "selection")])
             if s.mode == "debate":
                 kb.append([self._btn(("● " if s.rounds == r else "") + f"{r} раунд" + ("а" if r > 1 else ""), f"{prefix}rounds:{r}")
                            for r in (1, 2, 3)])
@@ -922,7 +928,7 @@ class CouncilBot:
 
     def _apply_setting(self, s: ChatSettings, kind: str, value: str) -> None:
         """Общая логика переключателей для карточки вопроса и для /settings."""
-        if kind == "mode" and value in ("debate", "quick", "research", "creative"):
+        if kind == "mode" and value in ("debate", "quick", "research", "creative", "selection"):
             s.mode = value
         elif kind == "rounds" and value.isdigit():
             s.rounds = max(1, min(5, int(value)))
@@ -1109,6 +1115,10 @@ class CouncilBot:
                                       key_limit=None if sp.get("mock") else getattr(client, "key_limit", None))
                     council_ref["c"] = council
                     council.model_max_out = max_out_map(models_all)
+                    council.snapshot_dir = rdir / "sources"  # «Отбор»: копии скачанных страниц
+                    if sp.get("mock"):
+                        from ..mock import mock_pages
+                        council.link_checker = mock_pages
                     # продолжение заседания серии с сайта: объекты части и реестры частей — как на сайте
                     await asyncio.to_thread(SR.apply_spec, council, sp, self.archive)
                     r = self.running.get(chat_id)
@@ -1332,6 +1342,20 @@ class CouncilBot:
             await self.send(chat_id, f"⚠️ Заседание не найдено: {esc(e)}")
             return
         vd = v.verdict
+        if v.is_selection:  # «Отбор»: первые в ранге, сколько ячеек подтверждено, вывод председателя
+            f = v.selection_facts
+            sel = v.d.get("selection") or {}
+            names = {o["id"]: o["name"] for o in sel.get("objects") or []}
+            top = [f"{r['rank']}. {esc(names.get(r['object'], ''))} — {str(r['score']).replace('.', ',')}"
+                   for r in (sel.get("ranking") or [])[:sel.get("top_n") or 12]]
+            concl = (sel.get("conclusion") or {}).get("summary", "")
+            short, cut = self._short_answer(concl or vd.get("why", ""))
+            lines = [f"🏆 <b>Первый в ранге: {esc(f['first'])}</b>", f"<i>объектов {esc(f['objects'])} · {esc(f['cells'])}</i>",
+                     f"❓ <i>{esc(v.title_text)}</i>", "", md_to_tg(short), "", "<b>Первая группа:</b>", *top,
+                     "", "<i>Таблица с цитатами и ползунками весов — на сайте; Excel и отчёт — там же.</i>",
+                     "", f"💰 ${v.cost:.2f} · ⏱ {v.duration}"]
+            await self.send(chat_id, "\n".join(lines), reply_markup=self._result_buttons(stem))
+            return
         w = v.winner
         short, cut = self._short_answer(vd.get("final_answer", ""))
         head = f"🏆 <b>Решение: {esc(v.title(w))}</b>" if w else "🏆 <b>Решение совета</b>"

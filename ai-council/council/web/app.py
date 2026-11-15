@@ -328,6 +328,12 @@ def _same_site(src: str, request: Any) -> bool:
     return bool(host) and host in own
 
 
+def _count_objects(req: Any, atts: list) -> int:
+    """Сколько объектов названо в задании (таблица или список) — для оценки цены «Отбора»."""
+    from ..splitter import heuristic_objects
+    return len(heuristic_objects("\n".join([req.question, req.context or ""] + [a.text for a in atts if a.kind == "document"])))
+
+
 def _ru_plural(n: int, one: str, few: str, many: str) -> str:
     n = abs(n) % 100
     return one if n % 10 == 1 and n != 11 else few if 2 <= n % 10 <= 4 and not 12 <= n <= 14 else many
@@ -745,7 +751,8 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                        doc_tokens=sum(a.tokens for a in atts if a.kind == "document"),
                        images=sum(1 for a in atts if a.kind == "image"), vision=vision,
                        question_chars=len(req.question) + len(req.context or ""),
-                       options_chars=sum(len(o) for o in opts or []), lengths=lengths)
+                       options_chars=sum(len(o) for o in opts or []), lengths=lengths,
+                       objects=_count_objects(req, atts) if mode_eff == "selection" else 0)
         blind = [m.name for m in cfg.active_members if vision.get(m.model) is False]
         if any(a.kind == "image" for a in atts) and blind:
             note = (f"Модели без зрения ({', '.join(blind)}) получат описание картинок, "
@@ -876,6 +883,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         except OSError:
             failed = 0
         return {"type": "paused", "id": cp.id, "reason": info["reason"], "reason_text": info["reason_text"],
+                "review": info.get("review"),
                 "failed": failed,
                 "message": info["message"], "spent": info["spent"], "budget": info["budget"], "stage": info["stage"]}
 
@@ -1099,7 +1107,20 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         d = await asyncio.to_thread(archive().load, sid)
         if not d or not d.get("selection"):
             raise HTTPException(404, "это не заседание «Отбора»")
-        return jsonable(rerank(d["selection"], body.weights, body.use_trust))
+        sel = d["selection"]
+        out = rerank(sel, body.weights, body.use_trust)
+        copies = {x["url"]: x.get("copy", "") for x in sel.get("sources") or []}
+        keep = ("status", "value", "unit", "as_of", "url", "quote", "context", "ruled")
+        out["cells"] = {oid: {aid: {**{k: c.get(k) for k in keep if c.get(k) not in (None, "")},
+                                    "copy": copies.get(c.get("url", ""), ""),
+                                    "options": [{k: o.get(k) for k in ("value", "unit", "by", "found", "url")}
+                                                for o in c.get("options") or []]}
+                              for aid, c in row.items()} for oid, row in sel["table"].items()}
+        out["attributes"] = [{**a, "scorable_kind": a.get("kind") in ("number", "bool", "list", "date")}
+                             for a in sel["attributes"]]
+        out["top_n"] = sel.get("top_n")
+        out["use_trust"] = sel.get("settings", {}).get("use_trust", True) if body.use_trust is None else body.use_trust
+        return jsonable(out)
 
     @app.get("/api/sessions/{sid}/selection.xlsx")
     async def selection_xlsx(sid: str, weights: str = "") -> Response:
@@ -1116,8 +1137,11 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             except ValueError:
                 continue
         data = await asyncio.to_thread(build, d, w or None)
+        from urllib.parse import quote
+        name = f"{sid[:80]}.xlsx"
+        ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-") or "selection.xlsx"
         return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        headers={"Content-Disposition": f'attachment; filename="{sid[:60]}.xlsx"'})
+                        headers={"Content-Disposition": f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name)}"})
 
     @app.get("/api/sources/{key}")
     async def source_copy(key: str) -> dict[str, Any]:

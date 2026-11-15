@@ -148,12 +148,16 @@ def estimate(
     question_chars: int = 0,
     options_chars: int = 0,
     lengths: dict[str, Any] | None = None,
+    objects: int = 0,
 ) -> Estimate:
     """doc_tokens/images — объём вложений: они добавляются к запросам этапов, где модели видят материалы.
     question_chars — длина вопроса; options_chars — суммарная длина вариантов пользователя (режим «Оценка»);
     lengths — длины ответов по этапам из прошлых заседаний (learn_lengths), иначе значения по умолчанию."""
     from .attachments import IMAGE_TOKENS
 
+    if mode == "selection":
+        return estimate_selection(cfg, pricing, question_chars=question_chars, doc_tokens=doc_tokens, objects=objects,
+                                  lengths=lengths)
     learned = dict(lengths or {})
     defaults = dict(DEFAULT_OUT)
     if cfg.compact_proposals:
@@ -239,6 +243,69 @@ def estimate(
         me.cost = (me.prompt_tokens * price.prompt + me.completion_tokens * price.completion + me.calls * price.request
                    if price else None)
         est.members.append(me)
+    return est
+
+
+def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, question_chars: int = 0, doc_tokens: int = 0,
+                       objects: int = 0, lengths: dict[str, Any] | None = None) -> Estimate:
+    """«Отбор»: поиск кандидатов и отсев (модель поиска), по объекту — поиск источников и две модели по тексту
+    страниц, спорное — несколько участников, рамка и вывод — председатель. Число кандидатов — оценка."""
+    sc = cfg.selection
+    start = sc.start if sc.start != "auto" else ("check" if objects >= 3 else "find")
+    q = int(question_chars / 3) + doc_tokens
+    if start == "check":
+        cands, deep = objects, min(objects, sc.max_deep)
+    else:
+        cands = min(sc.max_candidates, int(sc.angles * sc.per_angle * 0.5) + objects)
+        deep = min(sc.shortlist or sc.max_deep, max(objects, int(cands * 0.5)))
+    est = Estimate(learned_from=int((lengths or {}).get("sessions") or 0),
+                   lengths={"proposal": 0, "revision": 0, "verdict": 1500}, question_tokens=q)
+    members = cfg.active_members
+    chair = cfg.member(cfg.chair)
+
+    def price_of(model: str) -> Price | None:
+        return pricing.get(model)
+
+    def cheap_key(m: Any) -> float:
+        p = price_of(m.model)
+        return (p.prompt * 4 + p.completion) if p else 1e9
+
+    named = [m for n in sc.fillers for m in members if m.name == n][:2]
+    pool = sorted([m for m in members if m.name != chair.name and m not in named], key=lambda m: (cheap_key(m), members.index(m)))
+    fillers = (named + pool)[:2]
+    judges = ([chair] + [m for m in members if m.name != chair.name and m not in fillers]
+              + [m for m in members if m in fillers and m.name != chair.name])[:sc.judges]
+    disputes = max(1, int(deep * 0.3)) if deep else 0
+    tokens: dict[str, list[int]] = {}
+
+    def add(m: Any, calls: int, inp: int, out: int) -> None:
+        t = tokens.setdefault(m.name, [0, 0, 0])
+        t[0] += calls
+        t[1] += calls * inp
+        t[2] += calls * out
+    add(chair, 1, 2500 + q, 2500)                       # рамка
+    add(chair, 1, 4000 + deep * 350, 1500)              # вывод
+    for m in fillers:
+        add(m, deep, sc.object_chars // 3 + 1800, 1500)  # заполнение по тексту страниц
+    for m in judges:
+        add(m, disputes, 3500, 600)                    # спорное
+    out = []
+    for m in members:
+        if m.name not in tokens:
+            continue
+        calls, inp, outp = tokens[m.name]
+        p = price_of(m.model)
+        out.append(MemberEstimate(m.name, m.model, calls, inp, outp,
+                                  (inp * p.prompt + outp * p.completion) if p else None))
+    search_model = sc.search_model or cfg.fact_check.model
+    s_calls = (0 if start == "check" else sc.angles + (2 if sc.rounds > 1 else 0)
+               + (-(-cands // sc.screen_batch) if sc.screen else 0)) + deep
+    s_in = s_calls * (2000 + min(q, 3000))
+    s_out = s_calls * 2200
+    p = price_of(search_model)
+    out.append(MemberEstimate(FACT_CHECKER, search_model, s_calls, s_in, s_out,
+                              (s_in * p.prompt + s_out * p.completion + s_calls * p.request) if p else None))
+    est.members = out
     return est
 
 
