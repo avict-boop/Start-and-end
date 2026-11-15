@@ -78,6 +78,4 @@ def model_title(model: str) -> str:
 def scout_name(model: str) -> str:
     """Имя участника-разведчика (ключ в статистике и журнале): «поиск Google», «поиск Perplexity»."""
     p = model.split("/")[0]
-    if p == "x-ai":
-        return "поиск Exa"  # модель xAI ищет через Exa: его плата за источники высокая
     return f"поиск {PROVIDERS.get(p, (p.capitalize(),))[0] if p != 'perplexity' else 'Perplexity'}"

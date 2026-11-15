@@ -489,11 +489,6 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
             c.stage_search_engine[f"discover:{m.name}"] = pool[i % len(pool)]
         engines = {m.name: c.stage_search_engine.get(f"discover:{m.name}", "свой") for m in hunters
                    if m.name != FACT_CHECKER}
-        if scouting:  # у xAI плата за найденные источники высокая и не очевидна — его модель ищет через Exa (свой индекс)
-            for m in hunters:
-                if m.model.startswith("x-ai/"):
-                    c.stage_search_engine[f"discover:{m.name}"] = "exa"
-                    engines[m.name] = "exa"
         log.info("%sпоиск кандидатов: поисковики %s", c._tag, engines)
     found: list[tuple[str, S.Candidate]] = []
     used: list[str] = []

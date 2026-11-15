@@ -488,12 +488,12 @@ def test_pick_scouts_newest_junior_models():
                  "anthropic": "anthropic/claude-haiku-5.5", "x-ai": "x-ai/grok-5-fast"}
     assert pick_scouts(None) == {}
     assert perplexity_pair("perplexity/sonar-pro", CATALOG) == ["perplexity/sonar"]
-    assert scout_name("x-ai/grok-5-fast") == "поиск Exa" and scout_name("google/gemini-3-flash") == "поиск Google"
+    assert scout_name("x-ai/grok-5-fast") == "поиск xAI" and scout_name("google/gemini-3-flash") == "поиск Google"
 
 
 def test_scouts_search_every_angle(tmp_path):
     """Разведчики: каждый поисковик — по каждому направлению; модели совета в поиске кандидатов не участвуют;
-    xAI ищет через Exa."""
+    xAI — своим поиском."""
     import asyncio
     from council.config import CouncilConfig
     from council.mock import MockClient
@@ -513,7 +513,7 @@ def test_scouts_search_every_angle(tmp_path):
     fr = SM.S.SelectionFrame(refined_question="q", angles=[f"A{i}" for i in range(3)])
     asyncio.run(SM.discover(c, fr, []))
     who = {n for n, *_ in asked}
-    assert who == {"факт-чек", "поиск Perplexity", "поиск Google", "поиск OpenAI", "поиск Anthropic", "поиск Exa"}
+    assert who == {"факт-чек", "поиск Perplexity", "поиск Google", "поиск OpenAI", "поиск Anthropic", "поиск xAI"}
     assert len(asked) == 3 * 6 and not any(m.startswith("m/") for _, m, *_ in asked)
-    assert c.stage_search_engine["discover:поиск Exa"] == "exa"
+    assert "discover:поиск xAI" not in c.stage_search_engine  # свой поиск xAI
     assert all(e == "low" for n, m, _, e in asked if m.startswith(("google/", "openai/", "anthropic/")))
