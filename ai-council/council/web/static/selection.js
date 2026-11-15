@@ -13,6 +13,8 @@ const SEL_STAGE = {
   dispute: ["Разбор спорного", "совет решает только ячейки, где источники расходятся"],
   verdict: ["Ранг и вывод", "ранг по весам считает программа, председатель пишет короткий вывод"],
 };
+// ссылки приходят от моделей и поиска: в href — только http(s), иначе «javascript:…» выполнился бы по нажатию
+const selUrl = (u) => (/^https?:\/\//i.test(String(u || "")) ? String(u) : "");
 const SEL_GATE_TITLE = { frame: "Проверьте признаки и веса", candidates: "Проверьте найденных кандидатов",
   shortlist: "Утвердите короткий список" };
 
@@ -214,13 +216,13 @@ function selCell(id, oid, aid) {
   const c = ((d.cells || {})[oid] || {})[aid] || {};
   const a = (d.attributes || []).find((x) => x.id === aid) || {};
   const [k, , word] = SEL_STATUS[c.status || "none"] || SEL_STATUS.none;
-  const opts = (c.options || []).map((o) => `<li>${esc(o.value)} ${esc(o.unit || "")} — ${esc(o.by)}${o.found ? " · цитата найдена" : " · цитата не найдена"}${o.url ? ` · <a href="${esc(o.url)}" target="_blank" rel="noopener">${esc(o.url.replace(/^https?:\/\//, "").slice(0, 60))}</a>` : ""}</li>`).join("");
+  const opts = (c.options || []).map((o) => `<li>${esc(o.value)} ${esc(o.unit || "")} — ${esc(o.by)}${o.found ? " · цитата найдена" : " · цитата не найдена"}${selUrl(o.url) ? ` · <a href="${esc(selUrl(o.url))}" target="_blank" rel="noopener noreferrer">${esc(o.url.replace(/^https?:\/\//, "").slice(0, 60))}</a>` : ""}</li>`).join("");
   const box = $("selCellBox");
   box.hidden = false;
   box.innerHTML = `<h4>${esc((d.names || {})[oid] || oid)} · ${esc(a.name || aid)}</h4>
     <p><b>${esc(c.value || "—")} ${esc(c.unit || "")}</b> <span class="badge ${k}">${esc(word)}</span>${c.as_of ? ` · на ${esc(c.as_of)}` : ""}${c.ruled ? " · решено советом" : ""}</p>
     ${c.quote ? `<blockquote>«${esc(c.quote)}»</blockquote>` : ""}
-    ${c.url ? `<p><a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.url)}</a>${c.copy ? ` · <button type="button" class="link small" id="selCopy">копия страницы</button>` : ""}</p>` : ""}
+    ${c.url ? `<p>${selUrl(c.url) ? `<a href="${esc(selUrl(c.url))}" target="_blank" rel="noopener noreferrer">${esc(c.url)}</a>` : esc(c.url)}${c.copy ? ` · <button type="button" class="link small" id="selCopy">копия страницы</button>` : ""}</p>` : ""}
     ${c.context ? `<p class="muted small">Вокруг цитаты на странице: ${esc(c.context)}</p>` : ""}
     ${opts ? `<details><summary>Варианты источников (${(c.options || []).length})</summary><ul>${opts}</ul></details>` : ""}
     <div id="selCopyText" class="sel-copy" hidden></div>`;

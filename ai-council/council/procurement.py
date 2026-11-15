@@ -157,8 +157,10 @@ def now() -> str:
 def snapshot_cells(sel: dict[str, Any], oid: str) -> dict[str, dict[str, Any]]:
     """Ячейки объекта из отбора — по названию признака (для сверки и «что изменилось»)."""
     names = {a["id"]: a["name"] for a in sel.get("attributes") or []}
+    kinds = {a["id"]: a.get("kind", "text") for a in sel.get("attributes") or []}
     row = (sel.get("table") or {}).get(oid) or {}
-    return {names.get(aid, aid): {k: c.get(k, "") for k in ("value", "unit", "status", "url", "as_of")}
+    return {names.get(aid, aid): {**{k: c.get(k, "") for k in ("value", "unit", "status", "url", "as_of")},
+                                  "kind": kinds.get(aid, "text")}
             for aid, c in row.items() if c.get("status") not in (None, "none")}
 
 
@@ -364,7 +366,11 @@ def alerts(p: dict[str, Any], today: date | None = None) -> list[dict[str, Any]]
                             "text": f"{sup['name']}: нет ответа {days} дн. после запроса — напомнить"})
         # срок из таблицы отбора (например, «сертификат действует до»)
         for attr, c in (sup.get("cells") or {}).items():
-            if re.search(r"срок|до|valid|expir|действ", attr, re.I) and c.get("value"):
+            # только признаки-даты («сертификат действует до»); у старых проектов без типа — по названию и полной дате
+            # в значении: иначе «2000 тонн» в «мощности до…» читалось бы как 2000 год
+            is_date = c.get("kind") == "date" or (not c.get("kind") and re.search(r"срок|valid|expir|действ", attr, re.I)
+                                                  and re.search(r"\d{4}[-./年]\d{1,2}|\d{1,2}[./]\d{1,2}[./]\d{4}", c.get("value", "")))
+            if is_date and c.get("value"):
                 v = S.parse_date(c["value"])
                 t = today.year + (today.month - 1) / 12 + (today.day - 1) / 365
                 if v is not None and v < t + EXPIRY_DAYS / 365:

@@ -1116,7 +1116,7 @@ class CouncilBot:
                     council_ref["c"] = council
                     council.model_max_out = max_out_map(models_all)
                     council.snapshot_dir = rdir / "sources"  # «Отбор»: копии скачанных страниц
-                    if sp.get("mock"):
+                    if sp.get("mock") and sp.get("mode") == "selection":  # демо-страницы — только «Отбору»
                         from ..mock import mock_pages
                         council.link_checker = mock_pages
                     # продолжение заседания серии с сайта: объекты части и реестры частей — как на сайте
@@ -1354,7 +1354,12 @@ class CouncilBot:
                      f"❓ <i>{esc(v.title_text)}</i>", "", md_to_tg(short), "", "<b>Первая группа:</b>", *top,
                      "", "<i>Таблица с цитатами и ползунками весов — на сайте; Excel и отчёт — там же.</i>",
                      "", f"💰 ${v.cost:.2f} · ⏱ {v.duration}"]
-            await self.send(chat_id, "\n".join(lines), reply_markup=self._result_buttons(stem))
+            key = key_of(stem)
+            fmt = available_formats()[0]
+            kb = {"inline_keyboard": [  # голосования у «Отбора» нет — без кнопки «Голоса»
+                [self._btn("📖 Полный ответ", f"res:more:{key}"), self._btn(f"📄 Отчёт {FORMAT_NAME[fmt]}", f"rep:{fmt}:{key}")],
+                [self._btn("📎 Другие форматы", f"res:fmt:{key}"), self._btn("🔁 Повторить", f"rpt:{key}")]]}
+            await self.send(chat_id, "\n".join(lines), reply_markup=kb)
             return
         w = v.winner
         short, cut = self._short_answer(vd.get("final_answer", ""))
@@ -1392,6 +1397,9 @@ class CouncilBot:
     async def send_details(self, chat_id: int, stem: str) -> None:
         v = await asyncio.to_thread(self.archive.view, stem)
         vd, w = v.verdict, v.winner
+        if v.is_selection:  # «Отбор»: итог целиком — вывод, ранг, что выяснить, карточки с цитатами
+            await self.send(chat_id, f"🏆 <b>Итог отбора: первым — {esc(w)}</b>\n\n" + md_to_tg(vd.get("final_answer", "")))
+            return
         parts = [f"🏆 <b>Решение совета: вариант {w} — {esc(v.title(w))}</b> ({esc(v.author(w))})", "",
                  md_to_tg(vd.get("final_answer", "")), "", f"<b>Почему:</b> {md_to_tg(vd.get('why', ''))}"]
         if vd.get("dissent"):

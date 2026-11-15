@@ -21,7 +21,7 @@ const STAGE_NAME = { ...Object.fromEntries(STAGES), describe: "Описание 
   factcheck: "Проверка фактов", arbitration: "Проверяем утверждения по источникам", recheck: "Проверяем новые утверждения",
   split: "Разбиение задания на части", split_audit: "Проверка полноты списка", conflicts: "Противоречия между частями",
   discover: "Поиск кандидатов", angles: "Новые направления поиска", screen: "Отсев", sources: "Поиск источников",
-  fill: "Заполнение таблицы", dispute: "Разбор спорного" };
+  fill: "Заполнение таблицы", dispute: "Разбор спорного", frame: "Рамка отбора", conclusion: "Вывод по таблице" };
 // что происходит на этапе — простыми словами
 const STAGE_HINT = {
   framing: "председатель уточняет вопрос и критерии",
@@ -440,7 +440,8 @@ function updateParamsSummary() {
   if (mode === "research") bits.push(noLimit() ? "вариант без ограничения длины"
     : `вариант до ${Number($("researchWords").value) || "—"} слов${$("researchShorten").checked ? ", длинные — на сокращение" : ""}`);
   if (mode === "research" && researchTuned.arbitration_claims) bits.push(`проверка ${researchTuned.arbitration_claims} утв.`);
-  if ($("factCheck").checked && mode !== "research" && mode !== "creative") bits.push("проверка фактов");
+  if ($("factCheck").checked && !["research", "creative", "selection"].includes(mode)) bits.push("проверка фактов");
+  if (mode === "selection") bits.push({ auto: "сам решит, искать ли", find: "найти с нуля", check: "проверить ваш список", extend: "ваш список + поиск" }[$("selStart").value] || "");
   const web = [...lineup.web].filter((x) => selectedMembers().includes(x));
   if (web.length && mode !== "evaluate") bits.push(`поиск: ${web.join(", ")}`);
   if ($("mock").checked) bits.push("демо");
@@ -898,7 +899,7 @@ $("keyStatus").addEventListener("click", () => {
 
 $("modeSeg").addEventListener("change", (e) => { if (e.target.name === "mode") setMode(e.target.value); });
 for (const id of ["question", "options", "criteria", "rounds", "budget", "context"]) $(id).addEventListener("input", formChanged);
-for (const id of ["mock", "compact", "factCheck", "chairProposes", "chair", "devil", "researchShorten", "researchWords", "researchSplit"]) $(id).addEventListener("change", formChanged);
+for (const id of ["mock", "compact", "factCheck", "chairProposes", "chair", "devil", "researchShorten", "researchWords", "researchSplit", "selStart", "selShortlist", "selTop"]) $(id).addEventListener("change", formChanged);
 $("researchNoLimit").addEventListener("change", () => { updateShortenHint(); formChanged(); });
 $("researchWords").addEventListener("input", () => { updateShortenHint(); updateParamsSummary(); });
 for (const id of ["chairProposes", "chair"]) $(id).addEventListener("change", updateChairHint);
@@ -1155,7 +1156,8 @@ async function loadArchive() {
       <div class="arc-q" data-open="${esc(it.id)}" tabindex="0" role="link" title="${esc(shortTitle(it.question, 300))}">${status}${esc(shortTitle(it.question))}</div>
       <div class="arc-actions">${dl}${del}</div>
       ${done && it.winner && it.unacceptable ? `<div class="arc-win">⛔ Ни один вариант не подходит <span class="muted">· лидер сравнения — ${esc(it.winner)}</span></div>` : ""}
-      ${done && it.winner && !it.unacceptable ? `<div class="arc-win"><span class="lbl" style="width:24px;height:24px;font-size:.78rem;margin-right:.35rem;vertical-align:-2px">${esc(it.winner)}</span>${esc(it.winner_title)} <span class="muted">· ${esc(it.winner_author)}</span></div>` : ""}
+      ${done && it.winner && it.mode === "selection" ? `<div class="arc-win">🏆 ${esc(it.winner_title)}</div>` : ""}
+      ${done && it.winner && !it.unacceptable && it.mode !== "selection" ? `<div class="arc-win"><span class="lbl" style="width:24px;height:24px;font-size:.78rem;margin-right:.35rem;vertical-align:-2px">${esc(it.winner)}</span>${esc(it.winner_title)} <span class="muted">· ${esc(it.winner_author)}</span></div>` : ""}
       <div class="arc-meta">${meta}</div>
     </article>`;
   }).join("");

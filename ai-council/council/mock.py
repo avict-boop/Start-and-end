@@ -250,7 +250,7 @@ def demo_page(url: str) -> str:
     forms = "capsules, tablets" + (", powders" if i % 2 else "")
     return (f"demo plant {i} — contract manufacturer (oem/odm) of dietary supplements. annual capacity 年产软胶囊{10 * i}亿粒. "
             f"forms: {forms}. gmp certificate valid until 202{6 + i % 3}-0{i % 9 + 1}-15. "
-            f"demo plant {i} annual capacity was expanded in 2024.")
+            f"demo plant {i} annual capacity was expanded in 2024 to {5 * i}亿粒.")
 
 
 async def mock_pages(urls: list[str], *, texts: bool = False, **kw: Any) -> dict[str, dict[str, Any]]:
@@ -264,7 +264,7 @@ async def mock_pages(urls: list[str], *, texts: bool = False, **kw: Any) -> dict
 
 def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[str, Any]:
     import re as _re
-    if stage == "framing":
+    if stage == "frame":
         from .splitter import heuristic_objects
         return {"refined_question": "Отбор контрактных производителей (демо)", "object_kind": "контрактный производитель",
                 "inclusion": ["сам производит", "работает по контракту (OEM/ODM)"], "exclusion": ["перепродавец"],
@@ -307,8 +307,8 @@ def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[st
     if stage == "sources":
         return {"website": site, "sources": [{"url": f"{site}/annual.pdf", "title": "Годовой отчёт", "kind": "document"},
                                              {"url": f"{site}/about", "title": "О компании", "kind": "official"}],
-                "cells": [{"attr": "A2", "value": "500", "unit": "млн капсул/год", "url": f"{site}/about",
-                           "quote": f"demo plant {i} annual capacity was expanded in 2024"} if i == 3 else  # демо-спор
+                "cells": [{"attr": "A2", "value": str(500 * i), "unit": "млн капсул/год", "url": f"{site}/about",
+                           "quote": f"annual capacity was expanded in 2024 to {5 * i}亿粒"} if i == 3 else  # демо-спор
                           {"attr": "A2", "value": str(1000 * i), "unit": "млн капсул/год", "url": f"{site}/about",
                            "quote": f"年产软胶囊{10 * i}亿粒"}]}
     if stage == "fill":
@@ -318,12 +318,12 @@ def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[st
                   "quote": f"年产软胶囊{10 * i}亿粒", "note": "мощность, не выпуск"},
                  {"attr": "A3", "value": forms, "url": f"{site}/about", "quote": f"forms: {forms}"},
                  {"attr": "A4", "value": f"202{6 + i % 3}-0{i % 9 + 1}-15", "url": f"{site}/about",
-                  "quote": "gmp certificate valid until"}]
+                  "quote": f"gmp certificate valid until 202{6 + i % 3}-0{i % 9 + 1}-15"}]
         return {"cells": cells}
     if stage == "dispute":
         keys = _re.findall(r"^(A\d+) «", text, _re.M)
         return {"items": [{"key": k, "choice": "a", "reason": "цитата на странице отчёта (демо)"} for k in keys]}
-    if stage == "verdict":
+    if stage == "conclusion":
         return {"summary": "**Демо-вывод.** Первым идёт завод с наибольшей подтверждённой мощностью; у остальных "
                            "часть ячеек не подтверждена.", "next_steps": ["Запросить сертификаты с номерами (демо)"],
                 "risks": ["Демо-данные"]}

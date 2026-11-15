@@ -135,8 +135,10 @@ class Archive:
             s = {
                 "id": stem, "key": key_of(stem), "question": v.question, "mode": v.d.get("mode"),
                 "mode_name": MODE_NAME.get(v.d.get("mode", ""), ""), "date": v.date,
-                "started_at": v.d.get("started_at"), "winner": w, "winner_title": v.title(w),
-                "winner_author": v.author(w) if w else "", "cost": round(v.cost, 4),
+                "started_at": v.d.get("started_at"), "winner": w,
+                # «Отбор»: победитель — первый в ранге (имя объекта), а не вариант с автором
+                "winner_title": f"первым — {w}" if v.is_selection and w else v.title(w),
+                "winner_author": "" if v.is_selection else (v.author(w) if w else ""), "cost": round(v.cost, 4),
                 "unacceptable": bool(v.unacceptable),
                 "members": v.members, "proposals": len(v.proposals), "status": "done",
                 "attachments": len(v.attachments),
@@ -341,7 +343,7 @@ class Archive:
         if len(answer) > self.MAX_ANSWER_CHARS:
             answer = answer[:self.MAX_ANSWER_CHARS] + "…"
         item = {"id": parent, "title": v.title_text, "question": v.question, "answer": answer,
-                "winner": v.title(v.winner)}
+                "winner": v.winner if v.is_selection else v.title(v.winner)}
         if v.is_research:  # исследование: подтверждённые факты с источниками и открытые вопросы — с датой поиска
             by = v.evidence_by_id
             known = [f"- {k.get('statement', '')} ({', '.join(by[i]['url'] for i in k.get('evidence_ids') or [] if i in by)})"

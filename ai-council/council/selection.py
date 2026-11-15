@@ -651,6 +651,40 @@ def find_quote(text: str, quote: str) -> int:
     return -1
 
 
+CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")
+
+
+def numbers_in(text: str) -> list[float]:
+    """Все числа текста с множителями (万/亿, млн, billion…)."""
+    t = text or ""
+    out = []
+    for m in NUM.finditer(t):
+        v = parse_number(t[m.start():])
+        if v is not None:
+            out.append(v)
+    return out
+
+
+def quote_supports(attr: Attribute, value: str, unit: str, quote: str) -> bool:
+    """Цитата действительно опора значения: не обрывок из пары слов («softgel» есть на любой странице завода), а для
+    чисел и дат — то же число (с учётом 万/亿, млн) или тот же год есть в самой цитате."""
+    q = re.sub(r"\s+", "", plain(quote))
+    if len(q) < (4 if CJK.search(q) else 12):
+        return False
+    if attr.kind == "number":
+        v = parse_number(f"{value} {unit}".strip())
+        if v is None:
+            return True
+        return any(abs(n - v) <= 0.02 * max(abs(n), abs(v), 1e-9) for n in numbers_in(quote))
+    if attr.kind == "date":
+        v = parse_date(value)
+        if v is None:
+            return True
+        years = {int(y) for y in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", quote)}
+        return int(v) in years
+    return True
+
+
 def context_at(text: str, pos: int, width: int = 260) -> str:
     if pos < 0:
         return ""
@@ -829,11 +863,11 @@ def ranking(attrs: list[Attribute], table: dict[str, dict[str, dict[str, Any]]],
 
 
 def sensitivity(attrs: list[Attribute], table: dict[str, dict[str, dict[str, Any]]], names: dict[str, str],
-                top: int = 15, limit: int = 12) -> list[dict[str, Any]]:
+                top: int = 15, limit: int = 12, use_trust: bool = True) -> list[dict[str, Any]]:
     """Где ранг неустойчив: при каком весе признака соседи по рангу меняются местами (вес меняется, остальные —
     нет). Счёт точный: итог — дробь (Σ wᵢsᵢ)/(Σ wᵢ), равенство двух итогов — линейное уравнение по одному весу."""
-    parts = score_parts(attrs, table)
-    rows = ranking(attrs, table)[:top]
+    parts = score_parts(attrs, table, use_trust)
+    rows = ranking(attrs, table, use_trust=use_trust)[:top]
     w0 = {a.id: a.weight for a in attrs if a.scorable}
     out = []
     for i in range(len(rows) - 1):
@@ -862,10 +896,10 @@ def _fmt_w(w: float) -> str:
 
 
 def value_of_information(attrs: list[Attribute], table: dict[str, dict[str, dict[str, Any]]], names: dict[str, str],
-                         top_n: int, limit: int = 15) -> list[dict[str, Any]]:
+                         top_n: int, limit: int = 15, use_trust: bool = True) -> list[dict[str, Any]]:
     """Что выяснить: неизвестные и неподтверждённые ячейки, от которых зависит, попадёт ли объект в первую группу
     (top_n). Для каждой считается ранг при лучшем (подтверждено документом, лучшее значение) и худшем исходе."""
-    base = {r["object"]: r["rank"] for r in ranking(attrs, table)}
+    base = {r["object"]: r["rank"] for r in ranking(attrs, table, use_trust=use_trust)}
     n = len(base)
     top_n = min(top_n or n, n)
     out = []
@@ -884,7 +918,7 @@ def value_of_information(attrs: list[Attribute], table: dict[str, dict[str, dict
                 fake = {o: dict(r) for o, r in table.items()}
                 fake[oid] = dict(row)
                 fake[oid][a.id] = _extreme(a, table, case)
-                ranks[case] = next(x["rank"] for x in ranking(attrs, fake) if x["object"] == oid)
+                ranks[case] = next(x["rank"] for x in ranking(attrs, fake, use_trust=use_trust) if x["object"] == oid)
             enters = r0 > top_n >= ranks["best"]
             leaves = r0 <= top_n < ranks["worst"]
             swing = ranks["worst"] - ranks["best"]
@@ -1162,7 +1196,8 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
             if c.get("status") in (None, "none"):
                 lines.append(f"- **{esc(a.name)}:** не найдено")
                 continue
-            src = f" — [{domain(c['url']) or 'источник'}](<{c['url']}>)" if c.get("url") else ""
+            safe = str(c.get("url") or "").startswith(("http://", "https://"))  # адреса от моделей — только http(s)
+            src = f" — [{domain(c['url']) or 'источник'}](<{c['url']}>)" if safe else ""
             q = f"\n  > «{esc(c['quote'])[:400]}»" if c.get("quote") else ""
             extra = []
             if c.get("as_of"):

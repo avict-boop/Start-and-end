@@ -133,7 +133,8 @@ def test_selection_find_end_to_end_demo():
     assert r.verdict.winner == "Demo Plant 7" and "### Ранг" in r.verdict.final_answer
     assert sel["top_n"] == 3 and "«" in r.verdict.final_answer  # цитаты в карточках
     stages = {e["meta"]["stage"] for e in r.transcript if e.get("meta")} or {e.get("stage") for e in r.transcript}
-    assert {"framing", "discover", "screen", "sources", "fill", "dispute", "verdict"} <= stages
+    assert {"frame", "discover", "screen", "sources", "fill", "dispute", "conclusion"} <= stages
+    assert not {"framing", "verdict"} & stages  # свои имена этапов: не смешиваются с длинами ответов других режимов
 
 
 def test_selection_check_list_skips_search_and_screening():
@@ -196,11 +197,13 @@ def test_procurement_alerts_compare_and_diff():
     from council import procurement as P
     sup = {"id": "O1", "name": "Weihai Baihe Biotechnology", "names": ["Weihai Baihe Biotechnology", "威海百合"],
            "status": "sent", "sent_at": "2026-11-01T10:00:00+00:00", "replies": [], "documents": [],
-           "cells": {"Сертификат GMP действует до": {"value": "2026-12-01", "status": "official"}}}
+           "cells": {"Сертификат GMP действует до": {"value": "2026-12-01", "status": "official", "kind": "date"},
+                     "Мощность до": {"value": "2000 тонн", "status": "official", "kind": "number"}}}
     p = {"suppliers": [sup], "skus": [{"name": "Omega-3"}], "rates": {"CNY": 0.14}, "base_currency": "USD"}
     today = date(2026, 11, 15)
     texts = [a["text"] for a in P.alerts(p, today)]
     assert any("нет ответа 14 дн." in t for t in texts) and any("истекает" in t for t in texts)
+    assert not any("Мощность" in t for t in texts)  # число не принимается за год
     assert P.doc_flags({"kind": "SC", "number": "1", "holder": "威海百合生物技术股份有限公司", "valid_until": "2028-01-01"}, sup, today) == []
     assert "нет номера" in P.doc_flags({"kind": "GMP", "holder": "Baihe", "valid_until": "2028-01-01"}, sup, today)
     P.add_reply(p, "O1", P.ReplyParsed(items=[P.QuoteItem(sku="omega-3 softgel", price="8,0", currency="CNY", unit="per bottle")]),
@@ -210,8 +213,9 @@ def test_procurement_alerts_compare_and_diff():
     d = {"selection": {"objects": [{"id": "X", "name": "Weihai Baihe Biotechnology"}],
                        "attributes": [{"id": "A1", "name": "Сертификат GMP действует до", "kind": "date"}],
                        "table": {"X": {"A1": {"status": "document", "value": "2028-12-01"}}}}}
-    ch = P.diff(p, d)
-    assert ch and ch[0]["old"] == "2026-12-01" and ch[0]["new"] == "2028-12-01"
+    ch = {x["attr"]: x for x in P.diff(p, d)}
+    assert ch["Сертификат GMP действует до"]["old"] == "2026-12-01" and ch["Сертификат GMP действует до"]["new"] == "2028-12-01"
+    assert ch["Мощность до"]["new"] == ""  # в новой таблице значения нет — тоже изменение
 
 
 def test_trim_snapshots_removes_oldest(tmp_path):
@@ -223,3 +227,20 @@ def test_trim_snapshots_removes_oldest(tmp_path):
         os.utime(f, (time.time() - 100 + i, time.time() - 100 + i))
     removed = M.trim_snapshots(tmp_path, 1)  # 1 МБ: из 1,6 МБ уходят две самые старые копии
     assert removed == 2 and sorted(p.name[:16] for p in tmp_path.glob("*.json.gz")) == [f"{2:016x}", f"{3:016x}"]
+
+
+def test_quote_must_carry_the_value():
+    num = S.Attribute(name="мощность", kind="number")
+    assert S.quote_supports(num, "2500", "млн капсул/год", "年产软胶囊25亿粒")
+    assert not S.quote_supports(num, "2500", "млн капсул/год", "annual capacity was expanded in 2024")  # числа нет
+    assert not S.quote_supports(S.Attribute(name="формы", kind="list"), "softgel", "", "softgel")  # обрывок
+    assert S.quote_supports(S.Attribute(name="срок", kind="date"), "2027-03-15", "", "certificate valid until March 2027")
+    assert not S.quote_supports(S.Attribute(name="срок", kind="date"), "2027-03-15", "", "certificate valid until 2025")
+
+
+def test_added_objects_never_reuse_numbers():
+    ents = [{"id": f"O{i}", "name": f"N{i}", "names": [f"N{i}"]} for i in (1, 2, 3, 10)]
+    out = M.apply_list_edits(ents, {"drop": ["O2"], "add": ["Новый"]})
+    assert out[-1]["id"] == "O11"
+    more = M.apply_list_edits([], {"add": ["Ещё"]}, start_n=M._max_id(out))
+    assert more[0]["id"] == "O12"

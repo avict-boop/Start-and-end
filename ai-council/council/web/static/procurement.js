@@ -114,7 +114,7 @@ function prDraw() {
       <p class="muted small">Новый «Отбор» по поставщикам проекта с теми же признаками; когда закончится — здесь будет, что изменилось.</p>
       <button type="button" class="secondary" id="prRecheck">Перепроверить таблицу</button>
       ${(p.rechecks || []).length ? `<p class="small">Последняя: <a href="#/s/${encodeURIComponent(p.rechecks[p.rechecks.length - 1].session)}">заседание от ${esc(p.rechecks[p.rechecks.length - 1].at.slice(0, 10))}</a>${p.recheck_done ? "" : " — ещё идёт или не завершено"}</p>` : ""}
-      ${diff ? (diff.length ? `<table class="sel-table"><thead><tr><th>Поставщик</th><th>Признак</th><th>Было</th><th>Стало</th></tr></thead><tbody>${diff.map((x) => `<tr><td>${esc(x.supplier)}</td><td>${esc(x.attr)}</td><td>${esc(x.old || "—")}</td><td>${esc(x.new || "—")}${x.url ? ` <a href="${esc(x.url)}" target="_blank" rel="noopener">↗</a>` : ""}</td></tr>`).join("")}</tbody></table>` : '<p class="small">Изменений нет.</p>') : ""}
+      ${diff ? (diff.length ? `<table class="sel-table"><thead><tr><th>Поставщик</th><th>Признак</th><th>Было</th><th>Стало</th></tr></thead><tbody>${diff.map((x) => `<tr><td>${esc(x.supplier)}</td><td>${esc(x.attr)}</td><td>${esc(x.old || "—")}</td><td>${esc(x.new || "—")}${/^https?:\/\//i.test(x.url || "") ? ` <a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">↗</a>` : ""}</td></tr>`).join("")}</tbody></table>` : '<p class="small">Изменений нет.</p>') : ""}
     </section>
     <p><button type="button" class="link small danger" id="prDelete">Удалить проект</button></p>`;
   prBind();

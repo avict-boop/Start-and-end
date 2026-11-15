@@ -180,7 +180,9 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     c._emit("stage", stage="framing", title="Рамка отбора: кто кандидат, признаки и веса, где искать")
     start0 = sc.start
     try:
-        frame = await c._ask(chair, "framing",
+        # этапы «Отбора» — свои имена в журнале и в истории длин ответов (не путать с «framing» и «verdict» других
+        # режимов: короткий вывод отбора иначе занижал бы резерв длинного итога исследования)
+        frame = await c._ask(chair, "frame",
                              S.frame_prompt(question, context, criteria, hint,
                                             start0 if start0 != "auto" else ("check" if len(hint) >= 3 else "find"),
                                             sc.max_attributes),
@@ -239,7 +241,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         if dec is not None:
             ids = [i for i in dec.get("keep") or [] if any(e["id"] == i for e in entities)]
             shortlist = [e for i in ids for e in entities if e["id"] == i] + apply_list_edits([], {"add": dec.get("add")},
-                                                                                                start_n=len(entities))
+                                                                                                start_n=_max_id(entities))
             entities += [e for e in shortlist if e not in entities]
     keep_ids = {e["id"] for e in shortlist}
     excluded = [x for x in excluded if x["id"] not in keep_ids]  # возвращённые вами на остановке — не «исключены»
@@ -275,8 +277,8 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     names = {e["id"]: e["name"] for e in objects}
     rank = S.ranking(attrs, table, use_trust=sc.use_trust)
     top_n = min(top_n or len(rank), len(rank))
-    sens = S.sensitivity(attrs, table, names)
-    voi = S.value_of_information(attrs, table, names, top_n)
+    sens = S.sensitivity(attrs, table, names, use_trust=sc.use_trust)
+    voi = S.value_of_information(attrs, table, names, top_n, use_trust=sc.use_trust)
     sel = {"frame": frame.model_dump(), "start": start, "attributes": [a.model_dump() for a in attrs],
            "objects": objects, "table": table, "ranking": rank, "top_n": top_n, "sensitivity": sens, "voi": voi,
            "excluded": excluded, "candidates": len(entities), "discovery": found_meta,
@@ -287,12 +289,12 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     conclusion = None
     try:
         conclusion = await c._ask(
-            chair, "verdict",
+            chair, "conclusion",
             S.conclusion_prompt(frame, S.table_text(sel), "\n".join(f"- {names.get(v['object'])}: {v['text']}" for v in voi),
                                 "\n".join(f"- {s['text']}" for s in sens),
                                 "; ".join(f"{x['name']} ({x['reason'][:80]})" for x in excluded[:30]), top_n,
                                 c.cfg.answer_size == "brief"),
-            S.Conclusion, meta=META, max_tokens=8000)
+            S.Conclusion, meta=META, max_tokens=8000)  # этап в журнале — «conclusion» (см. рамку)
     except (ProviderError, InvalidResponse) as e:
         if not _soft(e):
             raise
@@ -350,6 +352,11 @@ def apply_frame_edits(frame: S.SelectionFrame, dec: dict[str, Any] | None) -> S.
     return S.SelectionFrame.model_validate(data)
 
 
+def _max_id(entities: list[dict[str, Any]]) -> int:
+    return max((int(e["id"][1:]) for e in entities if str(e.get("id", "")).startswith("O") and e["id"][1:].isdigit()),
+               default=0)
+
+
 def apply_list_edits(entities: list[dict[str, Any]], dec: dict[str, Any] | None, start_n: int | None = None
                      ) -> list[dict[str, Any]]:
     """Правка списка человеком: убрать (drop), добавить своих (add)."""
@@ -357,7 +364,7 @@ def apply_list_edits(entities: list[dict[str, Any]], dec: dict[str, Any] | None,
         return entities
     drop = set(dec.get("drop") or [])
     out = [e for e in entities if e["id"] not in drop]
-    n = start_n if start_n is not None else len(entities)
+    n = start_n if start_n is not None else _max_id(entities)  # новые номера — после самого большого (не после длины)
     known = {S.norm_name(x) for e in out for x in e.get("names") or [e["name"]]}
     for name in dec.get("add") or []:
         name = str(name).strip()
@@ -523,7 +530,7 @@ async def fill_object(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribu
             for x in cl:
                 if (S.match_attr(x.attr, attrs) or S.Attribute(name="?")).id != a.id or not x.value.strip():
                     continue
-                options.append(verify_option(c, x, who, e, pages))
+                options.append(verify_option(c, x, who, e, pages, a))
                 break
         cells[a.id] = S.resolve_cell(a, options)
     st = {k: sum(1 for v in cells.values() if v["status"] == k) for k in (*S.STATUSES, "disputed")}
@@ -537,12 +544,16 @@ def _home(site: str) -> str:
     return s if s.startswith(("http://", "https://")) else "https://" + s
 
 
-def verify_option(c: Council, x: S.Cell, who: str, e: dict[str, Any], pages: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def verify_option(c: Council, x: S.Cell, who: str, e: dict[str, Any], pages: dict[str, dict[str, Any]],
+                  attr: S.Attribute | None = None) -> dict[str, Any]:
     """Вариант ячейки: ищем его цитату на указанной странице, а если ссылки нет или там не нашлось — на других
-    скачанных страницах объекта (модель могла перепутать адрес)."""
+    скачанных страницах объекта (модель могла перепутать адрес). Цитата засчитывается, только если она опора значения:
+    не обрывок в пару слов, а у чисел и дат — то же число или год в самой цитате."""
     o = {"value": x.value, "unit": x.unit, "as_of": x.as_of, "url": x.url, "quote": x.quote, "note": x.note, "by": who,
          "found": False, "kind": ""}
-    if x.quote:
+    if x.quote and attr is not None and not S.quote_supports(attr, x.value, x.unit, x.quote):
+        o["weak"] = True  # цитата не подтверждает само значение — ищем её, но не засчитываем
+    if x.quote and not o.get("weak"):
         order = ([x.url] if x.url in pages else []) + [u for u in pages if u != x.url]
         for u in order:
             t = pages.get(u, {}).get("text") or ""
@@ -655,7 +666,7 @@ def rerank(sel: dict[str, Any], weights: dict[str, float] | None = None, use_tru
     names = {o["id"]: o["name"] for o in sel["objects"]}
     top_n = sel.get("top_n") or len(sel["objects"])
     rank = S.ranking(attrs, sel["table"], use_trust=trust)
-    return {"ranking": rank, "sensitivity": S.sensitivity(attrs, sel["table"], names),
-            "voi": S.value_of_information(attrs, sel["table"], names, top_n), "names": names,
+    return {"ranking": rank, "sensitivity": S.sensitivity(attrs, sel["table"], names, use_trust=trust),
+            "voi": S.value_of_information(attrs, sel["table"], names, top_n, use_trust=trust), "names": names,
             "weights": {a.id: a.weight for a in attrs}}
 

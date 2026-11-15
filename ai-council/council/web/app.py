@@ -79,6 +79,18 @@ def events_from_result(d: dict[str, Any], session_id: str) -> list[dict[str, Any
         ev.insert(1, {"type": "attachments", "items": d["attachments"], "blind": []})
         if d.get("image_notes"):
             ev.insert(2, {"type": "image_notes", "by": d.get("image_notes_by", ""), "notes": d["image_notes"]})
+    sel = d.get("selection") or {}
+    if d["mode"] == "selection" and sel:  # «Отбор» (заседание из командной строки или без журнала событий)
+        names = {o["id"]: o["name"] for o in sel.get("objects") or []}
+        ev.append({"type": "selection_frame", "frame": sel.get("frame") or {}, "start": sel.get("start", ""), "seeds": 0})
+        ev.append({"type": "stage", "stage": "fill", "title": "Заполнение таблицы"})
+        ev.append({"type": "ranked", "ranking": (sel.get("ranking") or [])[:30], "names": names,
+                   "top_n": sel.get("top_n"), "stats": sel.get("stats") or {}})
+        ev.append({"type": "stage", "stage": "verdict", "title": "Вывод по таблице"})
+        ev.append({"type": "verdict", "verdict": d["verdict"], "ideas": []})
+        ev.append({"type": "done", "id": session_id, "total_cost": d.get("total_cost_usd", 0),
+                   "duration_s": d.get("duration_s"), "stats": d.get("stats", {}), "semantic": None})
+        return ev
     if d["mode"] != "evaluate":
         ev.append({"type": "stage", "stage": "proposal", "title": "Независимые предложения",
                    "chair_proposes": d.get("chair_proposed", True)})
@@ -950,7 +962,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     council.review_enabled = True
                     council.review_decisions = dict(sp.get("review_decisions") or {})
                     council.snapshot_dir = runs_dir(cfg) / "sources"
-                    if sp.get("mock"):
+                    if sp.get("mock") and sp.get("mode") == "selection":  # демо-страницы — только «Отбору»
                         from ..mock import mock_pages
                         council.link_checker = mock_pages
                     # часть серии: свои объекты; сводка: реестры частей (общее с ботом — council/series.apply_spec)
