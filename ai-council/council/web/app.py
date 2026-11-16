@@ -1187,7 +1187,12 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         rv = cp.spec.get("review") or {}
         if cp.spec.get("reason") != "review" or rv.get("gate") != body.gate:
             raise HTTPException(409, "заседание не ждёт этой проверки")
-        decisions = {**(cp.spec.get("review_decisions") or {}), body.gate: body.decision}
+        dec = dict(body.decision or {})
+        items = (rv.get("payload") or {}).get("items") or []
+        if isinstance(items, list):  # «Отбор»: названия к номерам — номера после обновления программы могут сдвинуться
+            nm = {str(x.get("id")): str(x.get("name") or "") for x in items if isinstance(x, dict) and x.get("id")}
+            dec["_names"] = {i: nm[i] for k in ("drop", "keep") for i in dec.get(k) or [] if i in nm}
+        decisions = {**(cp.spec.get("review_decisions") or {}), body.gate: dec}
         cp.update(review_decisions=decisions, review=None)
         log.info("заседание %s: проверка «%s» — решение принято", sid, body.gate)
         return await resume_session(sid)

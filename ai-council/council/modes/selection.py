@@ -254,6 +254,27 @@ REWIND: dict[str, dict[str, Any]] = {
 }
 
 
+def remap_decision(dec: dict[str, Any] | None, entities: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Решение на остановке ссылается на номера кандидатов (O12). После обновления программы или возврата к этапу
+    склейка может дать другие номера — тогда по сохранённым названиям находим тех же кандидатов, чтобы не выбросить
+    и не оставить чужих."""
+    names = (dec or {}).get("_names") or {}
+    if not dec or not names:
+        return dec
+    by_name: dict[str, str] = {}
+    for e in entities:
+        for x in e.get("names") or [e["name"]]:
+            by_name.setdefault(S.norm_name(x), e["id"])
+    def fix(i: str) -> str | None:
+        n = names.get(i)
+        return by_name.get(S.norm_name(n)) if n else i
+    out = dict(dec)
+    for k in ("drop", "keep"):
+        if dec.get(k) is not None:
+            out[k] = [j for j in (fix(i) for i in dec[k]) if j]
+    return out
+
+
 def gate(c: Council, name: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     """Остановка «проверьте»: решение уже есть (продолжение после правки) — вернуть его; остановки выключены — None;
     иначе заседание встаёт (сайт показывает список)."""
@@ -419,7 +440,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         c._emit("candidates_cut", shown=len(entities), cut=cut, limit=cap_c)
     if start in ("find", "extend"):
         dec = gate(c, "candidates", {"items": entities, "completeness": found_meta.get("completeness"), "cut": cut})
-        entities = apply_list_edits(entities, dec)
+        entities = apply_list_edits(entities, remap_decision(dec, entities))
 
     # 3. Отсев
     excluded: list[dict[str, Any]] = []
@@ -453,6 +474,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         dec = gate(c, "shortlist", {"items": entities, "shortlist": [e["id"] for e in shortlist],
                                     "excluded": excluded})
         if dec is not None:
+            dec = remap_decision(dec, entities)
             ids = [i for i in dec.get("keep") or [] if any(e["id"] == i for e in entities)]
             # добавленное вами по имени, если программа его уже нашла (под другим названием) — это тот же кандидат
             # с его страницами, а не новый пустой объект

@@ -99,3 +99,13 @@ def test_foreign_site_not_merged_and_passes_order_and_deep_unlimited():
     e2 = {"id": "O2", "angles": ["x"], "screen": {"result": "unclear", "checks": [{"verdict": "pass"}]}}
     assert [e["id"] for e in SM.diverse_order([e2, e1])] == ["O1", "O2"]
     assert SelectionConfig(max_deep=0).max_deep == 0
+
+
+def test_gate_decision_follows_names_when_ids_shift():
+    from council.modes import selection as SM
+    ents = [{"id": "O5", "name": "BioGrowing Co., Ltd.", "names": ["BioGrowing Co., Ltd.", "均瑶润盈"]},
+            {"id": "O6", "name": "Alpha", "names": ["Alpha"]}]
+    dec = {"keep": ["O1"], "drop": ["O2"], "_names": {"O1": "BioGrowing Co., Ltd.", "O2": "Alpha"}}
+    out = SM.remap_decision(dec, ents)
+    assert out["keep"] == ["O5"] and out["drop"] == ["O6"]
+    assert SM.remap_decision({"keep": ["O1"]}, ents) == {"keep": ["O1"]}  # старые решения без названий — как были
