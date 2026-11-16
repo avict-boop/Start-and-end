@@ -256,7 +256,7 @@ def _snap_path(c: Council, url: str) -> Path | None:
     return Path(d) / f"{S.sha(url)}.json.gz" if d and c.cfg.selection.snapshots else None
 
 
-async def fetch_pages(c: Council, urls: list[str]) -> dict[str, dict[str, Any]]:
+async def fetch_pages(c: Council, urls: list[str], browser: bool = True) -> dict[str, dict[str, Any]]:
     """Текст страниц (HTML и PDF): из памяти, из копии на диске (продолжение — те же тексты, ответы моделей из
     журнала совпадут) или скачать заново; скачанное сохраняется копией с датой."""
     out: dict[str, dict[str, Any]] = {}
@@ -279,9 +279,12 @@ async def fetch_pages(c: Council, urls: list[str]) -> dict[str, dict[str, Any]]:
         todo.append(u)
     if todo and c.link_checker:
         try:
-            got = await c.link_checker(todo, texts=True)
+            got = await (c.link_checker(todo, texts=True) if browser else c.link_checker(todo, texts=True, browser=False))
         except TypeError:
-            got = {}
+            try:  # проверка ссылок без параметра browser (тесты, старые подмены)
+                got = await c.link_checker(todo, texts=True) if not browser else {}
+            except TypeError:
+                got = {}
         except Exception as e:  # noqa: BLE001 — страницы не скачались: ячейки останутся «не подтверждено»
             log.warning("%sстраницы не скачались: %s", c._tag, e)
             got = {}
@@ -874,62 +877,51 @@ def _counts_text(found: int, excluded: int, checked: int, ranked: int) -> str:
 
 async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], entities: list[dict[str, Any]]
                        ) -> dict[str, dict[str, Any]]:
-    """Отсев по страницам: программа скачивает страницу, где поиск нашёл кандидата, и главную его сайта; дешёвая
+    """Отсев по страницам: программа скачивает страницу, где поиск нашёл кандидата (нет её — главную сайта), дешёвая
     модель по тексту решает «подходит / не подходит / не ясно» с цитатой. Без поиска — в разы дешевле, и ответ не
-    пустой (поиск по пачке из пяти компаний почти всегда возвращал «не выяснено»). Не открылась ни одна страница —
-    «не выяснено», кандидат остаётся."""
+    пустой (поиск по пачке из пяти компаний почти всегда возвращал «не выяснено»). Не открылась страница —
+    «не выяснено», кандидат остаётся.
+
+    Кандидаты идут частями по SCREEN_CHUNK: часть скачивается (без браузера — он медленный, для отсева хватает
+    обычной загрузки) и сразу читается, пока качается следующая; ход виден по кандидатам. Раньше все страницы
+    (556 кандидатов — до 1500 страниц) качались разом до начала чтения: минуты без движения на экране, а общий
+    предел времени загрузки обрывал большую часть."""
     sc = c.cfg.selection
+    reader = quick(c, pick_fillers(c)[0])
     c._emit("stage", stage="screen", title=f"Отсев: {len(entities)} кандидатов по {len(attrs)} признакам "
-                                          f"({', '.join(a.name for a in attrs)}) — читаем их страницы")
+                                          f"({', '.join(a.name for a in attrs)}) — читаем их страницы",
+            members=[reader.name])
+    shared = getattr(c, "list_urls", set())
     plan: dict[str, list[str]] = {}
     for e in entities:
-        us = [u for u in [e.get("url") or "", *(e.get("urls") or [])] if u.startswith(("http://", "https://"))]
-        if S.site_of(e.get("website") or ""):
-            us.append(_home(e["website"]))
-        shared = getattr(c, "list_urls", set())
-        plan[e["id"]] = [u for u in dict.fromkeys(us) if u and u not in shared][:3]
-    pages = await fetch_pages(c, [u for us in plan.values() for u in us])
+        us = [u for u in [e.get("url") or "", *(e.get("urls") or [])] if u.startswith(("http://", "https://"))
+              and u not in shared]
+        home = _home(e["website"]) if S.site_of(e.get("website") or "") else ""
+        # страница, где нашли кандидата, и главная его сайта (если это другая страница) — не больше двух
+        plan[e["id"]] = list(dict.fromkeys(([us[0]] if us else []) + ([home] if home else [])))[:2]
     words = [w for a in attrs for w in [a.name, *a.keywords]]
-    texts: dict[str, list[tuple[str, str]]] = {}
-    for e in entities:
-        budget = sc.screen_chars
-        got = []
-        for u in plan[e["id"]]:
-            t = (pages.get(u) or {}).get("text") or ""
-            if t and budget > 300:
-                ex = S.excerpts(t, words + list(e.get("names") or [e["name"]]), min(budget, sc.screen_chars // 2 + 500))
-                budget -= len(ex)
-                got.append((u, ex))
-        texts[e["id"]] = got
-    readable = [e for e in entities if texts[e["id"]]]
     out: dict[str, dict[str, Any]] = {}
-    for e in entities:
-        if not texts[e["id"]]:
-            out[e["id"]] = {"result": "unclear", "reason": "не выяснено: страницы кандидата не открылись",
-                            "name": e["name"], "checks": []}
-    batches = [readable[i:i + sc.screen_batch] for i in range(0, len(readable), sc.screen_batch)]
-    prog = {"done": 0, "total": len(batches), "checked": 0, "objects": len(readable)}
-    c._emit("progress", stage="screen", unit="пачек", **prog)
-    reader = quick(c, pick_fillers(c)[0])
+    prog = {"done": 0, "total": len(entities), "checked": 0, "objects": len(entities)}
+    c._emit("progress", stage="screen", unit="кандидатов", **prog)
+    stats = {"readable": 0}
+    chunks = [entities[k:k + SCREEN_CHUNK] for k in range(0, len(entities), SCREEN_CHUNK)]
+    gate_chunks = asyncio.Semaphore(SCREEN_CHUNKS_AT_ONCE)
 
-    async def check(b: list[dict[str, Any]]) -> Any:
+    async def check(b: list[dict[str, Any]], texts: dict[str, list[tuple[str, str]]]) -> None:
         try:
-            return await c._ask(reader, "screen", S.screen_read_prompt(frame, attrs, b, texts), S.ScreenBatch,
-                                meta={**META, "objects": [e["id"] for e in b]}, max_tokens=4000)
+            r = await c._ask(reader, "screen", S.screen_read_prompt(frame, attrs, b, texts), S.ScreenBatch,
+                             meta={**META, "objects": [e["id"] for e in b]}, max_tokens=4000)
+        except (BudgetExceeded, OutOfCredits):
+            raise
+        except (ProviderError, InvalidResponse) as err:
+            if not _soft(err):
+                raise
+            c.stats.setdefault(reader.name, MemberStats()).failures.append(f"screen: {err}")
+            return
         finally:
-            prog["done"] += 1
+            prog["done"] += len(b)
             prog["checked"] += len(b)
-            c._emit("progress", stage="screen", unit="пачек", **prog)
-
-    got_all = await asyncio.gather(*(check(b) for b in batches), return_exceptions=True)
-    for b, r in zip(batches, got_all):
-        if isinstance(r, (BudgetExceeded, OutOfCredits)):
-            raise r
-        if isinstance(r, BaseException):
-            if not _soft(r):
-                raise r
-            c.stats.setdefault(reader.name, MemberStats()).failures.append(f"screen: {r}")
-            continue
+            c._emit("progress", stage="screen", unit="кандидатов", **prog)
         for row in r.rows:
             e = _match_entity(row.object, b)
             if not e:
@@ -941,11 +933,51 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
                             "checks": [x.model_dump() for x in checks]}
             if row.website and not e.get("website"):
                 e["website"] = row.website
+
+    async def chunk(ch: list[dict[str, Any]]) -> None:
+        async with gate_chunks:
+            pages = await fetch_pages(c, [u for e in ch for u in plan[e["id"]]], browser=False)
+        texts: dict[str, list[tuple[str, str]]] = {}
+        for e in ch:
+            budget = sc.screen_chars
+            got = []
+            for u in plan[e["id"]]:
+                t = (pages.get(u) or {}).get("text") or ""
+                if t and budget > 300:
+                    ex = S.excerpts(t, words + list(e.get("names") or [e["name"]]), min(budget, sc.screen_chars // 2 + 500))
+                    budget -= len(ex)
+                    got.append((u, ex))
+            texts[e["id"]] = got
+        readable = [e for e in ch if texts[e["id"]]]
+        stats["readable"] += len(readable)
+        for e in ch:
+            if not texts[e["id"]]:
+                out[e["id"]] = {"result": "unclear", "reason": "не выяснено: страницы кандидата не открылись",
+                                "name": e["name"], "checks": []}
+        if len(readable) < len(ch):
+            prog["done"] += len(ch) - len(readable)
+            prog["checked"] += len(ch) - len(readable)
+            c._emit("progress", stage="screen", unit="кандидатов", **prog)
+        batches = [readable[k:k + sc.screen_batch] for k in range(0, len(readable), sc.screen_batch)]
+        got = await asyncio.gather(*(check(b, texts) for b in batches), return_exceptions=True)
+        for r in got:
+            if isinstance(r, BaseException):
+                raise r
+
+    done = await asyncio.gather(*(chunk(ch) for ch in chunks), return_exceptions=True)
+    for r in done:
+        if isinstance(r, BaseException):
+            raise r
     await verify_screen_fails(c, out, frame, attrs)
     counts = {k: sum(1 for v in out.values() if v["result"] == k) for k in ("pass", "fail", "unclear")}
     c._emit("screened", **counts, total=len(entities))
-    log.info("%sотбор: отсев по страницам — %s (страницы открылись у %d из %d)", c._tag, counts, len(readable), len(entities))
+    log.info("%sотбор: отсев по страницам — %s (страницы открылись у %d из %d)", c._tag, counts, stats["readable"],
+             len(entities))
     return out
+
+
+SCREEN_CHUNK = 25          # кандидатов в одной части отсева (скачать страницы → прочитать)
+SCREEN_CHUNKS_AT_ONCE = 3  # частей, которые качаются одновременно (по 5 страниц каждая — 15 загрузок сразу)
 
 
 async def verify_screen_fails(c: Council, out: dict[str, dict[str, Any]], frame: S.SelectionFrame | None = None,

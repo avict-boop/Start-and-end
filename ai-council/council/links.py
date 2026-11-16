@@ -208,7 +208,8 @@ async def _via_browser(url: str, r: dict[str, Any], quotes: list[str] | None) ->
 
 
 async def check_links(urls: list[str], *, timeout: float = 10, concurrency: int = 5,
-                      quotes: dict[str, list[str]] | None = None, texts: bool = False) -> dict[str, dict[str, Any]]:
+                      quotes: dict[str, list[str]] | None = None, texts: bool = False,
+                      browser: bool = True) -> dict[str, dict[str, Any]]:
     """Проверяет ссылки параллельно (не больше concurrency сразу); у каждой — свой таймаут. quotes: ссылка ->
     цитаты, которые надо найти на странице. texts=True — вернуть и текст страницы (HTML или PDF) в "text"."""
     todo = [u for u in dict.fromkeys(urls) if str(u).startswith(("http://", "https://"))]
@@ -227,7 +228,7 @@ async def check_links(urls: list[str], *, timeout: float = 10, concurrency: int 
                                        link_deadline)
         except asyncio.TimeoutError:
             r = {"status": "error", "code": None, "error": "слишком долго"}
-        if texts and _needs_browser(r):
+        if texts and browser and _needs_browser(r):  # browser=False — быстрый проход (отсев): без браузера
             r = await _via_browser(u, r, (quotes or {}).get(u))
         return r
 
