@@ -414,6 +414,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     limit = sc.shortlist or task_n or sc.max_deep
     cap = sc.max_deep if sc.shortlist or not task_n else min(200, max(sc.max_deep, task_n))
     keep.sort(key=lambda e: (not e.get("seed"), (e.get("screen") or {}).get("result") != "pass", -len(e["angles"])))
+    keep = diverse_order(keep)
     shortlist = keep[:min(limit, cap)]
     if start != "check":
         dec = gate(c, "shortlist", {"items": entities, "shortlist": [e["id"] for e in shortlist],
@@ -594,7 +595,7 @@ def apply_list_edits(entities: list[dict[str, Any]], dec: dict[str, Any] | None,
         n += 1
         known.add(S.norm_name(name))
         out.append({"id": f"O{n}", "name": name, "names": [name], "website": "", "location": "", "angles": ["ваш список"],
-                    "seed": True, "url": "", "quote": "", "why": "добавлено вами", "merged": False})
+                    "seed": True, "added": True, "url": "", "quote": "", "why": "добавлено вами", "merged": False})
     return out
 
 
@@ -603,7 +604,9 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     Мало повторов (список далёк от полного) — ещё круг с новыми направлениями от председателя."""
     sc = c.cfg.selection
     chair = c.cfg.member(c.cfg.chair)
-    angles = frame.angles[:sc.angles] or ["general web search for the candidates"]
+    required = list(dict.fromkeys(frame.required_angles))[:20]
+    others = [a for a in frame.angles[:sc.angles] if a not in required]
+    angles = required + others or ["general web search for the candidates"]
     # кто ищет: модель поиска и (по умолчанию) все участники — каждый по всем направлениям, своим поисковиком
     hunters = discover_hunters(c)
     scouting = any(m.name.startswith("поиск ") for m in hunters)
@@ -619,8 +622,12 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     found: list[tuple[str, S.Candidate]] = []
     used: list[str] = []
     rounds_meta = []
-    # волны: половина направлений рамки, затем остальные — если список ещё не полон; затем новые от председателя
-    half = max(4, -(-len(angles) // 2))
+    # волны: обязательные по заданию и половина остальных направлений рамки, затем остальные — если список ещё не
+    # полон; затем новые от председателя. Обязательные (по каждой категории, каждому типу) идут всегда
+    if required:
+        half = len(required) + max(0, -(-len(others) // 2))
+    else:
+        half = max(4, -(-len(angles) // 2))
     waves = [angles[:half], angles[half:]] if sc.discover_waves and len(angles) > half else [angles]
     waves = [w for w in waves if w]
     frame_angles = list(angles)
@@ -803,6 +810,33 @@ async def screen(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], 
     await verify_screen_fails(c, out, frame, attrs)
     counts = {k: sum(1 for v in out.values() if v["result"] == k) for k in ("pass", "fail", "unclear")}
     c._emit("screened", **counts, total=len(entities))
+    return out
+
+
+def diverse_order(keep: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Порядок короткого списка: внутри каждой ступени (ваши → прошедшие отсев → сомнительные) — по очереди из каждого
+    направления поиска. Раньше брали «найденных чаще всего», и универсальные заводы, которых находит любой поиск,
+    вытесняли специалистов категории (пробиотики, пребиотики…), найденных одним направлением."""
+    def tier(e: dict[str, Any]) -> tuple[bool, bool]:
+        return (not e.get("seed"), (e.get("screen") or {}).get("result") != "pass")
+    out: list[dict[str, Any]] = []
+    i = 0
+    while i < len(keep):
+        j = i
+        while j < len(keep) and tier(keep[j]) == tier(keep[i]):
+            j += 1
+        group = keep[i:j]
+        by_angle: dict[str, list[dict[str, Any]]] = {}
+        for e in group:  # каждый кандидат — в очереди своего самого «узкого» направления (где найдено меньше всего)
+            angs = [a.split(S.BY)[0] for a in e.get("angles") or []] or [""]
+            by_angle.setdefault(min(angs, key=lambda a: sum(1 for x in group if a in
+                                                              [y.split(S.BY)[0] for y in x.get("angles") or []])), []).append(e)
+        queues = list(by_angle.values())
+        while any(queues):
+            for q in queues:
+                if q:
+                    out.append(q.pop(0))
+        i = j
     return out
 
 
@@ -1222,5 +1256,6 @@ def rerank(sel: dict[str, Any], weights: dict[str, float] | None = None, use_tru
     rank = S.ranking(attrs, sel["table"], use_trust=trust)
     return {"ranking": rank, "sensitivity": S.sensitivity(attrs, sel["table"], names, use_trust=trust),
             "voi": S.value_of_information(attrs, sel["table"], names, top_n, use_trust=trust), "names": names,
+            "origin": {o["id"]: t for o in sel["objects"] if (t := S.origin_label(o))},
             "weights": {a.id: a.weight for a in attrs}}
 

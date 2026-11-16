@@ -300,6 +300,7 @@ function selFrameSummary(fr, li) {
   if ((fr.inclusion || []).length) parts.push(`<div><h4>Кто подходит</h4><ul>${li(fr.inclusion)}</ul></div>`);
   if ((fr.exclusion || []).length) parts.push(`<div><h4>Кто не подходит</h4><ul>${li(fr.exclusion)}</ul></div>`);
   if ((fr.benchmarks || []).length) parts.push(`<div><h4>Не кандидаты (конкуренты, примеры, исключённые)</h4><ul>${li(fr.benchmarks)}</ul></div>`);
+  if ((fr.required_angles || []).length) parts.push(`<div><h4>Обязательные поиски по заданию (${fr.required_angles.length})</h4><ul>${li(fr.required_angles)}</ul></div>`);
   if ((fr.angles || []).length) parts.push(`<div><h4>Где ищем (${fr.angles.length} ${plural(fr.angles.length, "направление", "направления", "направлений")})</h4><ul>${li(fr.angles)}</ul></div>`);
   if (!parts.length) return "";
   const what = { find: "ищем кандидатов", check: "проверяем список из задания", extend: "проверяем список и ищем недостающих" }[fr.start] || "";
@@ -409,7 +410,7 @@ function selTable(id) {
   const w = st.weights;
   $("selTableBox").innerHTML = `<div class="table-wrap"><table class="sel-table sel-wide"><thead><tr><th>№</th><th>Объект</th><th>Балл</th>${attrs.map((a) => `<th title="${esc(a.name)}">${esc(selShort(a.name))}${a.scorable_kind ? ` <span class="muted small">×${w[a.id] ?? a.weight}</span>` : ""}</th>`).join("")}</tr></thead>
     <tbody>${(d.ranking || []).map((r) => `<tr class="${r.rank <= top ? "sel-top" : ""}"><td>${r.rank}${r.rank <= top ? " ✓" : ""}</td>
-      <td><b>${esc(names[r.object] || r.object)}</b></td><td>${String(r.score).replace(".", ",")}</td>${attrs.map((a) => cell(r.object, a)).join("")}</tr>`).join("")}</tbody></table></div>
+      <td><b>${esc(names[r.object] || r.object)}</b>${(d.origin || {})[r.object] ? `<br><span class="muted small">${esc(d.origin[r.object])}</span>` : ""}</td><td>${String(r.score).replace(".", ",")}</td>${attrs.map((a) => cell(r.object, a)).join("")}</tr>`).join("")}</tbody></table></div>
     ${(d.voi || []).length ? `<h4>Что выяснить, чтобы выбор не поменялся неожиданно</h4><ul>${d.voi.map((v) => `<li>${esc(names[v.object] || v.object)}: ${esc(v.text)}</li>`).join("")}</ul>` : ""}
     ${(d.sensitivity || []).length ? `<h4>Устойчивость ранга к весам</h4><ul>${d.sensitivity.slice(0, 8).map((x) => `<li>${esc(x.text)}</li>`).join("")}</ul>` : ""}`;
   $("selXlsx").href = `/api/sessions/${encodeURIComponent(id)}/selection.xlsx?weights=${encodeURIComponent(Object.entries(w).map(([k, v]) => `${k}:${v}`).join(","))}&trust=${st.trust === false ? 0 : 1}`;

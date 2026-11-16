@@ -653,3 +653,19 @@ def test_screen_fail_needs_second_model_and_cells_clean():
     assert S.Cell(attr="A1", value="да", unit="млн шт").unit == "млн шт"
     t = SM._counts_text(151, 1, 25, 25)
     assert "found 151" in t and "NOT checked in detail 125" in t
+
+
+def test_shortlist_diverse_and_added_marked_and_required_angles():
+    """16.11: специалисты одной категории не вытесняются «универсалами», найденными всеми поисками; добавленный вами
+    объект помечен в отчёте; обязательные поиски задания (по категориям и типам) сохраняются в рамке."""
+    from council.modes import selection as SM
+    gen = [{"id": f"G{i}", "name": f"Gen {i}", "angles": ["общий", "выставка", "биржа"], "screen": {"result": "pass"}}
+           for i in range(5)]
+    pro = [{"id": f"P{i}", "name": f"Pro {i}", "angles": ["пробиотики"], "screen": {"result": "pass"}} for i in range(3)]
+    order = [e["id"] for e in SM.diverse_order(gen + pro)]
+    assert set(order[:4]) & {"P0", "P1", "P2"}  # специалист — среди первых, а не в хвосте
+    assert sorted(order) == sorted(e["id"] for e in gen + pro)
+    added = SM.apply_list_edits([], {"add": ["Biogrowing"]}, start_n=0)[0]
+    assert S.origin_label(added) == "добавлен вами" and S.origin_label({"why": "добавлено вами"}) == "добавлен вами"
+    fr = S.SelectionFrame.model_validate({"required_angles": ["пробиотики: 益生菌 代工", " "], "angles": ["a"]})
+    assert fr.required_angles == ["пробиотики: 益生菌 代工"]

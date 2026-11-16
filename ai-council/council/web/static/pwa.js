@@ -177,7 +177,8 @@ function pwaNotify(title, body, tag, url) {
 function pwaShouldIntercept(a) {
   if (!a || !a.href) return false;
   const u = new URL(a.href, location.href);
-  if (u.origin !== location.origin || !/^\/api\/sessions\/[^/]+\/(report|selection\.xlsx|files\/)/.test(u.pathname)) return false;
+  if (u.origin !== location.origin
+      || !/^\/api\/(sessions\/[^/]+\/(report|selection\.xlsx|files\/|diagnostics)|diagnostics$)/.test(u.pathname)) return false;
   if (u.searchParams.get("format") === "html") return PWA.standalone;  // HTML-отчёт: в приложении — в том же окне
   return PWA.standalone || PWA.ios || /android/i.test(navigator.userAgent);
 }

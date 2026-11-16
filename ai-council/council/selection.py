@@ -100,6 +100,9 @@ class SelectionFrame(BaseModel):
     exclusion: list[str] = Field(default_factory=list)   # кто точно не подходит
     attributes: list[Attribute] = Field(default_factory=list)
     angles: list[str] = Field(default_factory=list)      # направления поиска кандидатов
+    # поиски, которых задание требует явно (по каждой категории, по каждому типу производителя, его примеры запросов):
+    # идут все и сразу, без «волн» и без предела числа направлений
+    required_angles: list[str] = Field(default_factory=list)
     objects: list[str] = Field(default_factory=list)     # объекты, которые задание даёт как кандидатов на проверку
     # названные в задании, но НЕ кандидаты: конкуренты для сравнения, примеры, исключённые — их не проверяем и не ищем
     benchmarks: list[str] = Field(default_factory=list)
@@ -113,7 +116,7 @@ class SelectionFrame(BaseModel):
     def _t(cls, v: Any) -> str:
         return _txt(v)
 
-    @field_validator("inclusion", "exclusion", "angles", "objects", "benchmarks", mode="before")
+    @field_validator("inclusion", "exclusion", "angles", "required_angles", "objects", "benchmarks", mode="before")
     @classmethod
     def _l(cls, v: Any) -> list[str]:
         return [x.strip() for x in to_list(v) if x.strip()]
@@ -1216,7 +1219,11 @@ Build the frame of the study:
   the user's decision; 0 = for information only), "better" (high | low | yes | no | newer | older | "" for text),
   "wanted" (for lists: the items the user needs, e.g. forms), "screen": true for 2–4 quick knock-out attributes
   (is it a manufacturer, makes the needed forms, has a production licence…) with "knockout" (which value excludes);
-- "angles": {n_angles} different directions to find candidates (exhibitor lists, stock exchange filings, registries,
+- "required_angles": searches the task EXPLICITLY demands — one per category it lists ("a separate search for each
+  category"), one per type of object it requires (e.g. universal makers / specialists / makers of their own raw
+  materials WITH finished forms), and its example queries grouped by topic. Each is a concrete web-search instruction
+  that keeps the task's wording and languages (e.g. Chinese and English terms). Empty if the task demands none;
+- "angles": {n_angles} more different directions to find candidates (exhibitor lists, stock exchange filings, registries,
   industry rankings and associations, searches in the local language, B2B platforms, certification databases) —
   each a concrete instruction for a web search, different from the others;
 - "objects": ONLY the objects the task gives as CANDIDATES to evaluate (exact spelling), empty if none — never
@@ -1231,7 +1238,7 @@ Build the frame of the study:
 - "refined_question": one sentence.
 Return JSON: {{"refined_question": "...", "object_kind": "...", "inclusion": [], "exclusion": [], "attributes":
 [{{"name": "...", "kind": "number", "unit": "...", "evidence": "...", "keywords": [], "weight": 5, "better": "high",
-"wanted": [], "screen": false, "knockout": ""}}], "angles": [], "objects": [], "benchmarks": [], "start": "find",
+"wanted": [], "screen": false, "knockout": ""}}], "required_angles": [], "angles": [], "objects": [], "benchmarks": [], "start": "find",
 "shortlist": 0, "top_n": 0}}"""
 
 
@@ -1243,6 +1250,10 @@ Study: {frame.refined_question}
 A candidate is: {frame.object_kind}. Inclusion rules: {'; '.join(frame.inclusion) or '—'}. Exclude: {'; '.join(frame.exclusion) or '—'}.{f"{chr(10)}Not candidates (competitors, benchmarks or excluded companies named in the task — do not list them): {', '.join(frame.benchmarks)}." if frame.benchmarks else ""}
 
 Search direction (use ONLY this direction): {angle}
+
+Do not drop a company because it is ALSO something else (e.g. it also makes raw materials or ingredients, also
+sells, is part of a group): if it may fit the inclusion rules, list it — the screening step checks it. Exclude only
+companies that clearly match an exclusion rule.
 
 List up to {per_angle} distinct candidates that this direction finds. For each: "name" (official name, English if
 available), "local_name" (name in the local language, e.g. Chinese), "aliases", "website" (official site), "url"
@@ -1458,6 +1469,15 @@ def cell_text(c: dict[str, Any], short: bool = False, attr: "Attribute | None" =
     return f"{esc(v)} ({STATUS_MARK.get(c.get('status', ''), '?')}){odd}"
 
 
+def origin_label(o: dict[str, Any]) -> str:
+    """Откуда объект в таблице, если не из поиска: добавлен вами на остановке или назван в задании."""
+    if o.get("added") or o.get("why") == "добавлено вами":
+        return "добавлен вами"
+    if o.get("seed"):
+        return "из задания"
+    return ""
+
+
 def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
     """Отчёт режима: вывод председателя, ранг, что выяснить, устойчивость, полная таблица, карточки, исключённые."""
     attrs = [Attribute.model_validate(a) for a in sel["attributes"]]
@@ -1465,6 +1485,7 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
     table = sel["table"]
     rank = sel["ranking"]
     top_n = sel.get("top_n") or len(rank)
+    origin = {o["id"]: t for o in sel["objects"] if (t := origin_label(o))}
     out = []
     if conclusion and conclusion.summary:
         out.append(conclusion.summary.strip())
@@ -1479,11 +1500,15 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
                    ("" if i == 0 else f"*Ранг, продолжение ({i // COLS_PER_TABLE + 1}):*\n\n")
                    + "| № | Объект | Балл | " + " | ".join(esc(short_name(a.name)) for a in part) + " |\n|---|---|---|"
                    + "---|" * len(part) + "\n"
-                   + "\n".join(f"| {r['rank']}{' ✓' if r['rank'] <= top_n else ''} | {esc(short_name(names.get(r['object']) or '', 40))} | "
+                   + "\n".join(f"| {r['rank']}{' ✓' if r['rank'] <= top_n else ''} | {esc(short_name(names.get(r['object']) or '', 40))}"
+                                f"{' ⁺' if origin.get(r['object']) else ''} | "
                                 f"{str(r['score']).replace('.', ',')} | "
                                 + " | ".join(cell_text(table[r["object"]].get(a.id) or {}, True, a) for a in part) + " |"
                                 for r in rank)
                    for i, part in ((i, scored[i:i + COLS_PER_TABLE]) for i in range(0, max(1, len(scored)), COLS_PER_TABLE)))
+               + ("\n\n⁺ — не найден поиском программы: " + "; ".join(
+                   f"{esc(short_name(names.get(k) or k, 40))} — {v}" for k, v in origin.items() if k in names) + "."
+                  if origin else "")
                + ("\n\n≠ — величина или период несопоставимы с единицей признака (деньги вместо штук, в сутки вместо "
                   "в год): в ранг не идёт." if any(not comparable(a, table[r["object"]].get(a.id) or {})
                                                    for r in rank for a in scored if a.kind == "number") else ""))
@@ -1505,6 +1530,9 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
         oid = r["object"]
         o = next(x for x in sel["objects"] if x["id"] == oid)
         lines = [f"#### {r['rank']}. {esc(o['name'])}" + (f" — {esc(', '.join(o['names'][1:3]))}" if len(o.get('names') or []) > 1 else "")]
+        if origin_label(o):
+            lines.append(f"*{origin_label(o).capitalize()}: программа его не искала — проверен по вашей просьбе.*"
+                         if origin_label(o) == "добавлен вами" else f"*{origin_label(o).capitalize()}.*")
         if o.get("website"):
             lines.append(f"Сайт: {o['website']}")
         for a in attrs:
