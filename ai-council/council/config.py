@@ -188,7 +188,7 @@ class SelectionConfig(BaseModel):
     per_angle: int = Field(default=25, ge=5, le=60)
     rounds: int = Field(default=2, ge=1, le=3)
     saturation: float = Field(default=0.75, ge=0.3, le=1.0)
-    max_candidates: int = Field(default=300, ge=10, le=600)
+    max_candidates: int = Field(default=300, ge=0, le=2000)  # 0 — без предела: в отсев идут все найденные
     # Кто ищет кандидатов: all — модель поиска и все участники совета (у каждой модели свой поисковик и свои «слепые
     # зоны»: список полнее, оценка полноты честнее); search — только модель поиска (дешевле)
     # scouts — поисковики разных компаний через их младшие модели (Gemini Flash, GPT mini, Claude Haiku, Grok mini) и обе

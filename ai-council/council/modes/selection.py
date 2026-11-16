@@ -388,7 +388,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         raise S.CouncilError("кандидатов не нашлось — уточните задание или дайте свой список")
     # предел списка: по очереди из каждого направления (а не «найденных чаще всего» — те, кого нашёл один поиск,
     # специалисты и сырьевики, иначе уходили первыми); сколько не вошло — видно на остановке
-    cut = max(0, len(entities) - sc.max_candidates)
+    cut = max(0, len(entities) - sc.max_candidates) if sc.max_candidates else 0  # 0 — без предела
     if cut:
         entities = diverse_order(entities)[:sc.max_candidates]
         log.info("%sотбор: кандидатов %d, предел %d — %d не вошли", c._tag, sc.max_candidates + cut, sc.max_candidates, cut)

@@ -67,3 +67,9 @@ def test_f01_budget_rechecked_after_queue(tmp_path):
         return await asyncio.gather(*(c._ask(m, "proposal", "q", Proposal) for m in ms), return_exceptions=True)
     res = asyncio.run(go())
     assert len(sent) <= 2 and any(isinstance(r, BudgetExceeded) for r in res)
+
+
+def test_no_candidate_limit_zero():
+    """«Без предела кандидатов»: max_candidates 0 — в отсев идут все найденные, без отрезки."""
+    from council.config import SelectionConfig
+    assert SelectionConfig(max_candidates=0).max_candidates == 0

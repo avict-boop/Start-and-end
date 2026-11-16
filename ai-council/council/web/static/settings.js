@@ -343,7 +343,7 @@ function renderSettings() {
         <label class="field"><span>Кандидатов на направление, до</span><input type="number" data-sn="per_angle" min="5" max="60" value="${v("per_angle", 25)}" ${ro}></label>
         <label class="field"><span>Кругов поиска, до</span><input type="number" data-sn="rounds" min="1" max="3" value="${v("rounds", 2)}" ${ro}><small class="hint">ещё круг с новыми направлениями, если список по оценке полон меньше чем на долю ниже</small></label>
         <label class="field"><span>Полнота списка, достаточная</span><input type="number" data-sn="saturation" min="0.3" max="1" step="0.05" value="${v("saturation", 0.75)}" ${ro}></label>
-        <label class="field"><span>Кандидатов всего, до</span><input type="number" data-sn="max_candidates" min="10" max="600" value="${v("max_candidates", 300)}" ${ro}><small class="hint">больше — отбираются по очереди из каждого направления поиска; сколько не вошло, видно в ходе заседания</small></label>
+        <label class="field"><span>Кандидатов всего, до</span><input type="number" data-sn="max_candidates" min="10" max="2000" value="${v("max_candidates", 300) || 300}" ${ro} ${v("max_candidates", 300) === 0 ? "disabled" : ""}><small class="hint">больше — отбираются по очереди из каждого направления поиска; сколько не вошло, видно в ходе заседания</small></label>
         <label class="field"><span>Отсев</span>
           <select data-ss="screen_by" ${ro}>${[["pages", "читать найденные страницы (дёшево)"], ["search", "искать заново моделью поиска"]].map(([x, t]) => `<option value="${x}" ${v("screen_by", "pages") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
         <label class="field"><span>Проверять подробно, до</span><input type="number" data-sn="max_deep" min="3" max="200" value="${v("max_deep", 40)}" ${ro}><small class="hint">предел подробной проверки; для вопроса можно задать меньше</small></label>
@@ -356,6 +356,7 @@ function renderSettings() {
         <label class="field"><span>Заполняют (два участника через запятую; пусто — два самых дешёвых)</span><input type="text" data-sl="fillers" value="${esc((v("fillers", []) || []).join(", "))}" ${ro}></label>
         <label class="field"><span>Предел папки копий страниц, МБ</span><input type="number" data-sn="snapshot_mb" min="10" max="10000" value="${v("snapshot_mb", 300)}" ${ro}></label>
       </div>
+      <label class="switch"><input type="checkbox" data-sb="no_cand_limit" ${v("max_candidates", 300) === 0 ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Без предела кандидатов</b><small>в отсев идут все найденные поиском (предел «Кандидатов всего, до» не действует); больше кандидатов — дороже отсев, примерно $0,1 на каждые 100</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="screen" ${v("screen", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Отсев</b><small>короткая проверка 2–4 признаков отсева у всех кандидатов перед подробной</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="discover_waves" ${v("discover_waves", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Поиск кандидатов волнами</b><small>сначала половина направлений; если список уже почти полон (≥ 90%), остальные не запускаются</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="second_read_need" ${v("second_read", "need") === "need" ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Второе прочтение — только где нужно</b><small>вторая модель перечитывает признаки, влияющие на ранг и не подтверждённые дословной цитатой из документа или с сайта компании; выключено — обе модели читают всё</small></span></label>
@@ -498,6 +499,11 @@ function bindSettings() {
   for (const el of $("setBody").querySelectorAll("[data-sl]")) el.addEventListener("input", () => { d.selection[el.dataset.sl] = el.value.split(",").map((x) => x.trim()).filter(Boolean); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-sb]")) el.addEventListener("change", () => {
     if (el.dataset.sb === "second_read_need") d.selection.second_read = el.checked ? "need" : "always";
+    else if (el.dataset.sb === "no_cand_limit") {
+      const box = document.querySelector('[data-sn="max_candidates"]');
+      d.selection.max_candidates = el.checked ? 0 : Number((box && box.value) || 300) || 300;
+      if (box) box.disabled = el.checked || !SET.writable;
+    }
     else d.selection[el.dataset.sb] = el.checked;
     setDirty();
   });
