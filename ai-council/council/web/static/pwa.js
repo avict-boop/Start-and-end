@@ -218,3 +218,26 @@ document.addEventListener("click", (e) => {
   if (typeof closeMenus === "function") closeMenus();
   pwaDownload(a).catch((err) => toast(`Не скачалось: ${err.message || err}`));
 }, true);
+
+/* Нижняя панель разделов на телефоне. В разметке она внутри шапки (на компьютере это боковая колонка), а шапка на
+   телефоне закреплена сверху (sticky). Safari на iPhone, особенно в приложении с экрана «Домой», иногда перестаёт
+   рисовать закреплённый снизу элемент внутри закреплённого сверху — панель пропадала. На телефоне переносим её прямо
+   в <body>, на широком экране возвращаем в колонку. Обработчики нажатий при переносе сохраняются. */
+(function navOutOfRail() {
+  const nav = document.querySelector(".rail .nav");
+  const rail = document.querySelector(".rail");
+  if (!nav || !rail) return;
+  const mq = window.matchMedia("(max-width: 899px)");
+  const place = () => {
+    if (mq.matches) { if (nav.parentElement !== document.body) document.body.appendChild(nav); }
+    else if (nav.parentElement !== rail) rail.insertBefore(nav, rail.querySelector(".recent") || null);
+  };
+  place();
+  if (mq.addEventListener) mq.addEventListener("change", place); else mq.addListener(place);
+  // после клавиатуры и возврата в приложение iOS бывает «теряет» нижнюю панель — перерисовываем
+  const nudge = () => { if (!mq.matches) return; nav.style.display = "none"; void nav.offsetHeight; nav.style.display = ""; };
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", nudge);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) nudge(); });
+  window.addEventListener("pageshow", nudge);
+})();
+

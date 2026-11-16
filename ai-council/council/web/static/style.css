@@ -207,7 +207,8 @@ main { min-width: 0; padding: 2rem clamp(1rem, 3vw, 2.5rem) 3rem; max-width: 118
   .recent { display: none; }
   .rail-foot { border: 0; padding: 0; margin: 0; }
   .nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; flex-direction: row; gap: 0; background: var(--surface);
-    border-top: 1px solid var(--line); padding: .3rem .25rem calc(.3rem + var(--safe-b)); }
+    border-top: 1px solid var(--line); padding: .3rem .25rem calc(.3rem + var(--safe-b));
+    transform: translateZ(0); -webkit-backface-visibility: hidden; }  /* свой слой: iOS не «теряет» панель при прокрутке */
   .nav-item { flex: 1; flex-direction: column; gap: .15rem; min-height: 54px; padding: .25rem .1rem; font-size: .72rem; font-weight: 650; color: var(--muted); }
   .nav-item .ic { width: 23px; height: 23px; }
   .nav-item[aria-current="page"] { background: transparent; color: var(--accent); }
