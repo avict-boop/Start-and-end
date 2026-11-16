@@ -388,11 +388,13 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         raise S.CouncilError("кандидатов не нашлось — уточните задание или дайте свой список")
     # предел списка: по очереди из каждого направления (а не «найденных чаще всего» — те, кого нашёл один поиск,
     # специалисты и сырьевики, иначе уходили первыми); сколько не вошло — видно на остановке
-    cut = max(0, len(entities) - sc.max_candidates) if sc.max_candidates else 0  # 0 — без предела
+    # предел не меньше двойного размера таблицы из задания: часть кандидатов отсеется, а таблица должна набраться
+    cap_c = max(sc.max_candidates, 2 * max(sc.shortlist, frame.shortlist, frame.top_n)) if sc.max_candidates else 0
+    cut = max(0, len(entities) - cap_c) if cap_c else 0  # 0 — без предела
     if cut:
-        entities = diverse_order(entities)[:sc.max_candidates]
-        log.info("%sотбор: кандидатов %d, предел %d — %d не вошли", c._tag, sc.max_candidates + cut, sc.max_candidates, cut)
-        c._emit("candidates_cut", shown=len(entities), cut=cut, limit=sc.max_candidates)
+        entities = diverse_order(entities)[:cap_c]
+        log.info("%sотбор: кандидатов %d, предел %d — %d не вошли", c._tag, cap_c + cut, cap_c, cut)
+        c._emit("candidates_cut", shown=len(entities), cut=cut, limit=cap_c)
     if start in ("find", "extend"):
         dec = gate(c, "candidates", {"items": entities, "completeness": found_meta.get("completeness"), "cut": cut})
         entities = apply_list_edits(entities, dec)
@@ -419,7 +421,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     # число сильнее предела max_deep — его назвали вы сами), но не меньше первой группы; иначе — max_deep
     task_n = max(frame.shortlist, frame.top_n) if frame.shortlist else 0
     limit = sc.shortlist or task_n or sc.max_deep
-    cap = sc.max_deep if sc.shortlist or not task_n else min(200, max(sc.max_deep, task_n))
+    cap = min(200, max(sc.max_deep, sc.shortlist or task_n))
     keep.sort(key=lambda e: (not e.get("seed"), (e.get("screen") or {}).get("result") != "pass", -len(e["angles"])))
     keep = diverse_order(keep)
     shortlist = keep[:min(limit, cap)]

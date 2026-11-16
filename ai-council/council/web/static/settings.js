@@ -343,10 +343,10 @@ function renderSettings() {
         <label class="field"><span>Кандидатов на направление, до</span><input type="number" data-sn="per_angle" min="5" max="60" value="${v("per_angle", 25)}" ${ro}></label>
         <label class="field"><span>Кругов поиска, до</span><input type="number" data-sn="rounds" min="1" max="3" value="${v("rounds", 2)}" ${ro}><small class="hint">ещё круг с новыми направлениями, если список по оценке полон меньше чем на долю ниже</small></label>
         <label class="field"><span>Полнота списка, достаточная</span><input type="number" data-sn="saturation" min="0.3" max="1" step="0.05" value="${v("saturation", 0.75)}" ${ro}></label>
-        <label class="field"><span>Кандидатов всего, до</span><input type="number" data-sn="max_candidates" min="10" max="2000" value="${v("max_candidates", 300) || 300}" ${ro} ${v("max_candidates", 300) === 0 ? "disabled" : ""}><small class="hint">больше — отбираются по очереди из каждого направления поиска; сколько не вошло, видно в ходе заседания</small></label>
+        <label class="field"><span>Кандидатов всего, до</span><input type="number" data-sn="max_candidates" min="10" max="2000" value="${v("max_candidates", 300) || 300}" ${ro}><small class="hint">больше — отбираются по очереди из каждого направления поиска; сколько не вошло, видно в ходе заседания</small></label>
         <label class="field"><span>Отсев</span>
           <select data-ss="screen_by" ${ro}>${[["pages", "читать найденные страницы (дёшево)"], ["search", "искать заново моделью поиска"]].map(([x, t]) => `<option value="${x}" ${v("screen_by", "pages") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-        <label class="field"><span>Проверять подробно, до</span><input type="number" data-sn="max_deep" min="3" max="200" value="${v("max_deep", 40)}" ${ro}><small class="hint">предел подробной проверки; для вопроса можно задать меньше</small></label>
+        <label class="field"><span>Проверять подробно, до</span><input type="number" data-sn="max_deep" min="3" max="200" value="${v("max_deep", 40)}" ${ro}><small class="hint">предел подробной проверки; если задание само называет размер списка («60–80 заводов»), берётся его число</small></label>
         <label class="field"><span>Первая группа (0 — как в задании или 12)</span><input type="number" data-sn="top_n" min="0" max="100" value="${v("top_n", 0)}" ${ro}></label>
         <label class="field"><span>Кто решает спорное — участников</span><input type="number" data-sn="judges" min="1" max="7" value="${v("judges", 3)}" ${ro}><small class="hint">председатель и другие, по возможности не заполнявшие таблицу</small></label>
         <label class="field"><span>Страниц на объект скачивать, до</span><input type="number" data-sn="pages_per_object" min="1" max="15" value="${v("pages_per_object", 6)}" ${ro}></label>
@@ -413,16 +413,23 @@ function renderSettings() {
 function selDepends() {
   const by = (document.querySelector('[data-ss="discover_by"]') || {}).value;
   if (!by) return;
-  const off = (sel, yes) => {
+  const off = (sel, yes, why = "не действует при выбранном «Кто ищет кандидатов»") => {
     const el = document.querySelector(sel);
     if (!el) return;
     if (SET.writable) el.disabled = yes;  // настройки только для чтения — поля и так неактивны
     const f = el.closest(".field");
-    if (f) f.classList.toggle("is-off", yes);
+    if (f) { f.classList.toggle("is-off", yes); f.dataset.off = why; }
   };
   off('[data-sl="scouts"]', by !== "scouts");
   off('[data-sn="discover_models"]', by !== "all");
   off('[data-ss="discover_engine"]', by !== "all");
+  // отсев выключен — способ отсева не действует; готовых списков 0 — длина списка не действует;
+  // «Без предела кандидатов» — число предела не действует
+  const chk = (s) => { const el = document.querySelector(s); return !!(el && el.checked); };
+  off('[data-ss="screen_by"]', !chk('[data-sb="screen"]'), "не действует: отсев выключен");
+  const lists = document.querySelector('[data-sn="lists"]');
+  off('[data-sn="list_chars"]', !!lists && Number(lists.value || 0) === 0, "не действует: готовые списки не ищутся (0)");
+  off('[data-sn="max_candidates"]', chk('[data-sb="no_cand_limit"]'), "не действует: включено «Без предела кандидатов»");
 }
 
 function bindSettings() {
@@ -492,7 +499,7 @@ function bindSettings() {
   for (const el of $("setBody").querySelectorAll("[data-ft]")) el.addEventListener("input", () => { d.fetch[el.dataset.ft] = el.value.trim(); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-fb]")) el.addEventListener("change", () => { d.fetch[el.dataset.fb] = el.checked; setDirty(); });
   d.selection = d.selection || {};
-  for (const el of $("setBody").querySelectorAll("[data-sn]")) el.addEventListener("input", () => { d.selection[el.dataset.sn] = num(el.value); setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-sn]")) el.addEventListener("input", () => { d.selection[el.dataset.sn] = num(el.value); setDirty(); if (el.dataset.sn === "lists") selDepends(); });
   for (const el of $("setBody").querySelectorAll("[data-ss]")) el.addEventListener("change", () => { d.selection[el.dataset.ss] = el.value; setDirty(); selDepends(); });
   selDepends();
   for (const el of $("setBody").querySelectorAll("[data-st]")) el.addEventListener("input", () => { d.selection[el.dataset.st] = el.value.trim(); setDirty(); });
@@ -502,10 +509,10 @@ function bindSettings() {
     else if (el.dataset.sb === "no_cand_limit") {
       const box = document.querySelector('[data-sn="max_candidates"]');
       d.selection.max_candidates = el.checked ? 0 : Number((box && box.value) || 300) || 300;
-      if (box) box.disabled = el.checked || !SET.writable;
     }
     else d.selection[el.dataset.sb] = el.checked;
     setDirty();
+    selDepends();
   });
   for (const el of $("setBody").querySelectorAll("[data-kb]")) el.addEventListener("change", () => { d[el.dataset.kb] = el.checked; setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-k]")) el.addEventListener("input", () => { d[el.dataset.k] = num(el.value); setDirty(); });

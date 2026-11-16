@@ -1088,7 +1088,7 @@ details[open] > summary .params-edit { visibility: hidden; }
 .bad-input { outline: 2px solid var(--bad); outline-offset: 1px; }
 .sel-review .kind-inline { display: none; }
 .field.is-off { opacity: .5; }
-.field.is-off::after { content: "не действует при выбранном «Кто ищет кандидатов»"; display: block; font-size: .78rem; color: var(--muted); }
+.field.is-off::after { content: attr(data-off); display: block; font-size: .78rem; color: var(--muted); }
 .w-prog { display: block; font-size: .82rem; color: var(--muted); }
 /* приложение на телефоне */
 .pwa-box { margin-bottom: 1.6rem; padding-bottom: 1.2rem; border-bottom: 1px solid var(--line); }
