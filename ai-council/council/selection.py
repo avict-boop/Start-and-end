@@ -434,7 +434,8 @@ GATE_TEXT = {"frame": "проверьте признаки и веса — за�
 
 SEARCH_SYSTEM = """You search the web for a selection study (a table comparing many objects attribute by attribute).
 Report only what the search actually returned: names, pages and VERBATIM quotes copied exactly from the page in its
-own language (Chinese stays Chinese). Never invent a company, a page or a quote; if unsure — leave it out. Prefer
+own language (Chinese stays Chinese). Company names stay in their original spelling (Chinese characters and the
+official English name) — never translated into another language. Never invent a company, a page or a quote; if unsure — leave it out. Prefer
 primary sources: stock-exchange filings and annual reports, government and certification registries, the company's
 own site. Answer with the JSON object requested; free text — in {language}."""
 
@@ -1256,7 +1257,7 @@ sells, is part of a group): if it may fit the inclusion rules, list it — the s
 companies that clearly match an exclusion rule.
 
 List up to {per_angle} distinct candidates that this direction finds. For each: "name" (official name, English if
-available), "local_name" (name in the local language, e.g. Chinese), "aliases", "website" (official site), "url"
+available), "local_name" (name in the local language, e.g. Chinese — exactly as written, never translated), "aliases", "website" (official site), "url"
 (the page you saw that shows it fits), "quote" (a short VERBATIM fragment of that page proving it fits — copied
 exactly, in the page's language), "location", "why" (one line). Do not invent: only what the search returned.{ex}
 Return JSON: {{"items": [{{"name": "...", "local_name": "", "aliases": [], "website": "", "url": "", "quote": "",
@@ -1367,7 +1368,9 @@ per year) — copy it as is and write that unit exactly ("млн юаней/го
 Yes/no attributes: "value" is "да" or "нет". Lists: short items separated by commas. Say what the number is
 (capacity vs actual output, which year) in "note". Not on the pages → omit the attribute. Do not guess.
 "value" and "note" are written in the language of the attribute names (translate source terms: 软胶囊 → мягкие
-капсулы, 口服液 → питьевой раствор); only "quote" stays in the page's language. A page about ANOTHER company (other
+капсулы, 口服液 → питьевой раствор); only "quote" stays in the page's language. NEVER translate proper names —
+company, group, brand and product names, addresses, licence numbers: copy them exactly as in the source (Chinese
+characters, English, Latin), the user searches for them by these names. A page about ANOTHER company (other
 name, other address, a different group) is not about this object — take nothing from it.
 Return JSON: {{"cells": [{{"attr": "A1", "value": "", "unit": "", "as_of": "", "url": "", "quote": "", "note": ""}}]}}{CACHE_SPLIT}Object: {obj['name']} (also: {', '.join(obj.get('names') or [])}){focus}
 
@@ -1439,6 +1442,7 @@ Where the ranking is sensitive to weights:
 
 Excluded at screening: {excluded_txt or '—'}
 {counts_txt}
+Company names: exactly as in the table (original Chinese / English spelling), never translated.
 Return JSON: {{"summary": "markdown, {'≤150' if brief else '≤350'} words: the decision (who first and why, from the
 table), what is solid and what rests on unverified cells, the main gaps", "next_steps": ["concrete step"],
 "risks": ["..."]}}"""
