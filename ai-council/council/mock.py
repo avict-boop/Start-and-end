@@ -301,6 +301,8 @@ def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[st
         return {"items": [{"name": f"Demo Plant {i}", "local_name": f"演示工厂{i}", "website": f"https://plant{i}.example.com",
                            "url": f"https://plant{i}.example.com/about",
                            "quote": f"demo plant {i} — contract manufacturer (oem/odm)", "location": "Китай"} for i in ids]}
+    if stage == "screen_confirm":
+        return {"items": [{"n": int(n), "exclude": True, "why": "демо"} for n in _re.findall(r"(?m)^(\d+)\. ", text)]}
     if stage == "screen":
         names = _re.findall(r"^- (.+?)(?: \(| — site|$)", text.split("Objects:")[-1], _re.M)
         rows = []

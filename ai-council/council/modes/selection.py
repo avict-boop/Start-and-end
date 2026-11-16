@@ -408,9 +408,13 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         keep = passed + unclear + seeds_failed
     else:
         keep = list(entities)
-    limit = sc.shortlist or frame.shortlist or sc.max_deep
+    # сколько проверять подробно: из настроек; иначе — сколько просит задание (широкий список «60–80» → 80: это
+    # число сильнее предела max_deep — его назвали вы сами), но не меньше первой группы; иначе — max_deep
+    task_n = max(frame.shortlist, frame.top_n) if frame.shortlist else 0
+    limit = sc.shortlist or task_n or sc.max_deep
+    cap = sc.max_deep if sc.shortlist or not task_n else min(200, max(sc.max_deep, task_n))
     keep.sort(key=lambda e: (not e.get("seed"), (e.get("screen") or {}).get("result") != "pass", -len(e["angles"])))
-    shortlist = keep[:min(limit, sc.max_deep)]
+    shortlist = keep[:min(limit, cap)]
     if start != "check":
         dec = gate(c, "shortlist", {"items": entities, "shortlist": [e["id"] for e in shortlist],
                                     "excluded": excluded})
@@ -433,6 +437,13 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
             if u:
                 freq[u] = freq.get(u, 0) + 1
     c.list_urls = {u for u, k in freq.items() if k >= 3}
+    # сайт → объект: страницу с сайта другого объекта таблицы не берём в источники этого (ZOOMSHEAL получил адрес
+    # и «идентификацию» со страниц Shandong Yuwang)
+    c.object_sites = {}
+    for e in shortlist:
+        st = S.site_of(e.get("website") or "")
+        if st:
+            c.object_sites.setdefault(st, e["id"])
     fillers = pick_fillers(c)
     c._emit("stage", stage="fill", title=f"Заполнение таблицы: {len(shortlist)} {_obj_word(len(shortlist))} × "
                                           f"{len(attrs)} признаков; читают {', '.join(m.name for m in fillers)}")
@@ -497,7 +508,8 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
             S.conclusion_prompt(frame, S.table_text(sel), "\n".join(f"- {names.get(v['object'])}: {v['text']}" for v in voi),
                                 "\n".join(f"- {s['text']}" for s in sens),
                                 "; ".join(f"{x['name']} ({x['reason'][:80]})" for x in excluded[:30]), top_n,
-                                c.cfg.answer_size == "brief"),
+                                c.cfg.answer_size == "brief", _counts_text(len(entities), len(excluded), len(shortlist),
+                                                                           len(objects))),
             S.Conclusion, meta=META, max_tokens=8000)  # этап в журнале — «conclusion» (см. рамку)
     except (ProviderError, InvalidResponse) as e:
         if not _soft(e):
@@ -781,19 +793,30 @@ async def screen(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], 
             checks = [ch.model_copy(update={"attr": (S.match_attr(ch.attr, attrs) or S.Attribute(name=ch.attr)).id
                                             or ch.attr}) for ch in row.checks]
             result, reason = S.screen_decide(checks, attrs)
-            out[e["id"]] = {"result": result, "reason": reason, "checks": [x.model_dump() for x in checks]}
+            out[e["id"]] = {"result": result, "reason": reason, "name": e["name"],
+                            "checks": [x.model_dump() for x in checks]}
             # адреса из отсева — уже найденные страницы объекта: при заполнении их не ищут заново
             e["urls"] = list(dict.fromkeys([*(e.get("urls") or []),
                                             *(x.url for x in checks if x.url.startswith(("http://", "https://")))]))[:10]
             if row.website and not e.get("website"):
                 e["website"] = row.website
-    await verify_screen_fails(c, out)
+    await verify_screen_fails(c, out, frame, attrs)
     counts = {k: sum(1 for v in out.values() if v["result"] == k) for k in ("pass", "fail", "unclear")}
     c._emit("screened", **counts, total=len(entities))
     return out
 
 
-async def verify_screen_fails(c: Council, out: dict[str, dict[str, Any]]) -> int:
+def _counts_text(found: int, excluded: int, checked: int, ranked: int) -> str:
+    """Для вывода председателя: сколько кандидатов найдено и сколько из них проверено подробно. Без этого он видит
+    только таблицу и пишет «найдено 25 вместо 60–80», хотя найдено 151, а в таблицу взяли 25."""
+    rest = max(0, found - excluded - checked)
+    return (f"Counts: candidates found {found}; excluded at screening {excluded}; checked in detail (the table) {checked}"
+            f"{f', of them ranked {ranked}' if ranked != checked else ''}; found but NOT checked in detail {rest} (a "
+            "size limit of the table, not a lack of candidates). Do not confuse the number found with the table size.\n")
+
+
+async def verify_screen_fails(c: Council, out: dict[str, dict[str, Any]], frame: S.SelectionFrame | None = None,
+                              attrs: list[S.Attribute] | None = None) -> int:
     """«Не подходит» на отсеве засчитывается, только если программа нашла цитату этого вердикта на скачанной
     странице. Не нашла (страница не открылась, цитата неточная или не оттуда) — кандидат «сомнительный» и остаётся:
     выбросить нужный завод хуже, чем лишний раз его проверить. Возвращает, сколько исключений отменено."""
@@ -804,18 +827,62 @@ async def verify_screen_fails(c: Council, out: dict[str, dict[str, Any]]) -> int
                               if ch.get("verdict") == "fail" and (ch.get("url") or "").startswith(("http://", "https://"))))
     pages = await fetch_pages(c, urls) if urls and c.link_checker else {}
     undone = 0
+    proven_all: dict[str, list[dict[str, Any]]] = {}
     for oid, r in fails.items():
         proven = [ch for ch in r["checks"] if ch.get("verdict") == "fail" and ch.get("quote")
                   and S.find_quote((pages.get(ch.get("url") or "") or {}).get("text") or "", ch["quote"]) >= 0]
         if proven:
-            r["verified"] = True
+            proven_all[oid] = proven
             continue
         undone += 1
         r.update(result="unclear", reason=f"не выяснено: «не подходит» без цитаты, найденной на странице ({r['reason'][:150]})")
+    # цитата настоящая — но следует ли из неё исключение? (Henan, Zhengzhou → «не материковый Китай» — нет)
+    ok = await confirm_screen_fails(c, out, proven_all, frame, attrs) if proven_all else set()
+    for oid in proven_all:
+        r = out[oid]
+        if oid in ok:
+            r["verified"] = True
+            continue
+        undone += 1
+        r.update(result="unclear", reason=f"не выяснено: вторая модель не согласилась, что цитата исключает ({r['reason'][:150]})")
     if undone:
         log.info("%sотсев: %d из %d исключений отменено — цитата не найдена на странице", c._tag, undone, len(fails))
         c._emit("screen_undone", count=undone, total=len(fails))
     return undone
+
+
+async def confirm_screen_fails(c: Council, out: dict[str, dict[str, Any]], proven: dict[str, list[dict[str, Any]]],
+                               frame: S.SelectionFrame | None, attrs_l: list[S.Attribute] | None) -> set[str]:
+    """Одна короткая проверка всех исключений другой моделью (самой дешёвой читающей): правило исключения + цитата →
+    исключать или нет. Возвращает id, кого исключить. Сбой проверки — никого не исключаем (выбросить нужный завод
+    хуже, чем лишний раз его проверить)."""
+    attrs = {a.id: a for a in attrs_l or []}
+    items: list[tuple[str, dict[str, Any]]] = [(oid, ch) for oid, chs in proven.items() for ch in chs]
+    lines = []
+    for i, (oid, ch) in enumerate(items, 1):
+        a = attrs.get(ch.get("attr") or "")
+        lines.append(f"{i}. {out[oid].get('name') or oid} — «{a.name if a else ch.get('attr')}», excluded if: "
+                     f"{(a.knockout if a else '') or 'clearly does not fit'}; found value: {ch.get('value') or '—'}; "
+                     f"quote: «{(ch.get('quote') or '')[:300]}»")
+    prompt = (f"Screening check for a selection study{f': {frame.refined_question}' if frame else ''}.\n"
+              "For each item decide whether the QUOTE really proves that the exclusion rule applies. Exclude only if it "
+              "clearly does (e.g. a factory address in Henan does NOT prove «not mainland China» — it proves the opposite; "
+              "silence or vagueness proves nothing).\n\n" + "\n".join(lines)
+              + '\n\nReturn JSON: {"items": [{"n": 1, "exclude": true, "why": "short"}]}')
+    try:
+        who = pick_fillers(c)[0]
+        res = await c._ask(quick(c, who), "screen_confirm", prompt, S.ScreenConfirm, meta=META, max_tokens=3000)
+    except (ProviderError, InvalidResponse) as err:
+        if not _soft(err):
+            raise
+        c._emit("member_failed", stage="screen", member="проверка отсева", error=str(err))
+        return set()
+    yes = {x.n for x in res.items if x.exclude}
+    keep_ex: set[str] = set()
+    for i, (oid, ch) in enumerate(items, 1):
+        if i in yes:
+            keep_ex.add(oid)
+    return keep_ex
 
 
 def _match_entity(name: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -854,7 +921,9 @@ async def fill_object(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribu
     if src.website and not S.site_of(e.get("website", "")):
         e["website"] = src.website
     urls = list(dict.fromkeys(known + [s.url for s in src.sources if s.url] + [x.url for x in src.cells if x.url]
-                              + ([_home(e["website"])] if S.site_of(e.get("website", "")) else [])))[:sc.pages_per_object + 2]
+                              + ([_home(e["website"])] if S.site_of(e.get("website", "")) else [])))
+    sites = getattr(c, "object_sites", {}) or {}
+    urls = [u for u in urls if sites.get(S.site_of(u), e["id"]) == e["id"]][:sc.pages_per_object + 2]
     pages = await fetch_pages(c, urls)
     words = [w for a in attrs for w in [a.name, *a.keywords]] + list(e.get("names") or [e["name"]])
     budget = sc.object_chars

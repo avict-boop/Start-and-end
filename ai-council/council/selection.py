@@ -262,6 +262,10 @@ class ScreenBatch(BaseModel):
         return data
 
 
+UNIT_NOT = {"bool", "boolean", "text", "string", "str", "list", "date", "number", "yes/no", "да/нет", "n/a", "na",
+            "none", "-", "—", "flag", "boolean flag"}
+
+
 class Cell(BaseModel):
     attr: str                 # A1, A2… (или название признака — программа сопоставит)
     value: str = ""
@@ -279,10 +283,35 @@ class Cell(BaseModel):
     @field_validator("value", "unit", "note")
     @classmethod
     def _clean(cls, v: str) -> str:
-        """Без разметки: модель иногда присылает значение заголовками и жирным («### annual **bottles:**»)."""
+        """Без разметки: модель иногда присылает значение заголовками и жирным («### annual **bottles:**»), а список —
+        строками «- пункт»: в ячейке это «- a - b - c», поэтому пункты сводим через запятую."""
         v = re.sub(r"(?m)^\s*#+\s*", "", v)
         v = re.sub(r"\*\*|__|`", "", v)
+        lines = [ln.strip() for ln in v.splitlines() if ln.strip()]
+        if sum(1 for ln in lines if re.match(r"[-*•·]\s+", ln)) >= 2:
+            v = ", ".join(re.sub(r"^[-*•·]\s+", "", ln).rstrip(",;") for ln in lines)
         return re.sub(r"\s+", " ", v).strip()
+
+    @field_validator("unit")
+    @classmethod
+    def _unit(cls, v: str) -> str:
+        """Тип поля вместо единицы («bool», «text», «да/нет») — не единица: в таблице было «да bool»."""
+        return "" if v.lower().strip(" .") in UNIT_NOT else v
+
+
+class ScreenConfirmItem(BaseModel):
+    n: int = 0
+    exclude: bool = False
+    why: str = ""
+
+    @field_validator("why", mode="before")
+    @classmethod
+    def _t(cls, v: Any) -> str:
+        return _txt(v)
+
+
+class ScreenConfirm(BaseModel):
+    items: list[ScreenConfirmItem] = Field(default_factory=list)
 
 
 class Source(BaseModel):
@@ -1195,8 +1224,10 @@ Build the frame of the study:
 - "benchmarks": companies named in the task that are NOT candidates (competitors to compare with, examples,
   excluded ones) — they are not checked and are not to be found as candidates;
 - "start": "find" | "check" | "extend" (see Start above);
-- "shortlist": how many objects deserve the detailed check if the task says so (else 0);
-- "top_n": how many the task wants in the first group (e.g. 12 for negotiations; else 0);
+- "shortlist": how many objects the task wants in the comparison table — the WHOLE list to be checked in detail
+  (e.g. "a list of 60–80 manufacturers" → 80; a range → its upper bound; else 0). NOT the finalists;
+- "top_n": how many the task wants in the first group / finalists / next stage (e.g. "20–25 best for stage 2" → 25,
+  "12 for negotiations" → 12; else 0). top_n is never larger than shortlist;
 - "refined_question": one sentence.
 Return JSON: {{"refined_question": "...", "object_kind": "...", "inclusion": [], "exclusion": [], "attributes":
 [{{"name": "...", "kind": "number", "unit": "...", "evidence": "...", "keywords": [], "weight": 5, "better": "high",
@@ -1299,6 +1330,7 @@ Attributes to fill:
 2) "cells": for every attribute you can fill — "attr" (A1…), "value", "unit", "as_of" (date the value refers to),
    "url" and a short VERBATIM "quote" from that page (copied exactly, in the page's language). Not found → omit.
 3) "website": the official site.
+Only pages about THIS company (same name or its own site) — not a similarly named or unrelated one.
 Return JSON: {{"website": "", "sources": [{{"url": "", "title": "", "kind": "official", "why": ""}}], "cells": [{{"attr":
 "A1", "value": "", "unit": "", "as_of": "", "url": "", "quote": ""}}]}}"""
 
@@ -1323,6 +1355,9 @@ attribute's unit and period; if the source gives another measure (money instead 
 per year) — copy it as is and write that unit exactly ("млн юаней/год", "шт/сутки"): the program will not mix it in.
 Yes/no attributes: "value" is "да" or "нет". Lists: short items separated by commas. Say what the number is
 (capacity vs actual output, which year) in "note". Not on the pages → omit the attribute. Do not guess.
+"value" and "note" are written in the language of the attribute names (translate source terms: 软胶囊 → мягкие
+капсулы, 口服液 → питьевой раствор); only "quote" stays in the page's language. A page about ANOTHER company (other
+name, other address, a different group) is not about this object — take nothing from it.
 Return JSON: {{"cells": [{{"attr": "A1", "value": "", "unit": "", "as_of": "", "url": "", "quote": "", "note": ""}}]}}{CACHE_SPLIT}Object: {obj['name']} (also: {', '.join(obj.get('names') or [])}){focus}
 
 {body}"""
@@ -1375,7 +1410,7 @@ capacity vs output, units 万/亿, the year, the legal entity), or "none" if no 
 
 
 def conclusion_prompt(frame: SelectionFrame, table_txt: str, voi_txt: str, sens_txt: str, excluded_txt: str,
-                      top_n: int, brief: bool) -> str:
+                      top_n: int, brief: bool, counts_txt: str = "") -> str:
     return f"""Write the conclusion of a selection study. The ranking is computed by the program from verified cells and
 the user's weights — do NOT re-rank and do NOT add facts that are not in the table.
 
@@ -1392,7 +1427,7 @@ Where the ranking is sensitive to weights:
 {sens_txt or '—'}
 
 Excluded at screening: {excluded_txt or '—'}
-
+{counts_txt}
 Return JSON: {{"summary": "markdown, {'≤150' if brief else '≤350'} words: the decision (who first and why, from the
 table), what is solid and what rests on unverified cells, the main gaps", "next_steps": ["concrete step"],
 "risks": ["..."]}}"""

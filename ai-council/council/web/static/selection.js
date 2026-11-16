@@ -53,7 +53,7 @@ function selEvent(s, ev) {
       return true;
     }
     case "screen_undone":
-      logAdd(s, `Отсев: ${ev.count} из ${ev.total} исключений отменено — цитата «не подходит» не найдена на странице, кандидаты остаются сомнительными`, "k-warn");
+      logAdd(s, `Отсев: ${ev.count} из ${ev.total} исключений отменено — цитата «не подходит» не найдена на странице или вторая модель не согласилась, что она исключает; кандидаты остаются сомнительными`, "k-warn");
       return true;
     case "screened":
       logAdd(s, `Отсев: подходят ${ev.pass}, не подходят ${ev.fail}, не выяснено ${ev.unclear} из ${ev.total}`, "k-ok");

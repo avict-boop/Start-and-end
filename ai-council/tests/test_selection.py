@@ -631,3 +631,25 @@ def test_screen_excludes_only_with_quote_found_on_page():
     assert undone == 2
     assert out["O1"]["result"] == "fail" and out["O1"]["verified"]          # цитата есть на странице — исключён
     assert out["O2"]["result"] == "unclear" and out["O3"]["result"] == "unclear"  # нет на странице / не открылась
+
+
+def test_screen_fail_needs_second_model_and_cells_clean():
+    """Случай 16.11: Bokai исключён «не материковый Китай» по цитате с адресом в Хэнани — исключение теперь
+    подтверждает вторая модель; ячейка «да bool» и списки «- a - b» чистятся; задание «60–80» не режется до 25."""
+    import asyncio
+    from council.modes import selection as SM
+    c = _council("find")
+    attrs = [S.Attribute(id="A1", name="Производитель", kind="bool", screen=True, knockout="нет")]
+    out = {"O1": {"result": "fail", "reason": "x", "name": "Demo Plant 8", "checks": [
+        {"attr": "A1", "verdict": "fail", "url": "https://plant8.example.com/about", "quote": "demo plant 8 — contract manufacturer"}]}}
+
+    async def no(*a, **k):
+        return S.ScreenConfirm(items=[S.ScreenConfirmItem(n=1, exclude=False)])
+    c._ask = no
+    assert asyncio.run(SM.verify_screen_fails(c, out, None, attrs)) == 1
+    assert out["O1"]["result"] == "unclear"
+    cell = S.Cell(attr="A1", value="- 口服液\n- 颗粒\n- 片剂", unit="bool")
+    assert cell.value == "口服液, 颗粒, 片剂" and cell.unit == ""
+    assert S.Cell(attr="A1", value="да", unit="млн шт").unit == "млн шт"
+    t = SM._counts_text(151, 1, 25, 25)
+    assert "found 151" in t and "NOT checked in detail 125" in t
