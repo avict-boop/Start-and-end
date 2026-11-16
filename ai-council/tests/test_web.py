@@ -828,3 +828,28 @@ def test_full_backups_list_download_and_request(client, tmp_path):
     r = client.post("/api/system/backup")
     assert r.status_code == 200 and (tmp_path / "control" / "request").read_text().strip() == "backup"
     assert client.post("/api/system/backup").status_code == 409  # заявка уже есть
+
+
+def test_selection_rewind_to_previous_stage(client):
+    """На паузе «Отбора» можно вернуться к любому этапу: к остановке «рамка» (даже если она выключена) или провести
+    отсев заново; уже оплаченное до этой точки — из сохранённого."""
+    r = client.post("/api/sessions", json={"question": "Найти контрактных производителей софтгелей", "mode": "selection",
+                                           "mock": True, "members": ["a", "b", "c"], "chair": "a",
+                                           "selection": {"start": "find", "review": ["shortlist"]}})
+    sid = r.json()["id"]
+    ev = read_events(client, sid)
+    assert ev[-1]["type"] == "paused" and ev[-1]["review"]["gate"] == "shortlist"
+    assert client.post(f"/api/sessions/{sid}/rewind", json={"target": "nope"}).status_code == 400
+    r = client.post(f"/api/sessions/{sid}/rewind", json={"target": "frame_gate"})
+    assert r.status_code == 200, r.text
+    ev = read_events(client, sid)
+    assert ev[-1]["type"] == "paused" and ev[-1]["review"]["gate"] == "frame"  # выключенная остановка открыта
+    assert client.post(f"/api/sessions/{sid}/review", json={"gate": "frame", "decision": {}}).status_code == 200
+    ev = read_events(client, sid)
+    assert ev[-1]["review"]["gate"] == "shortlist"
+    r = client.post(f"/api/sessions/{sid}/rewind", json={"target": "screen"})
+    assert r.status_code == 200, r.text
+    ev = read_events(client, sid)
+    assert ev[-1]["type"] == "paused" and ev[-1]["review"]["gate"] == "shortlist"
+    assert any(e["type"] == "screened" for e in ev)
+    assert client.get("/api/rewind_targets").json()["items"][0]["id"] == "frame"

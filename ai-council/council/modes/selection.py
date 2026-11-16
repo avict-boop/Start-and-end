@@ -236,10 +236,28 @@ def pick_judges(c: Council, fillers: list[MemberConfig]) -> list[MemberConfig]:
     return ([chair] + others + rest)[:max(1, sc.judges)]
 
 
+# «Вернуться к этапу» на паузе: что забыть (спросить заново), где только точное совпадение, какие остановки открыть
+_FRAME, _FIND, _SCREEN, _FILL = ["frame"], ["lists", "list_read", "discover", "angles"], ["screen", "screen_confirm"], \
+    ["sources", "fill", "dispute", "conclusion"]
+REWIND: dict[str, dict[str, Any]] = {
+    "frame": {"title": "Рамка — председатель заново", "forget": _FRAME, "strict": _FIND + _SCREEN + _FILL,
+              "gates": ["frame", "candidates", "shortlist"]},
+    "frame_gate": {"title": "Остановка «рамка» — поправить признаки и веса", "forget": [],
+                   "strict": _FIND + _SCREEN + _FILL, "gates": ["frame", "candidates", "shortlist"]},
+    "discover": {"title": "Поиск кандидатов — заново", "forget": _FIND, "strict": _SCREEN + _FILL,
+                 "gates": ["candidates", "shortlist"]},
+    "candidates_gate": {"title": "Остановка «найденные кандидаты»", "forget": [], "strict": _SCREEN + _FILL,
+                        "gates": ["candidates", "shortlist"]},
+    "screen": {"title": "Отсев — заново", "forget": _SCREEN, "strict": _FILL, "gates": ["shortlist"]},
+    "shortlist_gate": {"title": "Остановка «короткий список»", "forget": [], "strict": _FILL, "gates": ["shortlist"]},
+    "fill": {"title": "Заполнение таблицы — заново", "forget": _FILL, "strict": [], "gates": []},
+}
+
+
 def gate(c: Council, name: str, payload: dict[str, Any]) -> dict[str, Any] | None:
     """Остановка «проверьте»: решение уже есть (продолжение после правки) — вернуть его; остановки выключены — None;
     иначе заседание встаёт (сайт показывает список)."""
-    if not c.review_enabled or name not in c.cfg.selection.review:
+    if not c.review_enabled or (name not in c.cfg.selection.review and name not in getattr(c, "force_gates", set())):
         return None
     dec = (c.review_decisions or {}).get(name)
     if dec is not None:
@@ -424,11 +442,13 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     # сколько проверять подробно: из настроек; иначе — сколько просит задание (широкий список «60–80» → 80: это
     # число сильнее предела max_deep — его назвали вы сами), но не меньше первой группы; иначе — max_deep
     task_n = max(frame.shortlist, frame.top_n) if frame.shortlist else 0
-    limit = sc.shortlist or task_n or sc.max_deep
-    cap = min(200, max(sc.max_deep, sc.shortlist or task_n))
-    keep.sort(key=lambda e: (not e.get("seed"), (e.get("screen") or {}).get("result") != "pass", -len(e["angles"])))
+    limit = sc.shortlist or task_n or sc.max_deep or len(keep)
+    cap = min(200, max(sc.max_deep, sc.shortlist or task_n)) if sc.max_deep else len(keep)
+    keep.sort(key=lambda e: (not e.get("seed"), (e.get("screen") or {}).get("result") != "pass", -screen_passes(e),
+                             -len(e["angles"])))
     keep = diverse_order(keep)
-    shortlist = keep[:min(limit, cap)]
+    # «Проверять подробно» = 0 — без предела: подробно проверяются все прошедшие отсев и сомнительные
+    shortlist = keep if not sc.max_deep else keep[:min(limit, cap)]
     if start != "check":
         dec = gate(c, "shortlist", {"items": entities, "shortlist": [e["id"] for e in shortlist],
                                     "excluded": excluded})
@@ -840,6 +860,11 @@ async def screen(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], 
     return out
 
 
+def screen_passes(e: dict[str, Any]) -> int:
+    """Сколько признаков отсева у кандидата подтверждены страницей («подходит»): у сомнительного 4 из 5 лучше, чем 1."""
+    return sum(1 for ch in (e.get("screen") or {}).get("checks") or [] if ch.get("verdict") == "pass")
+
+
 def diverse_order(keep: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Порядок короткого списка: внутри каждой ступени (ваши → прошедшие отсев → сомнительные) — по очереди из каждого
     направления поиска. Раньше брали «найденных чаще всего», и универсальные заводы, которых находит любой поиск,
@@ -858,7 +883,9 @@ def diverse_order(keep: list[dict[str, Any]]) -> list[dict[str, Any]]:
             angs = [a.split(S.BY)[0] for a in e.get("angles") or []] or [""]
             by_angle.setdefault(min(angs, key=lambda a: sum(1 for x in group if a in
                                                               [y.split(S.BY)[0] for y in x.get("angles") or []])), []).append(e)
-        queues = list(by_angle.values())
+        # внутри направления — сначала те, у кого отсев подтвердил больше признаков; сами направления — по очереди,
+        # чтобы специалисты и сырьевики из своих поисков не уступали место универсалам с «4 из 5»
+        queues = [sorted(q, key=lambda e: -screen_passes(e)) for q in by_angle.values()]
         while any(queues):
             for q in queues:
                 if q:

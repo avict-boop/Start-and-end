@@ -73,3 +73,29 @@ def test_no_candidate_limit_zero():
     """«Без предела кандидатов»: max_candidates 0 — в отсев идут все найденные, без отрезки."""
     from council.config import SelectionConfig
     assert SelectionConfig(max_candidates=0).max_candidates == 0
+
+
+def test_rewind_journal_forgets_and_strict(tmp_path):
+    p = tmp_path / "j.jsonl"
+    j = Journal(p)
+    j.ok("k1", {"a": 1}, "screen")
+    j.ok("k2", {"b": 2}, "fill")
+    j.rewind(["screen"], ["fill"])
+    j2 = Journal(p)
+    assert "k1" not in j2.results and "k2" in j2.results and {"screen", "fill"} <= j2.strict
+
+
+def test_foreign_site_not_merged_and_passes_order_and_deep_unlimited():
+    from council.modes import selection as SM
+    from council.config import SelectionConfig
+    found = [(f"a{i}", S.Candidate(name=f"Company {n}", website="https://foodtalks.cn/news/1")) for i, n in
+             enumerate(["Alpha", "Beta", "Gamma"])]
+    found += [("b", S.Candidate(name="Zeta Bio", website="https://zeta.cn")),
+              ("c", S.Candidate(name="泽塔生物", website="http://www.zeta.cn/about"))]
+    ents = S.merge_candidates(found)
+    assert len(ents) == 4  # три с чужим сайтом не склеены, у Zeta английское и китайское — одна компания
+    assert all(not e["website"] for e in ents if "Company" in e["name"])
+    e1 = {"id": "O1", "angles": ["x"], "screen": {"result": "unclear", "checks": [{"verdict": "pass"}] * 4}}
+    e2 = {"id": "O2", "angles": ["x"], "screen": {"result": "unclear", "checks": [{"verdict": "pass"}]}}
+    assert [e["id"] for e in SM.diverse_order([e2, e1])] == ["O1", "O2"]
+    assert SelectionConfig(max_deep=0).max_deep == 0

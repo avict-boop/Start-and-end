@@ -254,10 +254,10 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
     start = sc.start if sc.start != "auto" else ("check" if objects >= 3 else "find")
     q = int(question_chars / 3) + doc_tokens
     if start == "check":
-        cands, deep = objects, min(objects, sc.max_deep)
+        cands, deep = objects, min(objects, sc.max_deep or objects)
     else:
         cands = min(sc.max_candidates or 10**6, int(sc.angles * sc.per_angle * 0.5) + objects)
-        deep = min(sc.shortlist or sc.max_deep, max(objects, int(cands * 0.5)))
+        deep = min(sc.shortlist or sc.max_deep or cands, max(objects, int(cands * 0.5)))
     est = Estimate(learned_from=int((lengths or {}).get("sessions") or 0),
                    lengths={"proposal": 0, "revision": 0, "verdict": 1500}, question_tokens=q)
     members = cfg.active_members

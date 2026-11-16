@@ -231,6 +231,7 @@ class Council:
         self.stage_search_engine: dict[str, str] = {}  # этап -> поисковик (иначе — общий из настроек)
         self.stage_search_limits: dict[str, tuple[int, int]] = {}  # этап -> (поисков, результатов) — иначе общие
         self.review_decisions: dict[str, Any] = {}
+        self.force_gates: set[str] = set()  # «Отбор»: остановки, к которым вернулись (показать, даже если выключены)
         self.snapshot_dir: Any = None
         self.page_meta: dict[str, dict[str, Any]] = {}
         self.fixed_objects: list[str] = []  # текст страниц, скачанных программой (ссылки авторов) — по адресу
@@ -450,6 +451,8 @@ class Council:
             # из журнала (по номеру обращения) могли быть даны на другой вход: спрашиваем заново
             loose = False
             cached = None
+        if loose and stage in self.journal.strict:  # «вернуться к этапу»: вход мог измениться — только точный ответ
+            loose = False
         if loose:  # запрос изменился (обновление программы) или «доделать» из архива: ответ того же участника
             cached = self.journal.loose.get((stage, member.name, n))  # на том же этапе по порядку обращений
             was = self.journal.loose_model.get((stage, member.name, n), "")

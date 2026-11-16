@@ -229,6 +229,11 @@ class SearchTest(BaseModel):
     model: str | None = None
 
 
+class RewindRequest(BaseModel):
+    target: str = Field(min_length=1, max_length=40)
+    budget: float | None = Field(default=None, gt=0, le=1000)
+
+
 class ResumeRequest(BaseModel):
     budget: float | None = Field(default=None, gt=0, le=1000)
     # спросить заново тех, кто не ответил (сбои из журнала), и ждать их ответа вдвое дольше
@@ -994,6 +999,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                     # «Отбор»: остановки «проверьте список» и решения по ним, копии страниц, демо-страницы
                     council.review_enabled = True
                     council.review_decisions = dict(sp.get("review_decisions") or {})
+                    council.force_gates = set(sp.get("force_gates") or [])
                     council.snapshot_dir = runs_dir(cfg) / "sources"
                     if sp.get("mock") and sp.get("mode") == "selection":  # демо-страницы — только «Отбору»
                         from ..mock import mock_pages
@@ -1125,6 +1131,38 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         """Продолжить приостановленное заседание: уже полученные ответы берутся из журнала, без повторной оплаты."""
         return await resume_session(sid, body.budget if body and body.budget else None,
                                     retry_failed=bool(body and body.retry_failed))
+
+    @app.get("/api/rewind_targets")
+    async def rewind_targets() -> dict[str, Any]:
+        """Куда можно вернуться на паузе («Отбор»): этапы и остановки по порядку."""
+        from ..modes.selection import REWIND
+        return {"items": [{"id": k, "title": v["title"]} for k, v in REWIND.items()]}
+
+    @app.post("/api/sessions/{sid}/rewind")
+    async def rewind(sid: str, body: RewindRequest) -> dict[str, Any]:
+        """Вернуться к этапу или остановке приостановленного «Отбора». Выбранный этап спрашивается заново (за деньги);
+        у следующих годится только точное совпадение запроса: ничего не изменили на остановке — ответы из
+        сохранённого, бесплатно; изменили — эти этапы пройдут заново. Решения на остановках после выбранной точки
+        забываются — их спросят снова."""
+        from ..modes.selection import REWIND
+        plan = REWIND.get(body.target)
+        if plan is None:
+            raise HTTPException(400, "неизвестный этап")
+        st = runs.get(sid)
+        if st is not None and st.status == "running":
+            raise HTTPException(409, "заседание идёт — сначала поставьте его на паузу")
+        cp = await asyncio.to_thread(Checkpoint.load, runs_dir(base_config()), sid)
+        if cp is None:
+            raise HTTPException(404, "заседание не найдено или уже завершено")
+        if (cp.spec.get("mode") or "") != "selection":
+            raise HTTPException(400, "вернуться к этапу можно пока только в «Отборе»")
+        await asyncio.to_thread(lambda: Journal(cp.journal_path).rewind(plan["forget"], plan["strict"]))
+        decisions = {k: v for k, v in (cp.spec.get("review_decisions") or {}).items() if k not in plan["gates"]}
+        force = sorted(set(cp.spec.get("force_gates") or []) | set(plan["gates"][:1]))
+        cp.update(review_decisions=decisions, force_gates=force, review=None)
+        log.info("заседание %s: возврат к «%s» — заново %s, остановки %s", sid, body.target, plan["forget"] or "—",
+                 plan["gates"] or "—")
+        return await resume_session(sid, body.budget)
 
     @app.post("/api/sessions/{sid}/retry_failed")
     async def retry_failed(sid: str, body: RetryRequest | None = None) -> dict[str, Any]:

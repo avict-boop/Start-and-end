@@ -346,7 +346,7 @@ function renderSettings() {
         <label class="field"><span>Кандидатов всего, до</span><input type="number" data-sn="max_candidates" min="10" max="2000" value="${v("max_candidates", 300) || 300}" ${ro}><small class="hint">больше — отбираются по очереди из каждого направления поиска; сколько не вошло, видно в ходе заседания</small></label>
         <label class="field"><span>Отсев</span>
           <select data-ss="screen_by" ${ro}>${[["pages", "читать найденные страницы (дёшево)"], ["search", "искать заново моделью поиска"]].map(([x, t]) => `<option value="${x}" ${v("screen_by", "pages") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
-        <label class="field"><span>Проверять подробно, до</span><input type="number" data-sn="max_deep" min="3" max="200" value="${v("max_deep", 40)}" ${ro}><small class="hint">предел подробной проверки; если задание само называет размер списка («60–80 заводов»), берётся его число</small></label>
+        <label class="field"><span>Проверять подробно, до</span><input type="number" data-sn="max_deep" min="3" max="200" value="${v("max_deep", 40) || 40}" ${ro}><small class="hint">предел подробной проверки; если задание само называет размер списка («60–80 заводов»), берётся его число</small></label>
         <label class="field"><span>Первая группа (0 — как в задании или 12)</span><input type="number" data-sn="top_n" min="0" max="100" value="${v("top_n", 0)}" ${ro}></label>
         <label class="field"><span>Кто решает спорное — участников</span><input type="number" data-sn="judges" min="1" max="7" value="${v("judges", 3)}" ${ro}><small class="hint">председатель и другие, по возможности не заполнявшие таблицу</small></label>
         <label class="field"><span>Страниц на объект скачивать, до</span><input type="number" data-sn="pages_per_object" min="1" max="15" value="${v("pages_per_object", 6)}" ${ro}></label>
@@ -356,6 +356,7 @@ function renderSettings() {
         <label class="field"><span>Заполняют (два участника через запятую; пусто — два самых дешёвых)</span><input type="text" data-sl="fillers" value="${esc((v("fillers", []) || []).join(", "))}" ${ro}></label>
         <label class="field"><span>Предел папки копий страниц, МБ</span><input type="number" data-sn="snapshot_mb" min="10" max="10000" value="${v("snapshot_mb", 300)}" ${ro}></label>
       </div>
+      <label class="switch"><input type="checkbox" data-sb="no_deep_limit" ${v("max_deep", 40) === 0 ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Проверять подробно всех</b><small>в таблицу идут все прошедшие отсев и сомнительные, без предела «Проверять подробно» и числа из задания; подробная проверка — около $0,05 за кандидата (500 кандидатов ≈ $25), на остановке «короткий список» видна точная оценка</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="no_cand_limit" ${v("max_candidates", 300) === 0 ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Без предела кандидатов</b><small>в отсев идут все найденные поиском (предел «Кандидатов всего, до» не действует); больше кандидатов — дороже отсев, примерно $0,1 на каждые 100</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="screen" ${v("screen", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Отсев</b><small>короткая проверка 2–4 признаков отсева у всех кандидатов перед подробной</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="discover_waves" ${v("discover_waves", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Поиск кандидатов волнами</b><small>сначала половина направлений; если список уже почти полон (≥ 90%), остальные не запускаются</small></span></label>
@@ -430,6 +431,7 @@ function selDepends() {
   const lists = document.querySelector('[data-sn="lists"]');
   off('[data-sn="list_chars"]', !!lists && Number(lists.value || 0) === 0, "не действует: готовые списки не ищутся (0)");
   off('[data-sn="max_candidates"]', chk('[data-sb="no_cand_limit"]'), "не действует: включено «Без предела кандидатов»");
+  off('[data-sn="max_deep"]', chk('[data-sb="no_deep_limit"]'), "не действует: включено «Проверять подробно всех»");
 }
 
 function bindSettings() {
@@ -506,6 +508,10 @@ function bindSettings() {
   for (const el of $("setBody").querySelectorAll("[data-sl]")) el.addEventListener("input", () => { d.selection[el.dataset.sl] = el.value.split(",").map((x) => x.trim()).filter(Boolean); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-sb]")) el.addEventListener("change", () => {
     if (el.dataset.sb === "second_read_need") d.selection.second_read = el.checked ? "need" : "always";
+    else if (el.dataset.sb === "no_deep_limit") {
+      const box = document.querySelector('[data-sn="max_deep"]');
+      d.selection.max_deep = el.checked ? 0 : Number((box && box.value) || 40) || 40;
+    }
     else if (el.dataset.sb === "no_cand_limit") {
       const box = document.querySelector('[data-sn="max_candidates"]');
       d.selection.max_candidates = el.checked ? 0 : Number((box && box.value) || 300) || 300;

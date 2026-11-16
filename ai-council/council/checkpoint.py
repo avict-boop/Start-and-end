@@ -61,6 +61,10 @@ class Journal:
         # Ответы из стенограммы архивного заседания (для «доделать»): (этап, участник, номер обращения) -> ответ
         self.loose: dict[tuple[str, str, int], dict[str, Any]] = {}
         self.loose_model: dict[tuple[str, str, int], str] = {}  # какая модель дала этот ответ
+        # «Вернуться к этапу»: этапы, ответы которых по номеру обращения не подставляются (вход мог измениться —
+        # годится только точное совпадение запроса); забытые этапы спрашиваются заново
+        self.strict: set[str] = set()
+        self._key_stage: dict[str, str] = {}
         if path is not None and path.is_file():
             self._load()
             self._close_tail()
@@ -117,6 +121,11 @@ class Journal:
             except ValueError:
                 continue  # недописанная строка при аварийной остановке
             kind = r.get("t")
+            if kind == "rewind":
+                self._apply_rewind(r)
+                continue
+            if r.get("key") and r.get("stage"):
+                self._key_stage[r["key"]] = r["stage"]
             if kind == "ok":
                 self.results[r["key"]] = r["parsed"]
                 self.failures.pop(r["key"], None)
@@ -148,7 +157,27 @@ class Journal:
         except OSError as e:  # журнал не должен ронять заседание
             log.warning("журнал заседания не записан: %s", e)
 
+    def _apply_rewind(self, r: dict[str, Any]) -> None:
+        forget = set(r.get("forget") or [])
+        for k in [k for k, st in self._key_stage.items() if st in forget]:
+            self.results.pop(k, None)
+            self.failures.pop(k, None)
+        if forget:
+            self.transcript = [e for e in self.transcript if e.get("stage") not in forget]
+            self.loose = {k: v for k, v in self.loose.items() if k[0] not in forget}
+        self.strict |= forget | set(r.get("strict") or [])
+
+    def rewind(self, forget: list[str], strict: list[str]) -> None:
+        """Вернуться к этапу: ответы этапов forget забываются (спросим заново, за деньги), у этапов strict годится
+        только точное совпадение запроса (изменили решение на остановке — ответ получат заново, не изменили —
+        из сохранённого, бесплатно). Уже потраченное остаётся в счёте."""
+        rec = {"t": "rewind", "forget": list(forget), "strict": list(strict)}
+        self._apply_rewind(rec)
+        self._write(rec)
+
     def ok(self, key: str, parsed: dict[str, Any], stage: str = "") -> None:
+        if stage:
+            self._key_stage[key] = stage
         self.results[key] = parsed
         self._write({"t": "ok", "key": key, "stage": stage, "parsed": parsed})
 

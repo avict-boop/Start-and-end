@@ -500,6 +500,15 @@ def site_of(url: str) -> str:
     return d
 
 
+def site_brand(site: str) -> str:
+    """Сайт без доменной зоны для склейки: biogrowing.cn и biogrowing.com — одна компания (16.11 BioGrowing
+    оказался тремя кандидатами). Короткие имена (до 5 знаков) и общие хостинги — целиком: abc.cn ≠ abc.com."""
+    if not site or site.count(".") > 2 or any(site.endswith(h) for h in SHARED_HOSTS):
+        return site
+    label = site.split(".")[0]
+    return f"~{label}" if len(label) >= 5 else site
+
+
 def _name_key_ok(n: str) -> bool:
     """Имя годится для склейки: латиница и кириллица — от 3 знаков, иероглифы — от 2 (仙乐 после «健康科技股份有限公司»)."""
     return len(n) >= (2 if CJK.search(n) else 3)
@@ -541,18 +550,31 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
         if ra != rb:
             parent[max(ra, rb)] = min(ra, rb)
 
+    # сначала склейка по именам; затем по официальному сайту — один сайт у двух названий (английское и китайское)
+    # — одна компания. Но сайт, указанный у трёх и более РАЗНЫХ компаний, — чужой (отраслевые СМИ, выставка,
+    # ассоциация, реестр: модель вписала его как «сайт»), по нему не склеиваем и в карточку не берём
     by_key: dict[str, int] = {}
     for i, it in enumerate(items):
         c = it["c"]
-        keys = {f"n:{norm_name(x)}" for x in [c.name, c.local_name, *c.aliases] if _name_key_ok(norm_name(x))}
-        site = site_of(c.website) or ""
-        if site:
-            keys.add(f"d:{site}")
-        for k in keys:
+        for k in {f"n:{norm_name(x)}" for x in [c.name, c.local_name, *c.aliases] if _name_key_ok(norm_name(x))}:
             if k in by_key:
                 union(i, by_key[k])
             else:
                 by_key[k] = i
+    site_groups: dict[str, set[int]] = {}
+    for i, it in enumerate(items):
+        site = site_brand(site_of(it["c"].website) or "")
+        if site:
+            site_groups.setdefault(site, set()).add(find(i))
+    foreign = {st for st, g in site_groups.items() if len(g) >= 3}
+    by_site: dict[str, int] = {}
+    for i, it in enumerate(items):
+        site = site_brand(site_of(it["c"].website) or "")
+        if site and site not in foreign:
+            if site in by_site:
+                union(i, by_site[site])
+            else:
+                by_site[site] = i
     groups: dict[int, list[int]] = {}
     for i in range(len(items)):
         groups.setdefault(find(i), []).append(i)
@@ -566,7 +588,8 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
         ev = next((c for c in cs if c.url and c.quote), None)
         out.append({
             "id": f"O{n}", "name": main, "names": names,
-            "website": next((c.website for c in cs if site_of(c.website)), ""),
+            "website": next((c.website for c in cs if site_of(c.website)
+                             and site_brand(site_of(c.website)) not in foreign), ""),
             "location": next((c.location for c in cs if c.location), ""),
             "angles": angles, "seed": bool(seed),
             "url": ev.url if ev else next((c.url for c in cs if c.url), ""),

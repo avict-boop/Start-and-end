@@ -719,6 +719,9 @@ a.brand:hover .brand-name { color: var(--accent); }
 .alert.paused p { margin: .25rem 0; }
 .paused-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .6rem; margin-top: .6rem; }
 .paused-row label { font-weight: 600; }
+.p-rewind { margin-top: .9rem; }
+.p-rewind summary { cursor: pointer; font-weight: 600; }
+.p-rewind select { max-width: 100%; }
 .paused-row input { width: 7.5rem; }
 .hist-paused { color: var(--warn); font-weight: 600; }
 .paused-list { margin: .5rem 0 0; padding: 0; list-style: none; display: grid; gap: .35rem; }

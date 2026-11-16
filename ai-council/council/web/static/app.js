@@ -1800,6 +1800,7 @@ function renderPaused(s) {
   const p = s.paused;
   $("sPaused").hidden = !p;
   renderReview(s);  // «Отбор»: остановка «проверьте список» — свой блок вместо «Продолжить»
+  renderRewind(s);
   if (!p) return;
   $("pReason").innerHTML = `<b>Причина:</b> ${esc(p.reason_text || "")}${p.message && ["error", "credits", "key_limit"].includes(p.reason) ? ` — <span class="muted">${esc(p.message)}</span>` : ""}. ${PAUSE_HELP[p.reason] || ""}`;
   $("pSpent").textContent = `Потрачено ${money(p.spent || s.cost)} из бюджета ${money(p.budget || s.budget)}`
@@ -1813,6 +1814,37 @@ function renderPaused(s) {
     const b = Number(p.budget || s.budget || 1), spent = Number(p.spent || 0);
     inp.value = p.reason === "budget" || b <= spent ? Math.ceil(Math.max(b * 1.5, spent + 1) * 2) / 2 : b;
   }
+}
+
+// «Отбор» на паузе: вернуться к любому предыдущему этапу или остановке
+const REWIND_FALLBACK = [["frame", "Рамка — председатель заново"], ["frame_gate", "Остановка «рамка» — поправить признаки и веса"],
+  ["discover", "Поиск кандидатов — заново"], ["candidates_gate", "Остановка «найденные кандидаты»"], ["screen", "Отсев — заново"],
+  ["shortlist_gate", "Остановка «короткий список»"], ["fill", "Заполнение таблицы — заново"]];
+function renderRewind(s) {
+  const box = $("pRewind");
+  const on = !!s.paused && s.mode === "selection";
+  box.hidden = !on;
+  if (!on) return;
+  const sel = $("pRewindTo");
+  if (sel.dataset.for === s.id) return;
+  sel.dataset.for = s.id;
+  sel.innerHTML = REWIND_FALLBACK.map(([k, t]) => `<option value="${k}">${esc(t)}</option>`).join("");
+}
+
+async function rewindSession(id) {
+  const to = $("pRewindTo").value;
+  const title = $("pRewindTo").selectedOptions[0] ? $("pRewindTo").selectedOptions[0].textContent : to;
+  const ok = await ask({ title: "Вернуться к этапу", ok: "Вернуться",
+    html: `<p>«${esc(title)}». ${/заново/.test(title) ? "Этот этап спросят у моделей заново — это стоит денег. " : ""}Дальше — из сохранённого, пока решения на остановках те же.</p>` });
+  if (!ok) return;
+  $("pRewindGo").disabled = true;
+  try {
+    const budget = Number($("pBudget").value) || null;
+    await api(`/api/sessions/${encodeURIComponent(id)}/rewind`, { method: "POST", body: { target: to, budget } });
+    $("pReview").dataset.key = "";
+    openSession(id);
+    loadHistory();
+  } catch (e) { toast(e.message); } finally { $("pRewindGo").disabled = false; }
 }
 
 async function resumeSession(id) {
@@ -2594,6 +2626,7 @@ $("redoBtn").addEventListener("click", async () => {
 });
 $("sBudgetWarn").addEventListener("click", (e) => { if (e.target.closest("[data-raise]")) raiseBudget(); });
 $("pResume").addEventListener("click", () => current && resumeSession(current.id));
+$("pRewindGo").addEventListener("click", () => current && rewindSession(current.id));
 $("pDrop").addEventListener("click", async () => {
   if (!current) return;
   const ok = await ask({ title: "Удалить приостановленное заседание?", danger: true, ok: "Удалить", cancel: "Оставить",
