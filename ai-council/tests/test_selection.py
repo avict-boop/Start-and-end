@@ -686,9 +686,13 @@ def test_screen_by_pages_display_name_and_added_match():
     ents = S.merge_candidates([("a", cs[0]), ("b", S.Candidate(name="均瑶润盈生物工程（上海）有限公司"))])
     assert len(ents) == 1
     assert SM._match_entity_strict("Biogrowing", ents) is ents[0]
-    fr = S.SelectionFrame.model_validate({"attributes": [{"name": "Сырьё", "screen": True, "knockout": ""},
-                                                         {"name": "OEM", "kind": "bool", "screen": True, "knockout": "нет"}]})
+    fr = S.chair_screen_rules(S.SelectionFrame.model_validate(
+        {"attributes": [{"name": "Сырьё", "screen": True, "knockout": ""},
+                        {"name": "OEM", "kind": "bool", "screen": True, "knockout": "нет"}]}))
     assert [a.screen for a in fr.attributes] == [False, True]
+    # отмеченное для отсева вами на остановке остаётся в отсеве, даже без правила исключения (случай 16.11)
+    fr2 = SM.apply_frame_edits(fr, {"screen": [a.id for a in fr.attributes]})
+    assert [a.screen for a in fr2.attributes] == [True, True]
     c = _council("find")
     r = asyncio.run(c.run("Найти контрактных производителей софтгелей", mode="selection"))
     screen_calls = [e for e in r.transcript if (e.get("meta") or {}).get("stage") == "screen" or e.get("stage") == "screen"]

@@ -360,6 +360,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         raise S.CouncilError(f"рамка отбора не получилась: {e}") from e
     if not frame.attributes:
         raise S.CouncilError("рамка отбора без признаков — нечего сравнивать")
+    frame = S.chair_screen_rules(frame)
     bench = {S.norm_name(b) for b in frame.benchmarks if S.norm_name(b)}
     named = list(c.fixed_objects) or (hint if start0 in ("check", "extend") and not frame.objects else [])
     seeds = [o for o in dict.fromkeys([*named, *frame.objects]) if S.norm_name(o) not in bench]

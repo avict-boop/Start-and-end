@@ -136,16 +136,6 @@ class SelectionFrame(BaseModel):
             return 0
 
     @model_validator(mode="after")
-    def _screen_rules(self) -> "SelectionFrame":
-        """Отсев — только по жёстким условиям: признак без правила исключения или с правилом «нет данных» в отсев не
-        идёт (16.11 в отсев попало «Собственное сырьё» — по заданию преимущество, а не условие)."""
-        for a in self.attributes:
-            k = (a.knockout or "").strip().lower()
-            if a.screen and (not k or k in ("-", "—", "none", "n/a", "нет данных", "не найдено")):
-                a.screen = False
-        return self
-
-    @model_validator(mode="after")
     def _ids(self) -> SelectionFrame:
         seen: set[str] = set()
         out = []
@@ -1355,6 +1345,17 @@ Objects:
 For each object and attribute: "verdict" pass | fail | unclear (fail ONLY with a source saying so), "value" (short),
 "url" and a short VERBATIM "quote" from that page. Unknown → unclear. Return JSON: {{"rows": [{{"object": "<name as
 given>", "website": "", "checks": [{{"attr": "A1", "verdict": "pass", "value": "", "url": "", "quote": ""}}]}}]}}"""
+
+
+def chair_screen_rules(frame: "SelectionFrame") -> "SelectionFrame":
+    """Отсев, предложенный председателем, — только по жёстким условиям: признак без правила исключения в отсев не
+    идёт (16.11 в отсев попало «Собственное сырьё» — по заданию преимущество, а не условие). Только к рамке
+    председателя: признаки, отмеченные для отсева вами на остановке, остаются в отсеве."""
+    for a in frame.attributes:
+        k = (a.knockout or "").strip().lower()
+        if a.screen and (not k or k in ("-", "—", "none", "n/a", "нет данных", "не найдено")):
+            a.screen = False
+    return frame
 
 
 def screen_read_prompt(frame: SelectionFrame, attrs: list[Attribute], objs: list[dict[str, Any]],
