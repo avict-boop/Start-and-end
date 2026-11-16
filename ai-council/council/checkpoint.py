@@ -60,8 +60,10 @@ class Journal:
         self.transcript: list[dict[str, Any]] = []
         # Ответы из стенограммы архивного заседания (для «доделать»): (этап, участник, номер обращения) -> ответ
         self.loose: dict[tuple[str, str, int], dict[str, Any]] = {}
+        self.loose_model: dict[tuple[str, str, int], str] = {}  # какая модель дала этот ответ
         if path is not None and path.is_file():
             self._load()
+            self._close_tail()
         loose = (path.parent / "archive_transcript.json") if path is not None else None
         if loose is not None and loose.is_file():
             try:
@@ -73,6 +75,24 @@ class Journal:
         if self.transcript:
             self.load_transcript(self.transcript)
 
+    def _close_tail(self) -> None:
+        """После аварийной остановки последняя строка журнала может быть недописана (без перевода строки). Тогда
+        следующая запись приклеилась бы к обрывку и тоже пропала бы при чтении (аудит F10) — закрываем строку."""
+        assert self.path is not None
+        try:
+            with self.path.open("rb") as f:
+                f.seek(0, 2)
+                if f.tell() == 0:
+                    return
+                f.seek(-1, 2)
+                last = f.read(1)
+            if last != b"\n":
+                with self.path.open("a", encoding="utf-8") as f:
+                    f.write("\n")
+                log.warning("журнал заседания: последняя строка была недописана — закрыта, следующие записи не пропадут")
+        except OSError as e:
+            log.warning("журнал заседания не проверен: %s", e)
+
     def load_transcript(self, transcript: list[dict[str, Any]]) -> None:
         """Готовые ответы из стенограммы: по каждому участнику и этапу — по порядку обращений."""
         count: dict[tuple[str, str], int] = {}
@@ -83,6 +103,8 @@ class Journal:
             k = (e.get("stage", ""), e.get("member", ""))
             n = e["call"] if isinstance(e.get("call"), int) else count.get(k, 0)  # номер обращения, если записан
             self.loose[(*k, n)] = e["parsed"]
+            if e.get("requested"):  # старые записи без неё не сверяем: провайдер пишет id модели по-своему
+                self.loose_model[(*k, n)] = str(e["requested"])
             count[k] = n + 1
 
     def _load(self) -> None:

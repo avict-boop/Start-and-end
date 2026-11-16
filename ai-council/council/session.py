@@ -452,6 +452,12 @@ class Council:
             cached = None
         if loose:  # запрос изменился (обновление программы) или «доделать» из архива: ответ того же участника
             cached = self.journal.loose.get((stage, member.name, n))  # на том же этапе по порядку обращений
+            was = self.journal.loose_model.get((stage, member.name, n), "")
+            if cached is not None and was and not same_model(was, member.model):
+                # участнику сменили модель — старый ответ дала другая модель, его не подставляем (аудит F02)
+                log.info("%s%s · %s#%d — в сохранённом ответ модели %s, сейчас %s: спрашиваем заново",
+                         self._tag, member.name, stage, n, was, member.model)
+                cached = None
         if cached is not None:  # ответ уже получен и оплачен раньше
             try:
                 obj = schema.model_validate(cached)
@@ -548,6 +554,16 @@ class Council:
                 self._call(name, stage, "queued", started, detail="ждёт свободного слота")
             try:
                 async with self._sem:
+                    # пока запрос ждал свободного слота, другие могли занять остаток бюджета: проверяем ещё раз —
+                    # уже с их резервом (аудит F01: три запроса по $0,40 при лимите $1 уходили все)
+                    if self.cfg.budget_reserve and self.total_cost + self._reserved + cost_est >= self.budget:
+                        log.warning("%sрезерв бюджета после очереди: %s · %s не помещается (≈$%.4f) — пауза",
+                                    self._tag, name, stage, cost_est)
+                        raise BudgetExceeded(
+                            f"бюджет ${self.budget:g} будет превышен: потрачено ${self.total_cost:.4f}, запросы в работе "
+                            f"({self._in_flight}) — около ${self._reserved:.2f}, этот запрос — около ${cost_est:.2f}. "
+                            f"Пауза, чтобы не превысить лимит; поднимите бюджет примерно до "
+                            f"${self.total_cost + self._reserved + cost_est + 0.5:.2f} и продолжите")
                     # у границы бюджета запросы идут по два: меньше запросов «в полёте» — меньше превышение лимита
                     async with self._budget_gate(name, stage, started):
                         extra: dict[str, Any] = ({"web_search": True, "web_tools": self.cfg.web_tools,
@@ -605,6 +621,7 @@ class Council:
                 "stage": stage,
                 "member": member.name,
                 "model": comp.model or member.model,
+                "requested": member.model,  # какую модель спрашивали (comp.model — что ответил провайдер)
                 "attempt": attempt + 1,
                 "call": call_n,  # номер обращения участника на этапе — по нему продолжение находит ответ
                 "raw": comp.text,
@@ -1063,6 +1080,13 @@ class Council:
 
 
 FACT_CHECKER = "факт-чек"
+
+
+def same_model(a: str, b: str) -> bool:
+    """Та же модель: id совпадают, в том числе с точностью до вариантов (…:online, дата версии в конце)."""
+    def base(x: str) -> str:
+        return re.sub(r"-\d{4}-?\d{2}-?\d{2}$|-\d{8}$", "", x.split(":")[0].strip().lower())
+    return base(a) == base(b)
 STATUS_ALIASES = {
     "confirmed": "confirmed", "true": "confirmed", "verified": "confirmed", "supported": "confirmed",
     "подтверждено": "confirmed", "подтверждён": "confirmed", "верно": "confirmed",

@@ -818,6 +818,11 @@ def numbers_in(text: str) -> list[float]:
     return out
 
 
+NEGATION = re.compile(
+    r"\b(?:not|never|without|cannot|neither|nor)\b|n['’]t\b|\bno\b(?![.\s]*\d)|(?<![\w-])(?:не|нет|без|ни)(?![\w-])"
+    r"|不是|并非|并未|未获|未取得|未通过|没有|不具备|不提供|不接受|无(?:资质|认证|生产|工厂)", re.I)
+
+
 def quote_supports(attr: Attribute, value: str, unit: str, quote: str) -> bool:
     """Цитата действительно опора значения: не обрывок из пары слов («softgel» есть на любой странице завода), а для
     чисел и дат — то же число (с учётом 万/亿, млн) или тот же год есть в самой цитате."""
@@ -835,6 +840,8 @@ def quote_supports(attr: Attribute, value: str, unit: str, quote: str) -> bool:
             return True
         years = {int(y) for y in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", quote)}
         return int(v) in years
+    if attr.kind == "bool" and parse_bool(value) is True and NEGATION.search(quote):
+        return False  # «да», а в цитате отрицание: модель могла прочитать «не сертифицирован» как «да» (аудит F03)
     return True
 
 
@@ -1127,7 +1134,9 @@ def sensitivity(attrs: list[Attribute], table: dict[str, dict[str, dict[str, Any
             if da == db:
                 continue
             w = (sa - sb) / (db - da)  # sa + w·da = sb + w·db
-            if 0 <= w <= 10 and abs(w - w0[k]) >= 1:  # перестановка от изменения веса на десятые — не новость
+            # перестановка от изменения веса на десятые — не новость, кроме смены лидера: её показываем всегда
+            # (аудит F06: при весах 1 и 0,9 лидер менялся уже при 0,8, а список был пуст)
+            if 0 <= w <= 10 and abs(w - w0[k]) >= (0.05 if i == 0 else 1):
                 out.append({"attr": k, "weight": round(w, 2), "now": w0[k], "a": a, "b": b,
                             "text": f"при весе «{_aname(attrs, k)}» {_fmt_w(w)} (сейчас {_fmt_w(w0[k])}) "
                                     f"{names.get(b, b)} обгонит {names.get(a, a)}"})

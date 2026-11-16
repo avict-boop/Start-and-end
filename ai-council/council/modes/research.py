@@ -468,11 +468,18 @@ async def semantic_audit(sess: Council, R: Any, chair: MemberConfig, verdict: An
         return None
     by = {i.item_id: i.model_dump() for i in got.items if i.item_id in {k.item_id for k in known}}
     flagged = [i for i in by.values() if i["status"] != "supported"]
+    # пункты, которые проверяющий пропустил, — «не проверено», а не «прошло проверку» (аудит F04)
+    missing = [k.item_id for k in known if k.item_id not in by]
+    if missing:
+        sess._emit("warning", stage="verdict", member=member.name,
+                   text=f"смысловая сверка: {len(missing)} из {len(known)} пунктов «известно» проверяющий не оценил — "
+                        "они не проверены")
     if flagged:
         sess._emit("warning", stage="verdict", member=member.name,
                    text=f"смысловая сверка: {len(flagged)} из {len(known)} пунктов «известно» не следуют из опоры полностью "
                         "(только для сведения — статус не менялся)")
-    return {"model": member.model, "items": by, "flagged": len(flagged), "checked": len(known)}
+    return {"model": member.model, "items": by, "flagged": len(flagged), "checked": len(by), "requested": len(known),
+            "missing": missing}
 
 
 def make_ledger(sess: Council, R: Any, selected: list[dict[str, Any]], results: list[Any], rc: Any,
