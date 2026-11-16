@@ -452,10 +452,6 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
 
     from .admin import register as register_admin
     register_admin(app, config_path, base_config, runs_dir, catalog)
-    from .projects import register as register_projects
-    register_projects(app, base_config=base_config, runs_dir=runs_dir, archive=lambda: archive(),
-                      load_uploads=lambda ids: load_uploads(ids), make_client=lambda c, m: make_client(c, m),
-                      create_session=lambda req: create_session(req, spec_extra={"allow_split": False}), jsonable=jsonable)
 
     archives: dict[Path, Archive] = {}
 
@@ -1957,8 +1953,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                 "display_override": ["standalone", "minimal-ui"], "orientation": "any",
                 "background_color": "#f7f8fb", "theme_color": "#ffffff", "categories": ["productivity", "business"],
                 "icons": icons,
-                "shortcuts": [sc("Новый вопрос", "Новый", "/?source=app"), sc("Архив", "Архив", "/#/archive"),
-                              sc("Закупки", "Закупки", "/#/projects")]}
+                "shortcuts": [sc("Новый вопрос", "Новый", "/?source=app"), sc("Архив", "Архив", "/#/archive")]}
         return Response(json.dumps(body, ensure_ascii=False), media_type="application/manifest+json",
                         headers={"Cache-Control": "no-cache"})
 

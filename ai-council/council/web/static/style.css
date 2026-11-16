@@ -1084,28 +1084,6 @@ details[open] > summary .params-edit { visibility: hidden; }
 .sel-full[open] > summary .ic { transform: rotate(90deg); }
 .sel-full > summary small { font-weight: 400; color: var(--muted); }
 .sel-full > .md { padding: 0 .9rem .8rem; }
-/* проекты закупки: список карточками */
-.proj-list { display: grid; gap: .6rem; }
-.proj-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: .2rem 1rem; align-items: center; padding: .85rem 1rem;
-  border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: inherit; text-decoration: none; box-shadow: var(--shadow); }
-.proj-row:hover { border-color: var(--line-strong); }
-.proj-row b { font-size: 1.02rem; overflow-wrap: anywhere; }
-.proj-row .muted { grid-column: 1; }
-.proj-row .badge { grid-row: 1 / span 2; grid-column: 2; }
-.file-pick { display: inline-flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin: .4rem 0; }
-.file-pick input[type="file"] { font: inherit; font-size: .875rem; color: var(--muted); max-width: 100%; }
-.file-pick input[type="file"]::file-selector-button { font: inherit; font-weight: 600; font-size: .875rem; margin-right: .6rem; padding: .45rem .8rem;
-  border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface); color: var(--text); cursor: pointer; }
-.proj-sup header .badge { margin-left: auto; }
-.proj-sup details { margin: .35rem 0; }
-.proj-sup details > summary { cursor: pointer; padding: .25rem 0; }
-/* проекты закупки */
-.proj-sup { margin: .8rem 0; }
-.proj-sup header { display: flex; gap: .6rem; align-items: baseline; flex-wrap: wrap; }
-.proj-sup h3 { margin: 0; }
-.proj-letter pre { white-space: pre-wrap; background: var(--surface-2); padding: .5rem; border-radius: 6px; font-size: .85rem; }
-.row3 { display: grid; grid-template-columns: 2fr 3fr 2fr; gap: .4rem; margin: .25rem 0; }
-@media (max-width: 640px) { .row3 { grid-template-columns: 1fr; } }
 .link.danger { color: var(--bad); }
 .bad-input { outline: 2px solid var(--bad); outline-offset: 1px; }
 .sel-review .kind-inline { display: none; }

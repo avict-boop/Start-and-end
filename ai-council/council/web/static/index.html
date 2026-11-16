@@ -53,7 +53,6 @@
     <nav class="nav" aria-label="Разделы">
       <button id="newBtn" type="button" class="nav-item" data-view="empty"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg><span>Новый<span class="hide-sm"> вопрос</span></span></button>
       <button id="archiveBtn" type="button" class="nav-item" data-view="archive"><svg class="ic" aria-hidden="true"><use href="#i-archive"/></svg><span>Архив</span></button>
-      <button id="projectsBtn" type="button" class="nav-item" data-view="projects"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg><span>Закупки</span></button>
       <button id="statsBtn" type="button" class="nav-item" data-view="stats"><svg class="ic" aria-hidden="true"><use href="#i-chart"/></svg><span>Статистика</span></button>
       <button id="settingsBtn" type="button" class="nav-item" data-view="settings"><svg class="ic" aria-hidden="true"><use href="#i-gear"/></svg><span>Настройки</span><span id="updDot" class="upd-dot" hidden title="Есть обновление программы"></span></button>
     </nav>
@@ -299,15 +298,6 @@
       <div id="serBody"></div>
     </section>
 
-    <!-- ============================================================ проекты закупки -->
-    <section id="projects" class="view" hidden aria-labelledby="projTitle">
-      <header class="page-head">
-        <div class="s-parent" id="projMeta"></div>
-        <h1 id="projTitle">Проекты закупки</h1>
-      </header>
-      <div id="projBody"></div>
-    </section>
-
     <!-- ============================================================ настройки -->
     <section id="settings" class="view" hidden aria-labelledby="setTitle">
       <header class="page-head"><h1 id="setTitle">Настройки</h1></header>
@@ -547,7 +537,6 @@
 <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="/static/selection.js"></script>
-<script src="/static/procurement.js"></script>
 <script src="/static/app.js"></script>
 <script src="/static/pwa.js"></script>
 <script src="/static/settings.js"></script>

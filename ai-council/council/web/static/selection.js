@@ -377,7 +377,6 @@ function selDraw(id) {
       <label class="switch"><input type="checkbox" id="selTrust" ${st.trust !== false ? "checked" : ""}><span class="sw" aria-hidden="true"></span>
         <span>Учитывать надёжность источника</span></label></div>
     <div class="sel-actions"><a class="btn small" id="selXlsx" href="#"><svg class="ic" aria-hidden="true"><use href="#i-dl"/></svg>Excel с этими весами</a>
-      <button type="button" class="btn small" id="selProject"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>Создать проект закупки</button>
       <button type="button" class="link small" id="selReset">Веса как в заседании</button></div>
     <div id="selTableBox"></div>
     <div id="selCellBox" class="sel-cellbox" hidden></div>`;
@@ -390,7 +389,6 @@ function selDraw(id) {
   }));
   $("selTrust").addEventListener("change", () => selRank(id, selState[id].weights, $("selTrust").checked));
   $("selReset").addEventListener("click", () => selRank(id, null, null));
-  $("selProject").addEventListener("click", () => createProject(id));
   selTable(id);
 }
 

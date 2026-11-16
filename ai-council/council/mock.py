@@ -40,11 +40,6 @@ class MockClient:
             raise ProviderError(f"{model}: имитация недоступности")
         stage = meta.get("stage")
         who = meta.get("member", model)
-        if meta.get("procurement"):
-            text = str((messages[-1] or {}).get("content") or "") if messages else ""
-            out = _procurement(str(meta.get("task")), text)
-            return Completion(text=json.dumps(out, ensure_ascii=False), prompt_tokens=700, completion_tokens=400,
-                              cost=0.001, model=model)
         if meta.get("selection"):
             text = str((messages[-1] or {}).get("content") or "") if messages else ""
             out = _selection(str(stage), str(who), meta, text)
@@ -345,29 +340,3 @@ def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[st
                            "часть ячеек не подтверждена.", "next_steps": ["Запросить сертификаты с номерами (демо)"],
                 "risks": ["Демо-данные"]}
     return {}
-
-
-def _procurement(task: str, text: str) -> dict[str, Any]:
-    """Демо «Проекта закупки»: письмо-запрос и разбор ответа завода."""
-    import re as _re
-    if task == "rfq":
-        return {"subject_en": "RFQ: private-label supplements — {supplier}",
-                "body_en": "Dear {supplier} team,\n\nWe are comparing several manufacturers on one specification "
-                           "(demo). Please quote each SKU at each volume, MOQ, lead time, Incoterms, and send the "
-                           "production licence (SC) and GMP/ISO certificates with numbers and validity.\n\nBest regards",
-                "subject_zh": "询价：自有品牌保健品 — {supplier}",
-                "body_zh": "{supplier} 您好：\n\n我们正在比较几家工厂（演示）。请按每个SKU和数量报价，并提供生产许可证（SC）"
-                           "及GMP/ISO证书编号和有效期。\n\n此致"}
-    m = _re.search(r"Supplier: (.+?) \(also", text)
-    name = m.group(1) if m else "Demo Plant"
-    price = _re.search(r"(\d+[.,]?\d*)\s*(USD|CNY|\$)", text)
-    valid = _re.search(r"(20\d\d-\d\d-\d\d)", text)
-    holder = _re.search(r"holder[:\s]+([^\n;]+)", text, _re.I)
-    return {"items": [{"sku": "Omega-3 1000 mg", "price": price.group(1) if price else "1.20",
-                       "currency": "CNY" if price and price.group(2) == "CNY" else "USD", "unit": "per bottle",
-                       "moq": "5000", "incoterms": "FOB Shanghai", "lead_time": "30 days"}],
-            "documents": [{"kind": "SC", "number": "SC10637000000001", "issuer": "SAMR",
-                           "holder": holder.group(1).strip() if holder else name,
-                           "valid_until": valid.group(1) if valid else "2027-05-01", "quote": "SC (demo)"}],
-            "contact": "sales@example.com", "summary": f"(демо) {name}: цена, MOQ 5000, FOB Шанхай, 30 дней.",
-            "questions": ["Нужна ли этикетка на русском (демо)"]}
