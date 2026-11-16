@@ -1069,6 +1069,11 @@ details[open] > summary .params-edit { visibility: hidden; }
 .sel-copy pre { white-space: pre-wrap; max-height: 20rem; overflow: auto; font-size: .8rem; background: var(--surface); padding: .5rem; border-radius: 6px; }
 .decisions .sel-opts { grid-column: 1 / -1; }
 .sel-wide td:nth-child(1), .sel-wide td:nth-child(3) { white-space: nowrap; }
+/* живая таблица: первая колонка — название завода (а не №), третья — признак (а не балл): переносим, не выпускаем
+   текст в соседнюю колонку */
+.sel-wide.sel-live td, .sel-wide.sel-live th { white-space: normal; overflow-wrap: anywhere; word-break: normal; }
+.sel-wide.sel-live td:nth-child(1) { overflow: hidden; }
+.sel-wide.sel-live td .badge { margin-top: .15rem; }
 .sel-table td.num, .sel-table th.num { text-align: right; white-space: nowrap; }
 /* полный текст отчёта «Отбора» — под интерактивной таблицей, свёрнут */
 .sel-full { margin-top: 1rem; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }

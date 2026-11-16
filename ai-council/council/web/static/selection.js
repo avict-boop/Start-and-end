@@ -151,7 +151,7 @@ function renderSelLive(s) {
     if (c.status === "disputed") return `<td><span class="badge warn" title="источники расходятся — решит совет">спор</span></td>`;  // живая таблица
     if (!c.value) return `<td class="muted">—</td>`;
     const v = `${c.value}${c.unit && !c.value.includes(c.unit) ? ` ${c.unit}` : ""}`;
-    return `<td title="${esc(word)}${c.quote ? ` — «${esc(c.quote)}»` : ""}">${esc(v.length > 40 ? v.slice(0, 38) + "…" : v)} <span class="badge ${k}">${mark}</span>${c.ruled ? " ⚖" : ""}</td>`;
+    return `<td title="${esc(word)}${c.quote ? ` — «${esc(c.quote)}»` : ""}">${esc(v.length > 34 ? v.slice(0, 32) + "…" : v)} <span class="badge ${k}">${mark}</span>${c.ruled ? " ⚖" : ""}</td>`;
   };
   // сверху — что заполняется сейчас, затем заполненные; очередь — одной строкой (150 пустых строк заслоняли бы работу)
   const byRank = (x, y) => (rank[x.id] || 999) - (rank[y.id] || 999);
