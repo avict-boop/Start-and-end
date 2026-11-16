@@ -784,7 +784,7 @@ def test_selection_mode_on_site_with_review_stops(client):
     assert ev[-1]["type"] == "paused" and ev[-1]["review"]["gate"] == "shortlist"
     items = ev[-1]["review"]["payload"]["items"]
     assert drop not in {x["id"] for x in items}
-    keep = [x["id"] for x in items if x["name"] in ("Demo Plant 9", "Demo Plant 3", "Demo Plant 5")]
+    keep = [x["id"] for x in items if x["name"].split(" / ")[0] in ("Demo Plant 9", "Demo Plant 3", "Demo Plant 5")]
     r = client.post(f"/api/sessions/{sid}/review", json={"gate": "shortlist", "decision": {"keep": keep}})
     assert r.status_code == 200
     ev = read_events(client, sid)

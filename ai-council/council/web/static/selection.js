@@ -52,6 +52,9 @@ function selEvent(s, ev) {
         + (c.share != null ? ` · полнота списка ≈ ${Math.round(c.share * 100)}% (оценка ~${c.estimate})` : ""), "k-ok");
       return true;
     }
+    case "candidates_cut":
+      logAdd(s, `Найдено больше предела: показаны ${ev.shown}, ещё ${ev.cut} не вошли (предел «Кандидатов всего, до» — ${ev.limit}, в настройках «Отбора»). Отобраны по очереди из каждого направления поиска`, "k-warn");
+      return true;
     case "screen_undone":
       logAdd(s, `Отсев: ${ev.count} из ${ev.total} исключений отменено — цитата «не подходит» не найдена на странице или вторая модель не согласилась, что она исключает; кандидаты остаются сомнительными`, "k-warn");
       return true;

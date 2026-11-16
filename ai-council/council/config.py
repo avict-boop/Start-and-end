@@ -188,13 +188,16 @@ class SelectionConfig(BaseModel):
     per_angle: int = Field(default=25, ge=5, le=60)
     rounds: int = Field(default=2, ge=1, le=3)
     saturation: float = Field(default=0.75, ge=0.3, le=1.0)
-    max_candidates: int = Field(default=150, ge=10, le=400)
+    max_candidates: int = Field(default=300, ge=10, le=600)
     # Кто ищет кандидатов: all — модель поиска и все участники совета (у каждой модели свой поисковик и свои «слепые
     # зоны»: список полнее, оценка полноты честнее); search — только модель поиска (дешевле)
     # scouts — поисковики разных компаний через их младшие модели (Gemini Flash, GPT mini, Claude Haiku, Grok mini) и обе
     # модели Perplexity: все — по каждому направлению; дёшево, а «слепые зоны» поисковиков разные (рекомендуется)
     discover_by: Literal["scouts", "all", "search"] = "scouts"
     scouts: list[str] = Field(default_factory=list)  # свои модели-разведчики (id OpenRouter); пусто — подобрать по каталогу
+    # компании, чьих разведчиков не берём при подборе по каталогу: поиск Google (Gemini) в заседании 16.11 стоил
+    # $0,20 за обращение — 42% всего «Отбора» — и дал меньше всех новых компаний
+    scouts_skip: list[str] = Field(default_factory=lambda: ["google"])
     # Поисковик участников на этом этапе: native — собственный поиск модели, где он есть (OpenAI, Google, Anthropic,
     # xAI), у остальных — поиск OpenRouter; exa — у всех один поиск OpenRouter (дешевле, но одинаковые слепые зоны)
     discover_engine: Literal["native", "exa", "auto"] = "native"
@@ -238,6 +241,10 @@ class SelectionConfig(BaseModel):
     # Отсев: короткая проверка признаков отсева у всех кандидатов (пачками по screen_batch)
     screen: bool = True
     screen_batch: int = Field(default=5, ge=1, le=15)
+    # pages — программа скачивает уже найденные страницы кандидата (страница из поиска, сайт), дешёвая модель решает по
+    # тексту (дёшево; поиск по пачке из 5 компаний почти всегда отвечал «не выяснено»); search — модель поиска ищет заново
+    screen_by: Literal["pages", "search"] = "pages"
+    screen_chars: int = Field(default=6000, ge=1500, le=20000)  # текста страниц на кандидата при отсеве
     # Сколько проверять подробно: 0 — всех прошедших отсев и сомнительных (не больше max_deep) или сколько сказано
     # в задании; первая группа (на переговоры) — top_n, 0 — как в задании или все
     shortlist: int = Field(default=0, ge=0, le=200)
@@ -446,7 +453,7 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
-                     "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
+                     "scouts_skip", "screen_by", "screen_chars", "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
                      "search_results", "search_reasoning", "discover_waves", "lists", "list_chars", "list_reader", "second_read", "judges_on_demand", "skip_neutral_disputes",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",

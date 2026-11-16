@@ -343,7 +343,9 @@ function renderSettings() {
         <label class="field"><span>Кандидатов на направление, до</span><input type="number" data-sn="per_angle" min="5" max="60" value="${v("per_angle", 25)}" ${ro}></label>
         <label class="field"><span>Кругов поиска, до</span><input type="number" data-sn="rounds" min="1" max="3" value="${v("rounds", 2)}" ${ro}><small class="hint">ещё круг с новыми направлениями, если список по оценке полон меньше чем на долю ниже</small></label>
         <label class="field"><span>Полнота списка, достаточная</span><input type="number" data-sn="saturation" min="0.3" max="1" step="0.05" value="${v("saturation", 0.75)}" ${ro}></label>
-        <label class="field"><span>Кандидатов всего, до</span><input type="number" data-sn="max_candidates" min="10" max="400" value="${v("max_candidates", 150)}" ${ro}></label>
+        <label class="field"><span>Кандидатов всего, до</span><input type="number" data-sn="max_candidates" min="10" max="600" value="${v("max_candidates", 300)}" ${ro}><small class="hint">больше — отбираются по очереди из каждого направления поиска; сколько не вошло, видно в ходе заседания</small></label>
+        <label class="field"><span>Отсев</span>
+          <select data-ss="screen_by" ${ro}>${[["pages", "читать найденные страницы (дёшево)"], ["search", "искать заново моделью поиска"]].map(([x, t]) => `<option value="${x}" ${v("screen_by", "pages") === x ? "selected" : ""}>${t}</option>`).join("")}</select></label>
         <label class="field"><span>Проверять подробно, до</span><input type="number" data-sn="max_deep" min="3" max="200" value="${v("max_deep", 40)}" ${ro}><small class="hint">предел подробной проверки; для вопроса можно задать меньше</small></label>
         <label class="field"><span>Первая группа (0 — как в задании или 12)</span><input type="number" data-sn="top_n" min="0" max="100" value="${v("top_n", 0)}" ${ro}></label>
         <label class="field"><span>Кто решает спорное — участников</span><input type="number" data-sn="judges" min="1" max="7" value="${v("judges", 3)}" ${ro}><small class="hint">председатель и другие, по возможности не заполнявшие таблицу</small></label>

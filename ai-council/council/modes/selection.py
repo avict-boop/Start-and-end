@@ -167,9 +167,10 @@ def discover_hunters(c: Council) -> list[MemberConfig]:
     if sc.discover_by == "search":
         return base
     if sc.discover_by == "scouts":
-        from ..scouts import model_title, perplexity_pair, pick_scouts, scout_name
+        from ..scouts import PROVIDERS, model_title, perplexity_pair, pick_scouts, scout_name
         catalog = getattr(c, "catalog", None)
-        ids = list(dict.fromkeys(perplexity_pair(base[0].model, catalog) + (list(sc.scouts) or list(pick_scouts(catalog).values()))))
+        auto = pick_scouts(catalog, tuple(p for p in PROVIDERS if p not in sc.scouts_skip))
+        ids = list(dict.fromkeys(perplexity_pair(base[0].model, catalog) + (list(sc.scouts) or list(auto.values()))))
         ids = [i for i in ids if i != base[0].model]
         eff = None if sc.search_reasoning == "default" else sc.search_reasoning
         scouts, labels = [], {}
@@ -385,9 +386,15 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         entities = S.merge_candidates([], seeds)
     if not entities:
         raise S.CouncilError("кандидатов не нашлось — уточните задание или дайте свой список")
-    entities = entities[:sc.max_candidates]
+    # предел списка: по очереди из каждого направления (а не «найденных чаще всего» — те, кого нашёл один поиск,
+    # специалисты и сырьевики, иначе уходили первыми); сколько не вошло — видно на остановке
+    cut = max(0, len(entities) - sc.max_candidates)
+    if cut:
+        entities = diverse_order(entities)[:sc.max_candidates]
+        log.info("%sотбор: кандидатов %d, предел %d — %d не вошли", c._tag, sc.max_candidates + cut, sc.max_candidates, cut)
+        c._emit("candidates_cut", shown=len(entities), cut=cut, limit=sc.max_candidates)
     if start in ("find", "extend"):
-        dec = gate(c, "candidates", {"items": entities, "completeness": found_meta.get("completeness")})
+        dec = gate(c, "candidates", {"items": entities, "completeness": found_meta.get("completeness"), "cut": cut})
         entities = apply_list_edits(entities, dec)
 
     # 3. Отсев
@@ -421,7 +428,18 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
                                     "excluded": excluded})
         if dec is not None:
             ids = [i for i in dec.get("keep") or [] if any(e["id"] == i for e in entities)]
-            shortlist = [e for i in ids for e in entities if e["id"] == i] + apply_list_edits([], {"add": dec.get("add")},
+            # добавленное вами по имени, если программа его уже нашла (под другим названием) — это тот же кандидат
+            # с его страницами, а не новый пустой объект
+            add = []
+            for name in dec.get("add") or []:
+                hit = _match_entity_strict(str(name), entities)
+                if hit is not None:
+                    hit["added"] = True
+                    if hit["id"] not in ids:
+                        ids.append(hit["id"])
+                else:
+                    add.append(name)
+            shortlist = [e for i in ids for e in entities if e["id"] == i] + apply_list_edits([], {"add": add},
                                                                                                 start_n=_max_id(entities))
             entities += [e for e in shortlist if e not in entities]
     keep_ids = {e["id"] for e in shortlist}
@@ -766,7 +784,10 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
 
 async def screen(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], entities: list[dict[str, Any]]
                  ) -> dict[str, dict[str, Any]]:
-    """Отсев: короткая проверка признаков отсева у всех кандидатов пачками (поиск)."""
+    """Отсев: короткая проверка признаков отсева у всех кандидатов пачками — по скачанным страницам (pages) или
+    поиском (search)."""
+    if c.cfg.selection.screen_by == "pages":
+        return await screen_pages(c, frame, attrs, entities)
     sc = c.cfg.selection
     c._emit("stage", stage="screen", title=f"Отсев: {len(entities)} кандидатов по {len(attrs)} признакам "
                                           f"({', '.join(a.name for a in attrs)})")
@@ -849,6 +870,82 @@ def _counts_text(found: int, excluded: int, checked: int, ranked: int) -> str:
             "size limit of the table, not a lack of candidates). Do not confuse the number found with the table size.\n")
 
 
+async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], entities: list[dict[str, Any]]
+                       ) -> dict[str, dict[str, Any]]:
+    """Отсев по страницам: программа скачивает страницу, где поиск нашёл кандидата, и главную его сайта; дешёвая
+    модель по тексту решает «подходит / не подходит / не ясно» с цитатой. Без поиска — в разы дешевле, и ответ не
+    пустой (поиск по пачке из пяти компаний почти всегда возвращал «не выяснено»). Не открылась ни одна страница —
+    «не выяснено», кандидат остаётся."""
+    sc = c.cfg.selection
+    c._emit("stage", stage="screen", title=f"Отсев: {len(entities)} кандидатов по {len(attrs)} признакам "
+                                          f"({', '.join(a.name for a in attrs)}) — читаем их страницы")
+    plan: dict[str, list[str]] = {}
+    for e in entities:
+        us = [u for u in [e.get("url") or "", *(e.get("urls") or [])] if u.startswith(("http://", "https://"))]
+        if S.site_of(e.get("website") or ""):
+            us.append(_home(e["website"]))
+        shared = getattr(c, "list_urls", set())
+        plan[e["id"]] = [u for u in dict.fromkeys(us) if u and u not in shared][:3]
+    pages = await fetch_pages(c, [u for us in plan.values() for u in us])
+    words = [w for a in attrs for w in [a.name, *a.keywords]]
+    texts: dict[str, list[tuple[str, str]]] = {}
+    for e in entities:
+        budget = sc.screen_chars
+        got = []
+        for u in plan[e["id"]]:
+            t = (pages.get(u) or {}).get("text") or ""
+            if t and budget > 300:
+                ex = S.excerpts(t, words + list(e.get("names") or [e["name"]]), min(budget, sc.screen_chars // 2 + 500))
+                budget -= len(ex)
+                got.append((u, ex))
+        texts[e["id"]] = got
+    readable = [e for e in entities if texts[e["id"]]]
+    out: dict[str, dict[str, Any]] = {}
+    for e in entities:
+        if not texts[e["id"]]:
+            out[e["id"]] = {"result": "unclear", "reason": "не выяснено: страницы кандидата не открылись",
+                            "name": e["name"], "checks": []}
+    batches = [readable[i:i + sc.screen_batch] for i in range(0, len(readable), sc.screen_batch)]
+    prog = {"done": 0, "total": len(batches), "checked": 0, "objects": len(readable)}
+    c._emit("progress", stage="screen", unit="пачек", **prog)
+    reader = quick(c, pick_fillers(c)[0])
+
+    async def check(b: list[dict[str, Any]]) -> Any:
+        try:
+            return await c._ask(reader, "screen", S.screen_read_prompt(frame, attrs, b, texts), S.ScreenBatch,
+                                meta={**META, "objects": [e["id"] for e in b]}, max_tokens=4000)
+        finally:
+            prog["done"] += 1
+            prog["checked"] += len(b)
+            c._emit("progress", stage="screen", unit="пачек", **prog)
+
+    got_all = await asyncio.gather(*(check(b) for b in batches), return_exceptions=True)
+    for b, r in zip(batches, got_all):
+        if isinstance(r, (BudgetExceeded, OutOfCredits)):
+            raise r
+        if isinstance(r, BaseException):
+            if not _soft(r):
+                raise r
+            c.stats.setdefault(reader.name, MemberStats()).failures.append(f"screen: {r}")
+            continue
+        for row in r.rows:
+            e = _match_entity(row.object, b)
+            if not e:
+                continue
+            checks = [ch.model_copy(update={"attr": (S.match_attr(ch.attr, attrs) or S.Attribute(name=ch.attr)).id
+                                            or ch.attr}) for ch in row.checks]
+            result, reason = S.screen_decide(checks, attrs)
+            out[e["id"]] = {"result": result, "reason": reason, "name": e["name"],
+                            "checks": [x.model_dump() for x in checks]}
+            if row.website and not e.get("website"):
+                e["website"] = row.website
+    await verify_screen_fails(c, out, frame, attrs)
+    counts = {k: sum(1 for v in out.values() if v["result"] == k) for k in ("pass", "fail", "unclear")}
+    c._emit("screened", **counts, total=len(entities))
+    log.info("%sотбор: отсев по страницам — %s (страницы открылись у %d из %d)", c._tag, counts, len(readable), len(entities))
+    return out
+
+
 async def verify_screen_fails(c: Council, out: dict[str, dict[str, Any]], frame: S.SelectionFrame | None = None,
                               attrs: list[S.Attribute] | None = None) -> int:
     """«Не подходит» на отсеве засчитывается, только если программа нашла цитату этого вердикта на скачанной
@@ -917,6 +1014,18 @@ async def confirm_screen_fails(c: Council, out: dict[str, dict[str, Any]], prove
         if i in yes:
             keep_ex.add(oid)
     return keep_ex
+
+
+def _match_entity_strict(name: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Найденный кандидат с этим именем: совпадение имени (без форм собственности) с любым его названием или сайт."""
+    n = S.norm_name(name)
+    if not S._name_key_ok(n):
+        return None
+    site = S.site_of(name) if "." in name else ""
+    for e in items:
+        if any(S.norm_name(x) == n for x in e.get("names") or [e["name"]]) or (site and S.site_of(e.get("website") or "") == site):
+            return e
+    return None
 
 
 def _match_entity(name: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:

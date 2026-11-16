@@ -296,6 +296,8 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
             add(m, max(1, round(per)), 3000 + min(q, 3000) + found_tokens,
                 2500 + (4000 if sc.search_reasoning in ("medium", "high", "default") else 1500))
     add(chair, 1, 4000 + deep * 350, 1500)              # вывод
+    if start != "check" and sc.screen and sc.screen_by == "pages" and fillers:  # отсев по скачанным страницам
+        add(fillers[0], -(-cands // sc.screen_batch), 1500 + sc.screen_batch * sc.screen_chars // 3, 400 * sc.screen_batch)
     page_in = int(sc.object_chars // 3 * 0.8) + 1800     # страницы без повторов (меню, подвалы) — примерно −20%
     for i, m in enumerate(fillers):                      # второе прочтение — примерно у 60% объектов («где нужно»)
         add(m, deep if i == 0 or sc.second_read == "always" else max(1, round(deep * 0.6)), page_in, 1500)
@@ -318,9 +320,9 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
         out.append(MemberEstimate("чтение списков", reader_m.model if reader_m else "", chunks, chunks * 11_000,
                                   chunks * 3000, (chunks * (11_000 * rp.prompt + 3000 * rp.completion)) if rp else None))
     if start != "check" and sc.discover_by == "scouts":  # разведчики: младшие модели компаний и вторая Perplexity
-        from .scouts import perplexity_pair, pick_scouts, scout_name
+        from .scouts import PROVIDERS, perplexity_pair, pick_scouts, scout_name
         pseudo = [{"id": k, "pricing": {"prompt": v.prompt, "completion": v.completion}} for k, v in pricing.items()]
-        ids = list(sc.scouts) or list(pick_scouts(pseudo).values())
+        ids = list(sc.scouts) or list(pick_scouts(pseudo, tuple(p for p in PROVIDERS if p not in sc.scouts_skip)).values())
         ids = [i for i in dict.fromkeys(perplexity_pair(search_model, pseudo) + ids) if i != search_model]
         for mid in ids:
             p = price_of(mid)
@@ -330,8 +332,9 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
             fee = 0.0 if ppx else searches * sc.search_uses * sc.search_results * 0.004
             out.append(MemberEstimate(scout_name(mid), mid, searches, searches * inp, searches * outp,
                                       (searches * (inp * p.prompt + outp * p.completion + p.request) + fee) if p else None))
+    screen_search = sc.screen and sc.screen_by == "search"
     s_calls = (0 if start == "check" else sc.angles + (2 if sc.rounds > 1 else 0)
-               + (-(-cands // sc.screen_batch) if sc.screen else 0)) + deep
+               + (-(-cands // sc.screen_batch) if screen_search else 0)) + deep
     s_in = s_calls * (2000 + min(q, 3000))  # у модели поиска (Perplexity) найденное не идёт во вход — поиск встроен
     s_out = s_calls * 2200
     p = price_of(search_model)

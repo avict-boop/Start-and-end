@@ -129,12 +129,12 @@ def test_selection_find_end_to_end_demo():
     r = asyncio.run(c.run("Найти контрактных производителей софтгелей", mode="selection"))
     sel = r.selection
     assert r.mode == "selection" and sel["candidates"] >= 5
-    assert [x["name"] for x in sel["excluded"]] == ["Demo Plant 8"]  # отсев: перепродавец
+    assert [x["name"].split(" / ")[0] for x in sel["excluded"]] == ["Demo Plant 8"]  # отсев: перепродавец
     assert sel["stats"]["official"] > 0 and sel["stats"]["ruled"] == 1  # спорная ячейка решена советом
-    plant3 = next(o["id"] for o in sel["objects"] if o["name"] == "Demo Plant 3")
+    plant3 = next(o["id"] for o in sel["objects"] if o["name"].split(" / ")[0] == "Demo Plant 3")
     assert sel["table"][plant3]["A2"]["ruled"]
     # завод 10 есть только в демо-списке участников выставки — его нашли готовые списки, и он первый по мощности
-    assert r.verdict.winner == "Demo Plant 10" and "### Ранг" in r.verdict.final_answer
+    assert r.verdict.winner.split(" / ")[0] == "Demo Plant 10" and "### Ранг" in r.verdict.final_answer
     assert sel["top_n"] == 3 and "«" in r.verdict.final_answer  # цитаты в карточках
     stages = {e["meta"]["stage"] for e in r.transcript if e.get("meta")} or {e.get("stage") for e in r.transcript}
     assert {"frame", "discover", "screen", "sources", "fill", "dispute", "conclusion"} <= stages
@@ -165,7 +165,7 @@ def test_review_gates_pause_and_resume_with_decision():
         asyncio.run(c2.run("Найти производителей", mode="selection"))
     assert e2.value.gate == "shortlist"
     items = e2.value.payload["items"]
-    assert drop not in {x["id"] for x in items} and any(x["name"] == "Demo Plant 9" for x in items)
+    assert drop not in {x["id"] for x in items} and any(x["name"].split(" / ")[0] == "Demo Plant 9" for x in items)
     keep = [x["id"] for x in items][:3]
     c3 = _council("find")
     c3.review_enabled = True
@@ -490,10 +490,15 @@ def test_scouts_search_every_angle(tmp_path):
     fr = SM.S.SelectionFrame(refined_question="q", angles=[f"A{i}" for i in range(3)])
     asyncio.run(SM.discover(c, fr, []))
     who = {n for n, *_ in asked}
-    assert who == {"факт-чек", "поиск Perplexity", "поиск Google", "поиск OpenAI", "поиск Anthropic", "поиск xAI"}
-    assert len(asked) == 3 * 6 and not any(m.startswith("m/") for _, m, *_ in asked)
+    # поиск Google по умолчанию не берём (scouts_skip): дорого и меньше всех новых компаний (заседание 16.11)
+    assert who == {"факт-чек", "поиск Perplexity", "поиск OpenAI", "поиск Anthropic", "поиск xAI"}
+    assert len(asked) == 3 * 5 and not any(m.startswith("m/") for _, m, *_ in asked)
     assert "discover:поиск xAI" not in c.stage_search_engine  # свой поиск xAI
     assert all(e == "low" for n, m, _, e in asked if m.startswith(("google/", "openai/", "anthropic/")))
+    cfg.selection.scouts_skip = []
+    asked.clear()
+    asyncio.run(SM.discover(c, fr, []))
+    assert "поиск Google" in {n for n, *_ in asked}
 
 
 def test_neutral_dispute_is_not_judged():
@@ -606,7 +611,7 @@ def test_named_competitors_do_not_turn_search_into_check():
     names = [o["name"] for o in sel["objects"]]
     assert sel["start"] == "find"
     assert "discover" in {e.get("stage") for e in r.transcript}
-    assert not {"Эвалар", "GLS", "ORZAX", "Demo Plant 7"} & set(names)  # названные «не кандидаты» отброшены
+    assert not {"Эвалар", "GLS", "ORZAX", "Demo Plant 7"} & {n.split(" / ")[0] for n in names}  # названные «не кандидаты» отброшены
     assert names and all(n.startswith("Demo Plant") for n in names)
 
 
@@ -669,3 +674,22 @@ def test_shortlist_diverse_and_added_marked_and_required_angles():
     assert S.origin_label(added) == "добавлен вами" and S.origin_label({"why": "добавлено вами"}) == "добавлен вами"
     fr = S.SelectionFrame.model_validate({"required_angles": ["пробиотики: 益生菌 代工", " "], "angles": ["a"]})
     assert fr.required_angles == ["пробиотики: 益生菌 代工"]
+
+
+def test_screen_by_pages_display_name_and_added_match():
+    """Отсев читает страницы (без поиска); имя — латинское и китайское; добавленный по имени найденный кандидат
+    не дублируется; «преимущество» без правила исключения в отсев не идёт."""
+    from council.modes import selection as SM
+    cs = [S.Candidate(name="BioGrowing Co., Ltd.", local_name="均瑶润盈生物科技（上海）有限公司"),
+          S.Candidate(name="润盈生物工程（上海）有限公司")]
+    assert S.display_name(cs).startswith("BioGrowing Co., Ltd. / ")
+    ents = S.merge_candidates([("a", cs[0]), ("b", S.Candidate(name="均瑶润盈生物工程（上海）有限公司"))])
+    assert len(ents) == 1
+    assert SM._match_entity_strict("Biogrowing", ents) is ents[0]
+    fr = S.SelectionFrame.model_validate({"attributes": [{"name": "Сырьё", "screen": True, "knockout": ""},
+                                                         {"name": "OEM", "kind": "bool", "screen": True, "knockout": "нет"}]})
+    assert [a.screen for a in fr.attributes] == [False, True]
+    c = _council("find")
+    r = asyncio.run(c.run("Найти контрактных производителей софтгелей", mode="selection"))
+    screen_calls = [e for e in r.transcript if (e.get("meta") or {}).get("stage") == "screen" or e.get("stage") == "screen"]
+    assert screen_calls and r.selection["excluded"]

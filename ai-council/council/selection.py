@@ -136,6 +136,16 @@ class SelectionFrame(BaseModel):
             return 0
 
     @model_validator(mode="after")
+    def _screen_rules(self) -> "SelectionFrame":
+        """Отсев — только по жёстким условиям: признак без правила исключения или с правилом «нет данных» в отсев не
+        идёт (16.11 в отсев попало «Собственное сырьё» — по заданию преимущество, а не условие)."""
+        for a in self.attributes:
+            k = (a.knockout or "").strip().lower()
+            if a.screen and (not k or k in ("-", "—", "none", "n/a", "нет данных", "не найдено")):
+                a.screen = False
+        return self
+
+    @model_validator(mode="after")
     def _ids(self) -> SelectionFrame:
         seen: set[str] = set()
         out = []
@@ -505,6 +515,19 @@ def _name_key_ok(n: str) -> bool:
     return len(n) >= (2 if CJK.search(n) else 3)
 
 
+def display_name(cs: list["Candidate"]) -> str:
+    """Имя объекта на экране: самое частое латинское (по нему вы ищете) и китайское рядом — «BioGrowing Co., Ltd. /
+    均瑶润盈生物科技（上海）有限公司». Раньше бралось самое частое короткое, и выходило только китайское — нужный завод
+    в списке было не узнать."""
+    def best(xs: list[str]) -> str:
+        return max(xs, key=lambda x: (sum(1 for y in xs if y == x), -len(x))) if xs else ""
+    lat = best([x.split(" / ")[0].strip() for c in cs for x in [c.name] if x.strip() and not CJK.search(x.split(" / ")[0])])
+    loc = best([x.strip() for c in cs for x in [c.local_name, c.name] if x.strip() and CJK.search(x) and " / " not in x])
+    if lat and loc and norm_name(loc) not in norm_name(lat):
+        return f"{lat} / {loc}"
+    return lat or loc or best([c.name for c in cs])
+
+
 def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None = None) -> list[dict[str, Any]]:
     """Склейка дублей: одно и то же имя (без форм собственности), имя-псевдоним или один сайт компании — один объект.
     found — (направление поиска, кандидат). seeds — объекты, которые дал человек (направление «ваш список»)."""
@@ -549,7 +572,7 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
         angles = sorted({items[i]["angle"] for i in idx})
         seed = next((c.name for i, c in zip(idx, cs) if items[i]["angle"] == "ваш список"), "")
         names = list(dict.fromkeys(x for c in cs for x in [c.name, c.local_name, *c.aliases] if x))
-        main = seed or max((c.name for c in cs), key=lambda x: (sum(1 for c in cs if c.name == x), -len(x)))
+        main = seed or display_name(cs)
         ev = next((c for c in cs if c.url and c.quote), None)
         out.append({
             "id": f"O{n}", "name": main, "names": names,
@@ -1219,7 +1242,9 @@ Build the frame of the study:
   language of the sources — e.g. Chinese terms 产能, 万粒, 保健食品, SC证 — and English), "weight" 0–10 (importance for
   the user's decision; 0 = for information only), "better" (high | low | yes | no | newer | older | "" for text),
   "wanted" (for lists: the items the user needs, e.g. forms), "screen": true for 2–4 quick knock-out attributes
-  (is it a manufacturer, makes the needed forms, has a production licence…) with "knockout" (which value excludes);
+  (is it a manufacturer, makes the needed forms, has a production licence…) with "knockout" (which value excludes,
+  in words). NEVER "screen" an attribute the task calls an advantage, a plus or "not a condition" — only hard
+  requirements;
 - "required_angles": searches the task EXPLICITLY demands — one per category it lists ("a separate search for each
   category"), one per type of object it requires (e.g. universal makers / specialists / makers of their own raw
   materials WITH finished forms), and its example queries grouped by topic. Each is a concrete web-search instruction
@@ -1321,6 +1346,32 @@ Objects:
 For each object and attribute: "verdict" pass | fail | unclear (fail ONLY with a source saying so), "value" (short),
 "url" and a short VERBATIM "quote" from that page. Unknown → unclear. Return JSON: {{"rows": [{{"object": "<name as
 given>", "website": "", "checks": [{{"attr": "A1", "verdict": "pass", "value": "", "url": "", "quote": ""}}]}}]}}"""
+
+
+def screen_read_prompt(frame: SelectionFrame, attrs: list[Attribute], objs: list[dict[str, Any]],
+                       texts: dict[str, list[tuple[str, str]]]) -> str:
+    lines = "\n".join(f"- {o['name']}" + (f" ({', '.join(o['names'][1:4])})" if len(o.get("names") or []) > 1 else "")
+                      for o in objs)
+    pages = "\n\n".join(f"### {o['name']}\n" + "\n".join(f"PAGE {u}\n{t}" for u, t in texts.get(o["id"]) or [])
+                         for o in objs)
+    return f"""Quick screening for a selection study: check ONLY these knock-out attributes for each object, using ONLY the
+page texts below (downloaded by the program; lower-cased).
+
+Study: {frame.refined_question}. Candidate: {frame.object_kind}.
+Attributes:
+{chr(10).join(f"- {a.id} «{a.name}» — excluded if: {a.knockout or 'clearly does not fit'}" for a in attrs)}
+
+Objects:
+{lines}
+
+For each object and attribute: "verdict" pass | fail | unclear. "fail" ONLY when a page clearly proves the exclusion
+rule (a company that ALSO makes raw materials is not excluded for that if it makes finished products too); not on the
+pages → unclear. "value" (short), "url" (the page) and a short VERBATIM "quote" copied from that page. Return JSON:
+{{"rows": [{{"object": "<name as given>", "website": "", "checks": [{{"attr": "A1", "verdict": "pass", "value": "",
+"url": "", "quote": ""}}]}}]}}
+
+PAGES
+{pages}"""
 
 
 def sources_prompt(frame: SelectionFrame, obj: dict[str, Any], attrs: list[Attribute], max_sources: int,
@@ -1475,7 +1526,7 @@ def cell_text(c: dict[str, Any], short: bool = False, attr: "Attribute | None" =
 
 def origin_label(o: dict[str, Any]) -> str:
     """Откуда объект в таблице, если не из поиска: добавлен вами на остановке или назван в задании."""
-    if o.get("added") or o.get("why") == "добавлено вами":
+    if o.get("why") == "добавлено вами":
         return "добавлен вами"
     if o.get("seed"):
         return "из задания"
