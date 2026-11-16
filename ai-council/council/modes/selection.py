@@ -267,7 +267,14 @@ def remap_decision(dec: dict[str, Any] | None, entities: list[dict[str, Any]]) -
             by_name.setdefault(S.norm_name(x), e["id"])
     def fix(i: str) -> str | None:
         n = names.get(i)
-        return by_name.get(S.norm_name(n)) if n else i
+        if not n:
+            return i
+        # имя на экране — «латинское / китайское»: ищем по целому и по каждой части
+        for x in [n, *n.split(" / ")]:
+            hit = by_name.get(S.norm_name(x))
+            if hit:
+                return hit
+        return None
     out = dict(dec)
     for k in ("drop", "keep"):
         if dec.get(k) is not None:

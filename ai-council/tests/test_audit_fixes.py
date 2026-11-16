@@ -108,4 +108,6 @@ def test_gate_decision_follows_names_when_ids_shift():
     dec = {"keep": ["O1"], "drop": ["O2"], "_names": {"O1": "BioGrowing Co., Ltd.", "O2": "Alpha"}}
     out = SM.remap_decision(dec, ents)
     assert out["keep"] == ["O5"] and out["drop"] == ["O6"]
-    assert SM.remap_decision({"keep": ["O1"]}, ents) == {"keep": ["O1"]}  # старые решения без названий — как были
+    assert SM.remap_decision({"keep": ["O1"]}, ents) == {"keep": ["O1"]}
+    two = SM.remap_decision({"keep": ["O9"], "_names": {"O9": "BioGrowing Co., Ltd. / 均瑶润盈"}}, ents)
+    assert two["keep"] == ["O5"]  # старые решения без названий — как были
