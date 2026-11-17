@@ -216,3 +216,18 @@ def test_required_coverage_and_group_merge():
     assert hints and set(hints[0]["ids"]) == {"O1", "O2"}
     merged = S.merge_entities(ents, [["O1", "O2"]])
     assert len(merged) == 1 and set(merged[0]["names"]) == {"BioGrowing", "均瑶健康"} and len(merged[0]["angles"]) == 2
+
+
+def test_rule_less_screen_attribute_is_preference():
+    """Признак отсева без правила исключения не исключает; «подходит» — по условиям с правилом."""
+    hard = S.Attribute(id="A1", name="Площадка", kind="text", screen=True, knockout="вне Китая")
+    soft = S.Attribute(id="A2", name="Собственное сырьё", kind="text", screen=True, knockout="")
+    q = "сырьё закупается по всему миру у поставщиков"
+    r = S.screen_decide([S.ScreenCheck(attr="A1", verdict="pass", value="Гуанчжоу"),
+                         S.ScreenCheck(attr="A2", verdict="fail", value="закупает", quote=q)], [hard, soft])
+    assert r[0] == "pass"
+    r = S.screen_decide([S.ScreenCheck(attr="A1", verdict="unclear"),
+                         S.ScreenCheck(attr="A2", verdict="fail", value="закупает", quote=q)], [hard, soft])
+    assert r[0] == "unclear" and "Собственное" not in r[1]
+    assert "PREFERENCE" in S.screen_read_prompt(S.SelectionFrame(refined_question="q"), [hard, soft],
+                                                [{"id": "O1", "name": "X"}], {"O1": []})

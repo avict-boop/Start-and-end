@@ -215,7 +215,7 @@ function renderReview(s) {
         <td><div><b>${esc(a.name)}</b></div>
           <div class="sel-effect small">${selEffect(a)}</div>
           <div class="muted small"><span class="kind-inline">${esc(SEL_KIND[a.kind] || a.kind)}${a.unit || a.evidence ? " · " : ""}</span>${a.unit ? `в единицах: ${esc(a.unit)}` : ""}${a.evidence ? `<span class="hide-sm">${a.unit ? " · " : ""}доказательство: ${esc(a.evidence)}</span>` : ""}</div>
-          ${a.knockout ? `<div class="small sel-ko">Отсев выбивает, если: ${esc(a.knockout)}</div>` : ""}</td>
+          ${a.knockout ? `<div class="small sel-ko">Отсев выбивает, если: ${esc(a.knockout)}</div>` : a.screen ? '<div class="small muted">в отсеве без правила исключения — только предпочтение: подтверждённый поднимает кандидата, никого не выбрасывает</div>' : ""}</td>
         <td class="c-kind muted small">${esc(SEL_KIND[a.kind] || a.kind)}</td>
         <td class="c-w">${a.kind === "text" ? '<span class="muted small" title="Текст не сравнивается — на ранг не влияет">—</span>'
           : `<input type="number" min="0" max="10" step="1" value="${Number(a.weight)}" data-w="${esc(a.id)}" class="sel-w" aria-label="Вес «${esc(a.name)}»">`}

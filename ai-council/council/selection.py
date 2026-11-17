@@ -663,20 +663,36 @@ def completeness(entities: list[dict[str, Any]], n_angles: int) -> dict[str, Any
             "singletons": f1, "doubles": f2}
 
 
+def is_knockout(a: Attribute) -> bool:
+    """Есть ли у признака отсева правило исключения (иначе это предпочтение, а не условие)."""
+    k = (a.knockout or "").strip().lower()
+    return bool(k) and k not in ("-", "—", "none", "n/a", "нет данных", "не найдено")
+
+
+def _screen_rule(a: Attribute) -> str:
+    if is_knockout(a):
+        return f"excluded if: {a.knockout}"
+    return "a PREFERENCE, not a requirement — never \"fail\": \"pass\" if the page confirms it, else \"unclear\""
+
+
 def screen_decide(checks: list[ScreenCheck], attrs: list[Attribute]) -> tuple[str, str]:
     """Отсев: кандидат исключается только при явном «не подходит» хотя бы по одному признаку отсева — с дословной
     цитатой источника (отсутствие сведений — «нет данных», «не найдено» — не повод исключать); все «подходит» —
     проходит; иначе — сомнительный (не выбрасывается). Найдена ли цитата на странице, проверяет программа после."""
     want = {a.id for a in attrs if a.screen}
+    # признак отсева без правила исключения — «предпочтение»: исключить по нему нельзя, подтверждённый только
+    # поднимает кандидата в списке (16.11 трое исключены за «сырьё закупает», а по заданию это не условие)
+    hard = {a.id for a in attrs if a.screen and is_knockout(a)}
     got = {c.attr: c for c in checks if c.attr in want}
-    fails = [c for c in got.values() if c.verdict == "fail" and len(c.quote.strip()) >= 8
+    fails = [c for c in got.values() if c.attr in hard and c.verdict == "fail" and len(c.quote.strip()) >= 8
              and not UNKNOWN.search(c.value or "") and not UNKNOWN.search(c.quote)]
     if fails:
         names = {a.id: a.name for a in attrs}
         return "fail", "; ".join(f"{names.get(c.attr, c.attr)}: {c.value or c.quote}"[:200] for c in fails)
-    if want and all(got.get(a) and got[a].verdict == "pass" for a in want):
+    need = hard or want  # подходит — подтверждены все условия (а нет условий — все отмеченные признаки)
+    if need and all(got.get(a) and got[a].verdict == "pass" for a in need):
         return "pass", ""
-    unclear = [a.name for a in attrs if a.id in want and not (got.get(a.id) and got[a.id].verdict == "pass")]
+    unclear = [a.name for a in attrs if a.id in need and not (got.get(a.id) and got[a.id].verdict == "pass")]
     return "unclear", "не выяснено: " + ", ".join(unclear)
 
 
@@ -1408,7 +1424,7 @@ def screen_prompt(frame: SelectionFrame, attrs: list[Attribute], objs: list[dict
 
 Study: {frame.refined_question}. Candidate: {frame.object_kind}.
 Attributes:
-{chr(10).join(f"- {a.id} «{a.name}» — excluded if: {a.knockout or 'clearly does not fit'}" for a in attrs)}
+{chr(10).join(f"- {a.id} «{a.name}» — {_screen_rule(a)}" for a in attrs)}
 
 Objects:
 {lines}
@@ -1423,8 +1439,7 @@ def chair_screen_rules(frame: "SelectionFrame") -> "SelectionFrame":
     идёт (16.11 в отсев попало «Собственное сырьё» — по заданию преимущество, а не условие). Только к рамке
     председателя: признаки, отмеченные для отсева вами на остановке, остаются в отсеве."""
     for a in frame.attributes:
-        k = (a.knockout or "").strip().lower()
-        if a.screen and (not k or k in ("-", "—", "none", "n/a", "нет данных", "не найдено")):
+        if a.screen and not is_knockout(a):
             a.screen = False
     return frame
 
@@ -1440,7 +1455,7 @@ page texts below (downloaded by the program; lower-cased).
 
 Study: {frame.refined_question}. Candidate: {frame.object_kind}.
 Attributes:
-{chr(10).join(f"- {a.id} «{a.name}» — excluded if: {a.knockout or 'clearly does not fit'}" for a in attrs)}
+{chr(10).join(f"- {a.id} «{a.name}» — {_screen_rule(a)}" for a in attrs)}
 
 Objects:
 {lines}
