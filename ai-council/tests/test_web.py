@@ -872,3 +872,22 @@ def test_read_token_only_reads(tmp_path, monkeypatch):
         assert c.post("/api/system/update", headers=h).status_code == 403
         assert c.get("/api/sessions", headers={"Authorization": "Bearer wrong"}).status_code == 401
         assert c.get("/api/sessions").status_code == 401
+
+
+def test_selection_resume_uses_current_selection_settings(client):
+    """Поменяли настройку «Отбора» на паузе — при продолжении она действует (а не та, что была при запуске)."""
+    import json as _json
+    from pathlib import Path as _P
+    r = client.post("/api/sessions", json={"question": "Найти контрактных производителей софтгелей", "mode": "selection",
+                                           "mock": True, "members": ["a", "b", "c"], "chair": "a",
+                                           "selection": {"start": "find", "review": ["shortlist"]}})
+    sid = r.json()["id"]
+    assert read_events(client, sid)[-1]["type"] == "paused"
+    s = client.get("/api/settings").json()["settings"]
+    s.setdefault("selection", {})["max_candidates"] = 0
+    assert client.put("/api/settings", json=s).status_code == 200, "настройки не сохранились"
+    assert client.post(f"/api/sessions/{sid}/resume", json={}).status_code == 200
+    read_events(client, sid)
+    spec = _json.loads((_P(client.app_state_runs) / "paused" / sid / "session.json").read_text(encoding="utf-8"))
+    assert spec["config"]["selection"]["max_candidates"] == 0
+    assert spec["config"]["selection"]["start"] == "find"  # заданное этому заседанию при запуске — сохранено

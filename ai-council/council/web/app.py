@@ -1275,6 +1275,14 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         if cp.budget_short(spent):
             raise HTTPException(400, f"бюджета ${cp.budget:g} не хватает (потрачено ${spent:.2f}, следующий запрос не "
                                      "помещается) — укажите бюджет больше")
+        if (cp.spec.get("mode") or "") == "selection" and isinstance(cp.spec.get("config"), dict):
+            # «Отбор» при продолжении берёт ТЕКУЩИЕ настройки «Отбора» (предел кандидатов, отсев, размер таблицы…),
+            # а не те, что были при запуске: поменяли настройку на паузе — она действует (17.11 «без предела
+            # кандидатов» не срабатывало — заседание помнило свои 600). Настройки, заданные этому заседанию
+            # при запуске, сохраняются поверх.
+            sel = base_config().selection.model_dump(mode="json")
+            sel.update((cp.spec.get("request") or {}).get("selection_overrides") or {})
+            cp.update(config={**cp.spec["config"], "selection": sel})
         client = make_client(cp.config(), bool(cp.spec.get("mock")))
         if retry_failed:  # не успели ответить — дадим вдвое больше времени (до конца заседания)
             client.patience = 2.0
