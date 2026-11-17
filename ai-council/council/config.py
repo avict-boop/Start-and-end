@@ -261,7 +261,21 @@ class SelectionConfig(BaseModel):
     # Кандидат идёт в таблицу, если «да» сказал хоть кто-то — эксперт или проверка по страницам; в отчёте видно, кто
     # именно. Крупные заводы, о которых главная страница молчит, отсев иначе оставлял «не выяснено»
     expert: bool = True
-    expert_model: str = ""  # имя участника; пусто — председатель
+    expert_model: str = ""  # прежняя настройка (один участник); experts важнее
+    # эксперты — любые модели OpenRouter («deepseek/deepseek-chat», «openai/gpt-5»…), сколько угодно; пусто —
+    # председатель. «Да» хоть одного — кандидат подходит
+    experts: list[str] = Field(default_factory=list)
+
+    @field_validator("experts", mode="before")
+    @classmethod
+    def _experts(cls, v: Any) -> list[str]:
+        if isinstance(v, str):
+            v = v.replace(",", "\n").splitlines()
+        out = [str(x).strip() for x in v or [] if str(x).strip()]
+        bad = [x for x in out if "/" not in x or " " in x]
+        if bad:
+            raise ValueError(f"эксперт — модель OpenRouter вида «поставщик/модель»: {', '.join(bad)}")
+        return list(dict.fromkeys(out))
     max_deep: int = Field(default=40, ge=0, le=200)  # 0 — без предела: всех прошедших отсев и сомнительных
     top_n: int = Field(default=0, ge=0, le=100)
     # Заполнение: две модели независимо читают скачанные страницы; пусто — две самые дешёвые из участников
@@ -468,7 +482,7 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
                      "scouts_skip", "screen_by", "screen_chars", "scouts_required_only", "discover_search_model",
-                     "shortlist_only_pass", "expert", "expert_model", "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
+                     "shortlist_only_pass", "expert", "expert_model", "experts", "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
                      "search_results", "search_reasoning", "discover_waves", "lists", "list_chars", "list_reader", "second_read", "judges_on_demand", "skip_neutral_disputes",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",

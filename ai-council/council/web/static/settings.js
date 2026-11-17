@@ -357,6 +357,8 @@ function renderSettings() {
         <label class="field"><span>Предел папки копий страниц, МБ</span><input type="number" data-sn="snapshot_mb" min="10" max="10000" value="${v("snapshot_mb", 300)}" ${ro}></label>
       </div>
       <label class="switch"><input type="checkbox" data-sb="expert" ${v("expert", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Мнение эксперта при отсеве</b><small>председатель (большая модель) по своей памяти, без поиска, говорит о каждом кандидате «подходит / нет / не знает» (≈ $0,5–1,5 на 700 кандидатов). В таблицу идёт тот, кому «да» сказал хоть кто-то — эксперт или проверка по страницам; в отчёте видно, кто именно</small></span></label>
+      <label class="field"><span>Эксперты по умолчанию</span><textarea data-sx="experts" rows="2" placeholder="модели OpenRouter, по одной в строке; пусто — председатель" ${ro}>${esc((v("experts", []) || []).join("\n"))}</textarea>
+        <small class="hint">Любые модели из каталога OpenRouter, сколько угодно (например openai/gpt-5, deepseek/deepseek-chat). На экране вопроса можно выбрать других на одно заседание.</small></label>
       <label class="switch"><input type="checkbox" data-sb="shortlist_only_pass" ${v("shortlist_only_pass", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>В таблицу — только подтверждённые отсевом</b><small>подробная проверка — самый дорогой этап: «не выяснено» добавляйте на остановке вручную; где по категории подтверждённых мало, программа добавит лучших «не выяснено» сама</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="discover_search_model" ${v("discover_search_model", false) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Модель поиска тоже ищет кандидатов</b><small>выключено — ищут разведчики (дешёвый Sonar, Haiku, GPT mini); по разбору модель поиска (Sonar Pro) давала мало новых компаний за заметные деньги</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="no_deep_limit" ${v("max_deep", 40) === 0 ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Проверять подробно всех</b><small>в таблицу идут все прошедшие отсев и сомнительные, без предела «Проверять подробно» и числа из задания; подробная проверка — около $0,05 за кандидата (500 кандидатов ≈ $25), на остановке «короткий список» видна точная оценка</small></span></label>
@@ -432,6 +434,7 @@ function selDepends() {
   const chk = (s) => { const el = document.querySelector(s); return !!(el && el.checked); };
   off('[data-ss="screen_by"]', !chk('[data-sb="screen"]'), "не действует: отсев выключен");
   off('[data-sb="expert"]', !chk('[data-sb="screen"]'), "не действует: отсев выключен");
+  off('[data-sx="experts"]', !chk('[data-sb="screen"]') || !chk('[data-sb="expert"]'), "не действует: мнение эксперта выключено");
   const lists = document.querySelector('[data-sn="lists"]');
   off('[data-sn="list_chars"]', !!lists && Number(lists.value || 0) === 0, "не действует: готовые списки не ищутся (0)");
   off('[data-sn="max_candidates"]', chk('[data-sb="no_cand_limit"]'), "не действует: включено «Без предела кандидатов»");
@@ -510,6 +513,10 @@ function bindSettings() {
   selDepends();
   for (const el of $("setBody").querySelectorAll("[data-st]")) el.addEventListener("input", () => { d.selection[el.dataset.st] = el.value.trim(); setDirty(); });
   for (const el of $("setBody").querySelectorAll("[data-sl]")) el.addEventListener("input", () => { d.selection[el.dataset.sl] = el.value.split(",").map((x) => x.trim()).filter(Boolean); setDirty(); });
+  for (const el of $("setBody").querySelectorAll("[data-sx]")) el.addEventListener("change", () => {
+    d.selection[el.dataset.sx] = el.value.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
+    setDirty();
+  });
   for (const el of $("setBody").querySelectorAll("[data-sb]")) el.addEventListener("change", () => {
     if (el.dataset.sb === "second_read_need") d.selection.second_read = el.checked ? "need" : "always";
     else if (el.dataset.sb === "no_deep_limit") {

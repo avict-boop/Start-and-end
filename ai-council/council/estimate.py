@@ -305,9 +305,21 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
         inp2, out2 = 900, 500
         sites_row = MemberEstimate("поиск сайтов", "perplexity/sonar", calls2, calls2 * inp2, calls2 * out2,
                                    (calls2 * (inp2 * p2.prompt + out2 * p2.completion + p2.request)) if p2 else None)
-    if start != "check" and sc.screen and sc.expert:  # эксперт по памяти: пачки по 80 названий
-        ex = next((m for m in members if m.name == sc.expert_model), None) or chair
-        add(ex, -(-cands // 80), 2500 + 80 * 45, 80 * 30 + 2000)
+    expert_rows: list[MemberEstimate] = []
+    if start != "check" and sc.screen and sc.expert:  # эксперты по памяти: пачки по 80 названий
+        e_calls, e_in, e_out = -(-cands // 80), 2500 + 80 * 45, 80 * 30 + 2000
+        for mid in sc.experts:
+            mem = next((m for m in members if m.model == mid), None)
+            if mem is not None:
+                add(mem, e_calls, e_in, e_out)
+                continue
+            pe = price_of(mid)
+            expert_rows.append(MemberEstimate(f"эксперт {mid.split('/')[-1]}", mid, e_calls, e_calls * e_in,
+                                              e_calls * e_out,
+                                              e_calls * (e_in * pe.prompt + e_out * pe.completion) if pe else None))
+        if not sc.experts:
+            ex = next((m for m in members if m.name == sc.expert_model), None) or chair
+            add(ex, e_calls, e_in, e_out)
     if start != "check" and sc.screen and sc.screen_by == "pages" and fillers:  # отсев по скачанным страницам
         add(fillers[0], -(-cands // sc.screen_batch), 1500 + sc.screen_batch * sc.screen_chars // 3, 400 * sc.screen_batch)
     page_in = int(sc.object_chars // 3 * 0.8) + 1800     # страницы без повторов (меню, подвалы) — примерно −20%
@@ -316,7 +328,7 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
     need = len(judges) // 2 + 1 if sc.judges_on_demand and len(judges) > 2 else len(judges)
     for i, m in enumerate(judges):                     # спорное: остальные судьи — только где первые разошлись (~40%)
         add(m, disputes if i < need else max(1, round(disputes * 0.4)), 3500, 600)
-    out = [sites_row] if sites_row else []
+    out = ([sites_row] if sites_row else []) + expert_rows
     for m in members:
         if m.name not in tokens:
             continue

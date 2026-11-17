@@ -153,6 +153,8 @@ button.pill:disabled { opacity: 1; cursor: default; }
 .pill.clickable { cursor: pointer; }
 .chips { display: flex; flex-wrap: wrap; gap: .4rem; }
 .chip { font-size: .85rem; padding: .2rem .65rem; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); display: inline-flex; align-items: center; gap: .35rem; }
+.row-inline { display: flex; gap: .4rem; align-items: center; margin-top: .4rem; }
+.row-inline input { flex: 1; min-width: 0; font-size: 16px; }
 .chip.done { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 .chip.fail { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
 .chip.work { border-color: var(--accent); color: var(--accent); }

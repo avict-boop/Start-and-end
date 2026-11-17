@@ -238,11 +238,11 @@ function renderReview(s) {
         return `<label class="sel-item"><input type="checkbox" data-id="${esc(x.id)}" ${rv.gate === "candidates" || short.has(x.id) ? "checked" : ""}>
           <span><b>${esc(x.name)}</b>${(x.names || []).length > 1 ? ` <span class="muted small">${esc(x.names.slice(1, 4).join(", "))}</span>` : ""}
           ${x.merged ? '<span class="badge plain">склеено</span>' : ""}${x.seed ? '<span class="badge plain">ваш список</span>' : ""}
-          ${scr ? `<span class="badge ${scr[0]}">${scr[1]}</span>` : ""}${x.expert && x.expert.verdict === "yes" ? '<span class="badge ok">эксперт: да</span>' : x.expert && x.expert.verdict === "no" ? '<span class="badge plain">эксперт: нет</span>' : ""}
+          ${scr ? `<span class="badge ${scr[0]}">${scr[1]}</span>` : ""}${x.expert && x.expert.verdict === "yes" ? `<span class="badge ok">эксперты: да ${(x.expert.yes || []).length} из ${(x.expert.yes || []).length + (x.expert.no || []).length + (x.expert.unknown || []).length}</span>` : x.expert && x.expert.verdict === "no" ? '<span class="badge plain">эксперты: нет</span>' : ""}
           <small class="muted">${[x.website ? esc(x.website) : "", x.location ? esc(x.location) : "",
             (x.models || []).length ? `нашли ${x.models.length} ${plural(x.models.length, "источник", "источника", "источников")}: ${esc(x.models.map((m) => memberName(s, m)).join(", "))}`
               : (x.angles || []).length ? `найден ${x.angles.length} ${plural(x.angles.length, "раз", "раза", "раз")}` : ""].filter(Boolean).join(" · ")}</small>
-          ${x.screen && x.screen.reason ? `<small class="muted">${esc(x.screen.reason)}</small>` : x.quote ? `<small class="muted">«${esc(x.quote.slice(0, 160))}»</small>` : ""}${x.expert && x.expert.knows ? `<small class="muted">эксперт: ${esc(x.expert.knows)}</small>` : ""}</span></label>`;
+          ${x.screen && x.screen.reason ? `<small class="muted">${esc(x.screen.reason)}</small>` : x.quote ? `<small class="muted">«${esc(x.quote.slice(0, 160))}»</small>` : ""}${x.expert && x.expert.knows ? `<small class="muted">эксперты: ${esc(x.expert.knows)}</small>` : ""}</span></label>`;
       }).join("")}</div>
       <p class="small" id="rvCount" aria-live="polite"></p>
       <label class="field"><span>Добавить своих (по одному в строке)</span><textarea id="rvAdd" rows="3"></textarea></label>`;
@@ -520,6 +520,40 @@ function selCell(id, oid, aid) {
 
 /* ---------------------------------------------------------------- экран вопроса */
 
+/* эксперты на это заседание: список моделей OpenRouter (пусто — как в настройках) */
+let selExperts = [];
+function selExpertsDraw() {
+  const box = $("selExperts");
+  if (!box) return;
+  box.innerHTML = selExperts.length ? selExperts.map((m, i) => `<span class="chip">${esc(m)} <button type="button" class="link small" data-rmx="${i}" aria-label="Убрать ${esc(m)}">×</button></span>`).join("")
+    : '<span class="muted small">как в настройках</span>';
+  box.querySelectorAll("[data-rmx]").forEach((b) => b.addEventListener("click", () => { selExperts.splice(Number(b.dataset.rmx), 1); selExpertsDraw(); if (window.formChanged) formChanged(); }));
+}
+async function selModelsLoad() {
+  if ($("modelList") && $("modelList").options.length) return;
+  try {
+    const r = await api("/api/models?limit=2000");
+    if (r.available) $("modelList").innerHTML = r.items.map((m) => `<option value="${esc(m.id)}">${esc(m.date)} · $${m.prompt}/$${m.completion}</option>`).join("");
+  } catch { /* без каталога — вводят вручную */ }
+}
+function selExpertAdd() {
+  const inp = $("selExpertAdd");
+  const v = inp.value.trim();
+  if (!v) return;
+  if (!v.includes("/") || /\s/.test(v)) { toast("Модель OpenRouter вида «поставщик/модель», например deepseek/deepseek-chat"); return; }
+  if (!selExperts.includes(v)) selExperts.push(v);
+  inp.value = "";
+  selExpertsDraw();
+  if (window.formChanged) formChanged();
+}
+document.addEventListener("DOMContentLoaded", () => {
+  if (!$("selExpertAdd")) return;
+  $("selExpertAdd").addEventListener("focus", selModelsLoad, { once: true });
+  $("selExpertAdd").addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); selExpertAdd(); } });
+  $("selExpertAddBtn").addEventListener("click", selExpertAdd);
+  selExpertsDraw();
+});
+
 function selectionRequest() {
   const num = (id) => { const v = $(id).value.trim(); return v === "" ? null : Math.max(0, Number(v) || 0); };
   const review = [["selRevFrame", "frame"], ["selRevCand", "candidates"], ["selRevShort", "shortlist"]]
@@ -528,6 +562,7 @@ function selectionRequest() {
   const sl = num("selShortlist"), top = num("selTop");
   if (sl !== null) out.shortlist = sl;
   if (top !== null) out.top_n = top;
+  if (selExperts.length) out.experts = [...selExperts];
   return out;
 }
 
@@ -535,6 +570,8 @@ function selectionRestore(o) {
   if (o.start) $("selStart").value = o.start;
   $("selShortlist").value = o.shortlist ?? "";
   $("selTop").value = o.top_n ?? "";
+  selExperts = [...(o.experts || [])];
+  selExpertsDraw();
   if (o.review) {
     $("selRevFrame").checked = o.review.includes("frame");
     $("selRevCand").checked = o.review.includes("candidates");

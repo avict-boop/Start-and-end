@@ -372,6 +372,14 @@ Companies:
 Return JSON: {{"items": [{{"n": 1, "verdict": "yes | no | unknown", "knows": ""}}]}} — every number."""
 
 
+def expert_votes(o: dict[str, Any]) -> str:
+    """«да — DeepSeek, GPT; нет — Qwen; не знает — Claude» (пусто — эксперты не спрашивались)."""
+    ex = o.get("expert") or {}
+    parts = [f"{w} — {', '.join(ex.get(k) or [])}" for k, w in (("yes", "да"), ("no", "нет"), ("unknown", "не знает"))
+             if ex.get(k)]
+    return "; ".join(parts)
+
+
 def agree_label(o: dict[str, Any]) -> str:
     """Кто подтвердил кандидата: эксперт (по памяти) и/или проверка по страницам. Пусто — эксперт не спрашивался."""
     ex = (o.get("expert") or {}).get("verdict")
@@ -1896,7 +1904,9 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
                          if origin_label(o) == "добавлен вами" else f"*{origin_label(o).capitalize()}.*")
         if agree_label(o):
             kn = (o.get("expert") or {}).get("knows") or ""
-            lines.append(f"*Отсев: {agree_label(o)}.*" + (f" Эксперт: {esc(kn)}" if kn else ""))
+            votes = expert_votes(o)
+            lines.append(f"*Отсев: {agree_label(o)}.*" + (f" Эксперты: {esc(votes)}." if votes else "")
+                         + (f" {esc(kn)}" if kn else ""))
         if o.get("website"):
             lines.append(f"Сайт: {o['website']}")
         for a in attrs:
@@ -1925,6 +1935,13 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
     if sel.get("unchecked"):
         out.append("### Не удалось проверить\n\nПо этим объектам не нашлось ни одного значения (сайт не открылся, "
                    "поиск ничего не вернул) — в ранг они не вошли:\n\n" + "\n".join(f"- {esc(x['name'])}" for x in sel["unchecked"]))
+    if sel.get("experts"):
+        out.append("### Эксперты: чьи «да» подтвердила проверка по страницам\n\n"
+                   "Эксперт отвечает по памяти, без поиска; «да» хоть одного — кандидат подходит. Подтверждено — "
+                   "проверка по страницам тоже сказала «да». Так видно, каким экспертам доверять в следующий раз.\n\n"
+                   "| Эксперт | Модель | «Да» | Подтвердила проверка | «Нет» | Не знает |\n|---|---|---|---|---|---|\n"
+                   + "\n".join(f"| {esc(x['name'])} | {esc(x['model'])} | {x['yes']} | {x['confirmed']} | {x['no']} | "
+                                f"{x['unknown']} |" for x in sel["experts"]))
     if sel.get("pending"):
         pend = sel["pending"]
         npass = sum(1 for x in pend if x.get("passed"))

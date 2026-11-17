@@ -380,5 +380,40 @@ def test_expert_in_run_mock(tmp_path):
              "screen": {"result": "unclear", "checks": []}} for i in range(1, 7)]
     asyncio.run(SM.expert_opinion(c, S.SelectionFrame(refined_question="q"), [], ents))
     yes = [e["id"] for e in ents if e["expert"]["verdict"] == "yes"]
-    assert yes == ["O3", "O6"] and all(e["expert"]["by"] == "a" for e in ents)
+    assert yes == ["O3", "O6"] and ents[2]["expert"]["yes"] == ["a"]
     assert sorted(ents, key=SM._order)[0]["id"] in yes
+
+
+def test_several_experts_any_yes(tmp_path):
+    """Несколько экспертов — любые модели OpenRouter: «да» хоть одного — подходит; видно, кто что сказал; счёт
+    по экспертам и сколько их «да» подтвердила проверка."""
+    from council.config import CouncilConfig, SelectionConfig
+    from council.mock import MockClient
+    from council.modes import selection as SM
+    from council.session import Council
+    import pytest
+    with pytest.raises(ValueError):
+        SelectionConfig(experts=["gpt 5"])
+    assert SelectionConfig(experts="x/a, y/b\nx/a").experts == ["x/a", "y/b"]
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path),
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "ab"],
+                                        "selection": {"experts": ["m/b", "il/model-x"]}})
+    c = Council(cfg, MockClient(delay=0))
+    whos = SM.expert_members(c)
+    assert [m.name for m in whos] == ["b", "эксперт model-x"]
+
+    async def ask(m, stage, prompt, schema, meta=None, **kw):
+        assert stage == "expert"
+        v = {"b": ["yes", "no"], "эксперт model-x": ["no", "unknown"]}[m.name]
+        return S.Expert(items=[S.ExpertItem(n=1, verdict=v[0], knows=f"{m.name} знает"), S.ExpertItem(n=2, verdict=v[1])])
+    c._ask = ask
+    ents = [{"id": "O1", "name": "Alpha", "angles": [], "screen": {"result": "pass", "checks": []}},
+            {"id": "O2", "name": "Beta", "angles": [], "screen": {"result": "unclear", "checks": []}}]
+    st = asyncio.run(SM.expert_opinion(c, S.SelectionFrame(refined_question="q"), [], ents))
+    assert ents[0]["expert"]["verdict"] == "yes" and ents[0]["expert"]["no"] == ["эксперт model-x"]
+    assert ents[1]["expert"]["verdict"] == "no"
+    assert S.expert_votes(ents[0]) == "да — b; нет — эксперт model-x"
+    assert st[0] == {"name": "b", "model": "m/b", "yes": 1, "no": 1, "unknown": 0, "confirmed": 1}
+    md = S.report_md({"frame": {}, "attributes": [], "objects": [], "table": {}, "ranking": [], "top_n": 0,
+                      "experts": st}, None)
+    assert "Эксперты: чьи «да»" in md and "il/model-x" in md

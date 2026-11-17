@@ -290,27 +290,52 @@ def _order(e: dict[str, Any]) -> tuple:
     """Порядок короткого списка: ваш список; подходящие (проверка или эксперт), сначала подтверждённые обоими;
     затем по весу подтверждённого и числу нашедших поисков."""
     both = (e.get("screen") or {}).get("result") == "pass" and (e.get("expert") or {}).get("verdict") == "yes"
-    return (not e.get("seed"), not S.suits(e), not both, (e.get("screen") or {}).get("result") != "pass",
-            -screen_passes(e), -len(e.get("angles") or []))
+    return (not e.get("seed"), not S.suits(e), not both, -len((e.get("expert") or {}).get("yes") or []),
+            (e.get("screen") or {}).get("result") != "pass", -screen_passes(e), -len(e.get("angles") or []))
 
 
-def expert_member(c: Council) -> MemberConfig:
+def expert_members(c: Council) -> list[MemberConfig]:
+    """Эксперты: модели из настройки experts (участник совета с той же моделью — он сам, иначе отдельный «эксперт
+    <модель>»); пусто — участник из expert_model или председатель."""
     sc = c.cfg.selection
+    out: list[MemberConfig] = []
+    for mid in sc.experts:
+        m = next((x for x in c.cfg.active_members if x.model == mid), None)
+        if m is None:
+            m = MemberConfig(name=f"эксперт {mid.split('/')[-1]}", model=mid, max_tokens=12000, temperature=0.2)
+            c.stats.setdefault(m.name, MemberStats())
+        out.append(m)
+    if out:
+        return out
     m = next((x for x in c.cfg.active_members if x.name == sc.expert_model), None) if sc.expert_model else None
-    return m or c.cfg.member(c.cfg.chair)
+    return [m or c.cfg.member(c.cfg.chair)]
+
+
+def expert_stats(entities: list[dict[str, Any]], whos: list[MemberConfig]) -> list[dict[str, Any]]:
+    """Сколько «да» у каждого эксперта и сколько из них подтвердила проверка по страницам."""
+    out = []
+    for m in whos:
+        v = {k: [e for e in entities if m.name in ((e.get("expert") or {}).get(k) or [])] for k in ("yes", "no", "unknown")}
+        out.append({"name": m.name, "model": m.model, "yes": len(v["yes"]), "no": len(v["no"]),
+                    "unknown": len(v["unknown"]),
+                    "confirmed": sum(1 for e in v["yes"] if (e.get("screen") or {}).get("result") == "pass")})
+    return out
 
 
 async def expert_opinion(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute],
-                         entities: list[dict[str, Any]]) -> None:
-    """Эксперт (большая модель, без поиска, по памяти) — о каждом кандидате: «да / нет / не знаю» и что знает.
-    Пишет e["expert"]. Сбой — без мнения эксперта (заседание идёт дальше)."""
+                         entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Эксперты (модели по выбору, без поиска, по памяти) — о каждом кандидате: «да / нет / не знаю» и что знают.
+    Пишет e["expert"]: verdict («да» хоть одного — yes; иначе «нет» хоть одного — no; иначе unknown), кто что сказал,
+    что знают. Сбой эксперта — без его мнения (заседание идёт дальше). Возвращает счёт по экспертам."""
     if not entities:
-        return
-    who = expert_member(c)
-    c._emit("stage", stage="screen", title=f"Мнение эксперта ({who.name}): {len(entities)} кандидатов, по памяти, без поиска")
+        return []
+    whos = expert_members(c)
+    c._emit("stage", stage="screen", title=f"Мнение экспертов ({', '.join(m.name for m in whos)}): {len(entities)} "
+                                          "кандидатов, по памяти, без поиска")
     batches = [entities[i:i + S.EXPERT_BATCH] for i in range(0, len(entities), S.EXPERT_BATCH)]
+    votes: dict[str, dict[str, dict[str, str]]] = {e["id"]: {} for e in entities}
 
-    async def one(b: list[dict[str, Any]]) -> int:
+    async def one(who: MemberConfig, b: list[dict[str, Any]]) -> int:
         try:
             r = await c._ask(who, "expert", S.expert_prompt(frame, attrs, b), S.Expert,
                              meta={**META, "objects": [e["id"] for e in b]}, max_tokens=12000)
@@ -325,23 +350,33 @@ async def expert_opinion(c: Council, frame: S.SelectionFrame, attrs: list[S.Attr
         n = 0
         for it in r.items:
             if 1 <= it.n <= len(b):
-                b[it.n - 1]["expert"] = {"verdict": it.verdict, "knows": it.knows[:300], "by": who.name}
+                votes[b[it.n - 1]["id"]][who.name] = {"verdict": it.verdict, "knows": it.knows[:300]}
                 n += 1
         for e in b:
-            e.setdefault("expert", {"verdict": "unknown", "knows": "", "by": who.name})
+            votes[e["id"]].setdefault(who.name, {"verdict": "unknown", "knows": ""})
         return n
 
-    for r in await asyncio.gather(*(one(b) for b in batches), return_exceptions=True):
+    jobs = [one(m, b) for m in whos for b in batches]
+    for r in await asyncio.gather(*jobs, return_exceptions=True):
         if isinstance(r, BaseException):
             raise r
+    for e in entities:
+        v = votes[e["id"]]
+        by = {k: [n for n, x in v.items() if x["verdict"] == k] for k in ("yes", "no", "unknown")}
+        verdict = "yes" if by["yes"] else "no" if by["no"] else "unknown" if v else ""
+        if not verdict:
+            continue
+        knows = "; ".join(f"{n}: {v[n]['knows']}" for n in by["yes"] + by["no"] if v[n]["knows"])
+        e["expert"] = {"verdict": verdict, **by, "knows": knows[:600]}
     cnt = {k: sum(1 for e in entities if (e.get("expert") or {}).get("verdict") == k) for k in ("yes", "no", "unknown")}
     only = sum(1 for e in entities if (e.get("expert") or {}).get("verdict") == "yes"
                and (e.get("screen") or {}).get("result") != "pass")
-    log.info("%sэксперт: да %d, нет %d, не знает %d; «да» только у эксперта — %d", c._tag, cnt["yes"], cnt["no"],
+    log.info("%sэксперты: да %d, нет %d, не знают %d; «да» только у экспертов — %d", c._tag, cnt["yes"], cnt["no"],
              cnt["unknown"], only)
     c._emit("warning", stage="screen", member="",
-            text=f"эксперт ({who.name}): подходят {cnt['yes']}, не подходят {cnt['no']}, не знает {cnt['unknown']}; "
-                 f"{only} подтвердил только эксперт — идут в таблицу с пометкой")
+            text=f"эксперты ({len(whos)}): «да» хоть одного — {cnt['yes']}, «нет» — {cnt['no']}, не знают — "
+                 f"{cnt['unknown']}; {only} подтвердили только эксперты — идут в таблицу с пометкой")
+    return expert_stats(entities, whos)
 
 
 def pending_list(entities: list[dict[str, Any]], keep_ids: set[str], excluded_ids: set[str],
@@ -367,8 +402,8 @@ def pending_list(entities: list[dict[str, Any]], keep_ids: set[str], excluded_id
             reason = "не вошло в предел подробной проверки (отсев выключен)"
             open_ = []
         ex = e.get("expert") or {}
-        if ex.get("verdict") == "no" and ex.get("knows"):
-            reason += f"; эксперт — нет: {ex['knows']}"
+        if ex.get("verdict") == "no":
+            reason += f"; эксперты — {S.expert_votes(e)}" + (f" ({ex['knows'][:200]})" if ex.get("knows") else "")
         out.append({"id": e["id"], "name": e["name"], "names": (e.get("names") or [])[:4],
                     "website": e.get("website") or "", "location": e.get("location") or "",
                     "found_by": [str(a) for a in (e.get("angles") or [])][:4], "angles": len(e.get("angles") or []),
@@ -589,6 +624,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
 
     # 3. Отсев
     excluded: list[dict[str, Any]] = []
+    experts_used: list[dict[str, Any]] = []
     screened: dict[str, dict[str, Any]] = {}
     screen_attrs = [a for a in attrs if a.screen]
     if sc.screen and screen_attrs and start != "check":
@@ -609,7 +645,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
             r = screened.get(e["id"]) or {"result": "unclear", "reason": "отсев не дал ответа"}
             e["screen"] = r
         if sc.expert:
-            await expert_opinion(c, frame, screen_attrs, entities)
+            experts_used = await expert_opinion(c, frame, screen_attrs, entities)
         # ваш список отсев не выбрасывает: вы сами назвали эти объекты — они идут на подробную проверку с пометкой;
         # «да» эксперта тоже не даёт исключить: проверка сказала «нет», эксперт «да» — в таблицу с пометкой
         excluded = [{"id": e["id"], "name": e["name"], "reason": e["screen"]["reason"]}
@@ -751,7 +787,8 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     voi = S.value_of_information(attrs, table, names, top_n, use_trust=sc.use_trust)
     sel = {"frame": frame.model_dump(), "start": start, "attributes": [a.model_dump() for a in attrs],
            "objects": objects, "table": table, "ranking": rank, "top_n": top_n, "sensitivity": sens, "voi": voi,
-           "excluded": excluded, "unchecked": unchecked, "pending": pending, "candidates": len(entities),
+           "excluded": excluded, "unchecked": unchecked, "pending": pending, "experts": experts_used,
+           "candidates": len(entities),
            "discovery": found_meta,
            "fillers": [m.name for m in fillers], "sources": sources_used(c, table, rows),
            "stats": cell_stats(table), "settings": sc.model_dump()}
