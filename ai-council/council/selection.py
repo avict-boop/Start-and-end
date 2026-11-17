@@ -318,6 +318,79 @@ class ScreenConfirm(BaseModel):
     items: list[ScreenConfirmItem] = Field(default_factory=list)
 
 
+class ExpertItem(BaseModel):
+    n: int = 0
+    verdict: str = "unknown"  # yes | no | unknown
+    knows: str = ""
+
+    @field_validator("verdict", mode="before")
+    @classmethod
+    def _v(cls, v: Any) -> str:
+        t = _txt(v).strip().lower()
+        return {"да": "yes", "нет": "no", "true": "yes", "false": "no"}.get(t, t if t in ("yes", "no") else "unknown")
+
+    @field_validator("knows", mode="before")
+    @classmethod
+    def _t(cls, v: Any) -> str:
+        return _txt(v)
+
+
+class Expert(BaseModel):
+    items: list[ExpertItem] = Field(default_factory=list)
+
+
+EXPERT_BATCH = 80  # кандидатов в одном обращении к эксперту
+
+
+def expert_prompt(frame: "SelectionFrame", attrs: list["Attribute"], objs: list[dict[str, Any]]) -> str:
+    conds = "\n".join(f"- {a.name}" + (f" (excluded if: {a.knockout})" if a.knockout else "") for a in attrs)
+    lines = "\n".join(
+        f"{i}. {o['name']}" + (f" ({', '.join(n for n in (o.get('names') or [])[:3] if n != o['name'])})"
+                               if len(o.get("names") or []) > 1 else "")
+        + (f" — {o['location']}" if o.get("location") else "") + (f" — {site_of(o['website'])}" if o.get("website") else "")
+        for i, o in enumerate(objs, 1))
+    return f"""You are an industry expert. From YOUR OWN KNOWLEDGE (no web search), say for each company below whether it
+fits the task.
+
+Task: {frame.refined_question}
+A candidate is: {frame.object_kind}. Inclusion rules: {'; '.join(frame.inclusion) or '—'}. Exclude: {'; '.join(frame.exclusion) or '—'}.
+Conditions:
+{conds or '—'}
+
+"verdict":
+- "yes" — you know this exact company and it fits all conditions;
+- "no" — you know this exact company and it clearly does not fit (e.g. only a trader, only raw materials, not in the
+  required country, does not take outside orders);
+- "unknown" — you do not know it, are not sure it is the same company (similar names are common), or do not know
+  enough. Do NOT guess: "unknown" is a normal answer.
+"knows": for yes/no — what exactly you know, up to 25 words in Russian (forms, city, contract manufacturing, group);
+company and brand names stay as in the original, not translated. Empty for unknown.
+
+Companies:
+{lines}
+
+Return JSON: {{"items": [{{"n": 1, "verdict": "yes | no | unknown", "knows": ""}}]}} — every number."""
+
+
+def agree_label(o: dict[str, Any]) -> str:
+    """Кто подтвердил кандидата: эксперт (по памяти) и/или проверка по страницам. Пусто — эксперт не спрашивался."""
+    ex = (o.get("expert") or {}).get("verdict")
+    if not ex:
+        return ""
+    res = (o.get("screen") or {}).get("result")
+    if ex == "yes":
+        return ("подтвердили эксперт и проверка" if res == "pass" else
+                "только эксперт; проверка опровергла" if res == "fail" else "только эксперт; проверка не подтвердила")
+    if ex == "no":
+        return "подтвердила проверка; эксперт — нет" if res == "pass" else "не подтвердили ни эксперт, ни проверка"
+    return "подтвердила проверка; эксперт не знает" if res == "pass" else ""
+
+
+def suits(o: dict[str, Any]) -> bool:
+    """Подходит: «да» сказала проверка по страницам или эксперт."""
+    return (o.get("screen") or {}).get("result") == "pass" or (o.get("expert") or {}).get("verdict") == "yes"
+
+
 class Source(BaseModel):
     url: str
     title: str = ""
@@ -1821,6 +1894,9 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
         if origin_label(o):
             lines.append(f"*{origin_label(o).capitalize()}: программа его не искала — проверен по вашей просьбе.*"
                          if origin_label(o) == "добавлен вами" else f"*{origin_label(o).capitalize()}.*")
+        if agree_label(o):
+            kn = (o.get("expert") or {}).get("knows") or ""
+            lines.append(f"*Отсев: {agree_label(o)}.*" + (f" Эксперт: {esc(kn)}" if kn else ""))
         if o.get("website"):
             lines.append(f"Сайт: {o['website']}")
         for a in attrs:

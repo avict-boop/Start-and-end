@@ -282,6 +282,68 @@ REWIND: dict[str, dict[str, Any]] = {
 }
 
 
+def _uniq(xs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return list({e["id"]: e for e in xs}.values())
+
+
+def _order(e: dict[str, Any]) -> tuple:
+    """Порядок короткого списка: ваш список; подходящие (проверка или эксперт), сначала подтверждённые обоими;
+    затем по весу подтверждённого и числу нашедших поисков."""
+    both = (e.get("screen") or {}).get("result") == "pass" and (e.get("expert") or {}).get("verdict") == "yes"
+    return (not e.get("seed"), not S.suits(e), not both, (e.get("screen") or {}).get("result") != "pass",
+            -screen_passes(e), -len(e.get("angles") or []))
+
+
+def expert_member(c: Council) -> MemberConfig:
+    sc = c.cfg.selection
+    m = next((x for x in c.cfg.active_members if x.name == sc.expert_model), None) if sc.expert_model else None
+    return m or c.cfg.member(c.cfg.chair)
+
+
+async def expert_opinion(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute],
+                         entities: list[dict[str, Any]]) -> None:
+    """Эксперт (большая модель, без поиска, по памяти) — о каждом кандидате: «да / нет / не знаю» и что знает.
+    Пишет e["expert"]. Сбой — без мнения эксперта (заседание идёт дальше)."""
+    if not entities:
+        return
+    who = expert_member(c)
+    c._emit("stage", stage="screen", title=f"Мнение эксперта ({who.name}): {len(entities)} кандидатов, по памяти, без поиска")
+    batches = [entities[i:i + S.EXPERT_BATCH] for i in range(0, len(entities), S.EXPERT_BATCH)]
+
+    async def one(b: list[dict[str, Any]]) -> int:
+        try:
+            r = await c._ask(who, "expert", S.expert_prompt(frame, attrs, b), S.Expert,
+                             meta={**META, "objects": [e["id"] for e in b]}, max_tokens=12000)
+        except (BudgetExceeded, OutOfCredits):
+            raise
+        except (ProviderError, InvalidResponse) as err:
+            if not _soft(err):
+                raise
+            log.warning("%sмнение эксперта не получено: %s", c._tag, err)
+            c._emit("member_failed", stage="screen", member=who.name, error=f"эксперт: {err}")
+            return 0
+        n = 0
+        for it in r.items:
+            if 1 <= it.n <= len(b):
+                b[it.n - 1]["expert"] = {"verdict": it.verdict, "knows": it.knows[:300], "by": who.name}
+                n += 1
+        for e in b:
+            e.setdefault("expert", {"verdict": "unknown", "knows": "", "by": who.name})
+        return n
+
+    for r in await asyncio.gather(*(one(b) for b in batches), return_exceptions=True):
+        if isinstance(r, BaseException):
+            raise r
+    cnt = {k: sum(1 for e in entities if (e.get("expert") or {}).get("verdict") == k) for k in ("yes", "no", "unknown")}
+    only = sum(1 for e in entities if (e.get("expert") or {}).get("verdict") == "yes"
+               and (e.get("screen") or {}).get("result") != "pass")
+    log.info("%sэксперт: да %d, нет %d, не знает %d; «да» только у эксперта — %d", c._tag, cnt["yes"], cnt["no"],
+             cnt["unknown"], only)
+    c._emit("warning", stage="screen", member="",
+            text=f"эксперт ({who.name}): подходят {cnt['yes']}, не подходят {cnt['no']}, не знает {cnt['unknown']}; "
+                 f"{only} подтвердил только эксперт — идут в таблицу с пометкой")
+
+
 def pending_list(entities: list[dict[str, Any]], keep_ids: set[str], excluded_ids: set[str],
                  screen_attrs: list[S.Attribute]) -> list[dict[str, Any]]:
     """Кандидаты, не вошедшие в таблицу и не исключённые: что о каждом уже подтверждено и какой вопрос открыт.
@@ -304,6 +366,9 @@ def pending_list(entities: list[dict[str, Any]], keep_ids: set[str], excluded_id
         else:
             reason = "не вошло в предел подробной проверки (отсев выключен)"
             open_ = []
+        ex = e.get("expert") or {}
+        if ex.get("verdict") == "no" and ex.get("knows"):
+            reason += f"; эксперт — нет: {ex['knows']}"
         out.append({"id": e["id"], "name": e["name"], "names": (e.get("names") or [])[:4],
                     "website": e.get("website") or "", "location": e.get("location") or "",
                     "found_by": [str(a) for a in (e.get("angles") or [])][:4], "angles": len(e.get("angles") or []),
@@ -543,13 +608,17 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         for e in entities:
             r = screened.get(e["id"]) or {"result": "unclear", "reason": "отсев не дал ответа"}
             e["screen"] = r
-        # ваш список отсев не выбрасывает: вы сами назвали эти объекты — они идут на подробную проверку с пометкой
+        if sc.expert:
+            await expert_opinion(c, frame, screen_attrs, entities)
+        # ваш список отсев не выбрасывает: вы сами назвали эти объекты — они идут на подробную проверку с пометкой;
+        # «да» эксперта тоже не даёт исключить: проверка сказала «нет», эксперт «да» — в таблицу с пометкой
         excluded = [{"id": e["id"], "name": e["name"], "reason": e["screen"]["reason"]}
-                    for e in entities if e["screen"]["result"] == "fail" and not e.get("seed")]
+                    for e in entities if e["screen"]["result"] == "fail" and not e.get("seed") and not S.suits(e)]
         passed = [e for e in entities if e["screen"]["result"] == "pass"]
         unclear = [e for e in entities if e["screen"]["result"] == "unclear"]
         seeds_failed = [e for e in entities if e["screen"]["result"] == "fail" and e.get("seed")]
-        keep = passed + unclear + seeds_failed
+        by_expert = [e for e in entities if S.suits(e) and e["screen"]["result"] != "pass"]
+        keep = _uniq(passed + by_expert + unclear + seeds_failed)
         # в таблицу — подтверждённые отсевом и ваши; «не выяснено» — только если подтверждённых нет вовсе
         keep_all = list(keep)
         if sc.shortlist_only_pass and passed:
@@ -563,7 +632,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
                 (hard and sum(1 for ch in (e["screen"].get("checks") or [])
                               if ch.get("attr") in hard and ch.get("verdict") == "pass") >= len(hard) - 1)
                 or len(e.get("angles") or []) >= 3)]
-            keep = passed + near + seeds_failed + [e for e in unclear if e.get("seed") and e not in near]
+            keep = _uniq(passed + by_expert + near + seeds_failed + [e for e in unclear if e.get("seed")])
     else:
         keep = list(entities)
         keep_all = list(keep)
@@ -574,13 +643,11 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     task_n = max(frame.shortlist, frame.top_n) if frame.shortlist else 0
     limit = sc.shortlist or task_n or sc.max_deep or len(keep)
     cap = min(200, max(sc.max_deep, sc.shortlist or task_n)) if sc.max_deep else len(keep)
-    keep.sort(key=lambda e: (not e.get("seed"), (e.get("screen") or {}).get("result") != "pass", -screen_passes(e),
-                             -len(e["angles"])))
+    keep.sort(key=_order)
     keep = diverse_order(keep)
     # «Проверять подробно» = 0 — без предела: подробно проверяются все прошедшие отсев и сомнительные
     shortlist = keep if not sc.max_deep else keep[:min(limit, cap)]
-    keep_all.sort(key=lambda e: (not e.get("seed"), (e.get("screen") or {}).get("result") != "pass", -screen_passes(e),
-                                 -len(e["angles"])))
+    keep_all.sort(key=_order)
     coverage = required_coverage(frame, keep_all, shortlist)  # для охвата категорий — и «не выяснено»
     added = [e for x in coverage for e in x.pop("_add")]
     if added:
@@ -1843,6 +1910,7 @@ def rerank(sel: dict[str, Any], weights: dict[str, float] | None = None, use_tru
     rank = S.ranking(attrs, sel["table"], use_trust=trust)
     return {"ranking": rank, "sensitivity": S.sensitivity(attrs, sel["table"], names, use_trust=trust),
             "voi": S.value_of_information(attrs, sel["table"], names, top_n, use_trust=trust), "names": names,
-            "origin": {o["id"]: t for o in sel["objects"] if (t := S.origin_label(o))},
+            "origin": {o["id"]: t for o in sel["objects"]
+                       if (t := " · ".join(x for x in (S.origin_label(o), S.agree_label(o)) if x))},
             "weights": {a.id: a.weight for a in attrs}}
 

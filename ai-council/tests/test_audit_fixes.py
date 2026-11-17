@@ -351,3 +351,34 @@ def test_screen_consistency_planned_and_pending():
     md = S.report_md({"frame": {}, "attributes": [], "objects": [], "table": {}, "ranking": [], "top_n": 0,
                       "pending": pend}, None)
     assert "требуют проверки (2)" in md and "乙" in md
+
+
+def test_expert_opinion_any_yes_keeps():
+    """Эксперт по памяти: «да» хоть одного — эксперт или проверка — кандидат подходит; пометка, кто подтвердил."""
+    assert S.agree_label({"expert": {"verdict": "yes"}, "screen": {"result": "pass"}}) == "подтвердили эксперт и проверка"
+    assert S.agree_label({"expert": {"verdict": "yes"}, "screen": {"result": "fail"}}).startswith("только эксперт")
+    assert S.agree_label({"expert": {"verdict": "no"}, "screen": {"result": "pass"}}).startswith("подтвердила проверка")
+    assert S.agree_label({"expert": {"verdict": "no"}, "screen": {"result": "unclear"}}).startswith("не подтвердили")
+    assert S.suits({"expert": {"verdict": "yes"}, "screen": {"result": "fail"}})
+    assert not S.suits({"expert": {"verdict": "unknown"}, "screen": {"result": "unclear"}})
+    assert S.ExpertItem.model_validate({"n": 1, "verdict": "Да"}).verdict == "yes"
+    assert S.ExpertItem.model_validate({"n": 1, "verdict": "maybe"}).verdict == "unknown"
+    p = S.expert_prompt(S.SelectionFrame(refined_question="q"), [], [{"name": "Sirio", "names": ["Sirio", "仙乐"]}])
+    assert "1. Sirio (仙乐)" in p and "unknown" in p
+
+
+def test_expert_in_run_mock(tmp_path):
+    """Демо-заседание: эксперт опрашивается, его «да» попадает в таблицу с пометкой."""
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.modes import selection as SM
+    from council.session import Council
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path),
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "ab"]})
+    c = Council(cfg, MockClient(delay=0))
+    ents = [{"id": f"O{i}", "name": f"Demo Plant {i}", "names": [f"Demo Plant {i}"], "angles": [],
+             "screen": {"result": "unclear", "checks": []}} for i in range(1, 7)]
+    asyncio.run(SM.expert_opinion(c, S.SelectionFrame(refined_question="q"), [], ents))
+    yes = [e["id"] for e in ents if e["expert"]["verdict"] == "yes"]
+    assert yes == ["O3", "O6"] and all(e["expert"]["by"] == "a" for e in ents)
+    assert sorted(ents, key=SM._order)[0]["id"] in yes

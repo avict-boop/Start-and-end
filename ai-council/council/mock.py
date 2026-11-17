@@ -305,6 +305,10 @@ def _selection(stage: str, who: str, meta: dict[str, Any], text: str) -> dict[st
         names = _re.findall(r"^- (.+?)(?: \(| — |$)", text.split("Companies:")[-1], _re.M)
         return {"items": [{"name": n, "website": f"https://plant{m.group(1)}.example.com"}
                           for n in names if (m := _re.search(r"(\d+)", n))]}
+    if stage == "expert":  # демо: эксперт знает каждый третий завод
+        nums = [int(n) for n in _re.findall(r"(?m)^(\d+)\. ", text.split("Companies:")[-1])]
+        return {"items": [{"n": n, "verdict": "yes" if n % 3 == 0 else "unknown",
+                           "knows": "демо: контрактный производитель" if n % 3 == 0 else ""} for n in nums]}
     if stage == "screen_confirm":
         return {"items": [{"n": int(n), "exclude": True, "why": "демо"} for n in _re.findall(r"(?m)^(\d+)\. ", text)]}
     if stage == "screen":

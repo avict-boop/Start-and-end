@@ -238,11 +238,11 @@ function renderReview(s) {
         return `<label class="sel-item"><input type="checkbox" data-id="${esc(x.id)}" ${rv.gate === "candidates" || short.has(x.id) ? "checked" : ""}>
           <span><b>${esc(x.name)}</b>${(x.names || []).length > 1 ? ` <span class="muted small">${esc(x.names.slice(1, 4).join(", "))}</span>` : ""}
           ${x.merged ? '<span class="badge plain">склеено</span>' : ""}${x.seed ? '<span class="badge plain">ваш список</span>' : ""}
-          ${scr ? `<span class="badge ${scr[0]}">${scr[1]}</span>` : ""}
+          ${scr ? `<span class="badge ${scr[0]}">${scr[1]}</span>` : ""}${x.expert && x.expert.verdict === "yes" ? '<span class="badge ok">эксперт: да</span>' : x.expert && x.expert.verdict === "no" ? '<span class="badge plain">эксперт: нет</span>' : ""}
           <small class="muted">${[x.website ? esc(x.website) : "", x.location ? esc(x.location) : "",
             (x.models || []).length ? `нашли ${x.models.length} ${plural(x.models.length, "источник", "источника", "источников")}: ${esc(x.models.map((m) => memberName(s, m)).join(", "))}`
               : (x.angles || []).length ? `найден ${x.angles.length} ${plural(x.angles.length, "раз", "раза", "раз")}` : ""].filter(Boolean).join(" · ")}</small>
-          ${x.screen && x.screen.reason ? `<small class="muted">${esc(x.screen.reason)}</small>` : x.quote ? `<small class="muted">«${esc(x.quote.slice(0, 160))}»</small>` : ""}</span></label>`;
+          ${x.screen && x.screen.reason ? `<small class="muted">${esc(x.screen.reason)}</small>` : x.quote ? `<small class="muted">«${esc(x.quote.slice(0, 160))}»</small>` : ""}${x.expert && x.expert.knows ? `<small class="muted">эксперт: ${esc(x.expert.knows)}</small>` : ""}</span></label>`;
       }).join("")}</div>
       <p class="small" id="rvCount" aria-live="polite"></p>
       <label class="field"><span>Добавить своих (по одному в строке)</span><textarea id="rvAdd" rows="3"></textarea></label>`;
@@ -331,7 +331,7 @@ function selFrameSummary(fr, li) {
 
 // кого отсев признал подходящими (и добавленные вами)
 function selPassed(items) {
-  return (items || []).filter((x) => (x.screen && x.screen.result === "pass") || x.seed).map((x) => x.id);
+  return (items || []).filter((x) => (x.screen && x.screen.result === "pass") || (x.expert && x.expert.verdict === "yes") || x.seed).map((x) => x.id);
 }
 
 // подходящих больше, чем вошло в предложенный список: выбор — урезать до предела или оставить всех подходящих

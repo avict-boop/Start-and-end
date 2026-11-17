@@ -356,6 +356,7 @@ function renderSettings() {
         <label class="field"><span>Заполняют (два участника через запятую; пусто — два самых дешёвых)</span><input type="text" data-sl="fillers" value="${esc((v("fillers", []) || []).join(", "))}" ${ro}></label>
         <label class="field"><span>Предел папки копий страниц, МБ</span><input type="number" data-sn="snapshot_mb" min="10" max="10000" value="${v("snapshot_mb", 300)}" ${ro}></label>
       </div>
+      <label class="switch"><input type="checkbox" data-sb="expert" ${v("expert", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Мнение эксперта при отсеве</b><small>председатель (большая модель) по своей памяти, без поиска, говорит о каждом кандидате «подходит / нет / не знает» (≈ $0,5–1,5 на 700 кандидатов). В таблицу идёт тот, кому «да» сказал хоть кто-то — эксперт или проверка по страницам; в отчёте видно, кто именно</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="shortlist_only_pass" ${v("shortlist_only_pass", true) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>В таблицу — только подтверждённые отсевом</b><small>подробная проверка — самый дорогой этап: «не выяснено» добавляйте на остановке вручную; где по категории подтверждённых мало, программа добавит лучших «не выяснено» сама</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="discover_search_model" ${v("discover_search_model", false) ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Модель поиска тоже ищет кандидатов</b><small>выключено — ищут разведчики (дешёвый Sonar, Haiku, GPT mini); по разбору модель поиска (Sonar Pro) давала мало новых компаний за заметные деньги</small></span></label>
       <label class="switch"><input type="checkbox" data-sb="no_deep_limit" ${v("max_deep", 40) === 0 ? "checked" : ""} ${ro}><span class="sw" aria-hidden="true"></span><span><b>Проверять подробно всех</b><small>в таблицу идут все прошедшие отсев и сомнительные, без предела «Проверять подробно» и числа из задания; подробная проверка — около $0,05 за кандидата (500 кандидатов ≈ $25), на остановке «короткий список» видна точная оценка</small></span></label>
@@ -430,6 +431,7 @@ function selDepends() {
   // «Без предела кандидатов» — число предела не действует
   const chk = (s) => { const el = document.querySelector(s); return !!(el && el.checked); };
   off('[data-ss="screen_by"]', !chk('[data-sb="screen"]'), "не действует: отсев выключен");
+  off('[data-sb="expert"]', !chk('[data-sb="screen"]'), "не действует: отсев выключен");
   const lists = document.querySelector('[data-sn="lists"]');
   off('[data-sn="list_chars"]', !!lists && Number(lists.value || 0) === 0, "не действует: готовые списки не ищутся (0)");
   off('[data-sn="max_candidates"]', chk('[data-sb="no_cand_limit"]'), "не действует: включено «Без предела кандидатов»");
