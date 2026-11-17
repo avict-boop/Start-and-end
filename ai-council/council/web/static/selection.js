@@ -229,9 +229,10 @@ function renderReview(s) {
     const sc = { pass: ["ok", "подходит"], fail: ["bad", "не подходит"], unclear: ["plain", "не выяснено"] };
     body = (rv.gate === "candidates" && comp.share != null ? `<p class="small">Полнота списка ≈ <b>${Math.round(comp.share * 100)}%</b> (найдено ${comp.found}, оценка всего ~${comp.estimate}): `
       + (comp.share >= 0.75 ? "разные направления поиска часто находят одних и тех же — список близок к полному." : "многих нашло только одно направление — вероятно, есть ещё; добавьте известных вам.") + "</p>" : "")
+      + selPassedNote(rv, items, short)
       + selCoverage(pl.coverage) + selGroups(pl.groups, items)
       + `<p class="muted small">${rv.gate === "candidates" ? "Снимите галочку у лишних; склеенные дубли отмечены «склеено»." : "Галочка — проверять подробно. Исключённые при отсеве можно вернуть."}
-        ${rv.gate === "shortlist" ? `<button type="button" class="link small" id="rvSug">как предложено (${short.size})</button> · ` : ""}<button type="button" class="link small" id="rvAll">отметить всех (${items.length})</button> · <button type="button" class="link small" id="rvNone">снять все</button></p>
+        ${rv.gate === "shortlist" ? `<button type="button" class="link small" id="rvSug">как предложено (${short.size})</button> · ` : ""}${rv.gate === "shortlist" && selPassed(items).length ? `<button type="button" class="link small" id="rvPass">все подходящие (${new Set([...short, ...selPassed(items)]).size})</button> · ` : ""}<button type="button" class="link small" id="rvAll">отметить всех (${items.length})</button> · <button type="button" class="link small" id="rvNone">снять все</button></p>
       <div class="sel-review-list">${items.map((x) => {
         const scr = x.screen ? sc[x.screen.result] : null;
         return `<label class="sel-item"><input type="checkbox" data-id="${esc(x.id)}" ${rv.gate === "candidates" || short.has(x.id) ? "checked" : ""}>
@@ -272,6 +273,15 @@ function renderReview(s) {
     cnt();
   });
   if ($("rvNone")) $("rvNone").addEventListener("click", () => all(false));
+  // «все подходящие»: предложенные и все, кого отсев признал подходящими, даже если их больше предела
+  const passAll = () => {
+    const on = new Set([...((rv.payload || {}).shortlist || []), ...selPassed((rv.payload || {}).items)]);
+    box.querySelectorAll("input[data-id]").forEach((i) => { i.checked = on.has(i.dataset.id); });
+    cnt();
+  };
+  if ($("rvPass")) $("rvPass").addEventListener("click", passAll);
+  if ($("rvPass2")) $("rvPass2").addEventListener("click", passAll);
+  if ($("rvSug2")) $("rvSug2").addEventListener("click", () => $("rvSug").click());
   $("rvGo").addEventListener("click", () => sendReview(s, rv));
   box.querySelectorAll("input[data-id]").forEach((i) => i.addEventListener("change", cnt));
   cnt();
@@ -317,6 +327,23 @@ function selFrameSummary(fr, li) {
   const n = [what, fr.top_n ? `в первую группу — ${fr.top_n}` : "", fr.shortlist ? `подробно проверяем до ${fr.shortlist}` : ""].filter(Boolean).join(" · ");
   return `<details class="sel-help"><summary>Кого ищем ${fr.object_kind ? `(${esc(fr.object_kind)})` : ""}${n ? ` <small>${esc(n)}</small>` : ""}</summary>
     <div class="sel-frame-grid">${parts.join("")}</div></details>`;
+}
+
+// кого отсев признал подходящими (и добавленные вами)
+function selPassed(items) {
+  return (items || []).filter((x) => (x.screen && x.screen.result === "pass") || x.seed).map((x) => x.id);
+}
+
+// подходящих больше, чем вошло в предложенный список: выбор — урезать до предела или оставить всех подходящих
+function selPassedNote(rv, items, short) {
+  if (rv.gate !== "shortlist") return "";
+  const passed = selPassed(items);
+  const out = passed.filter((id) => !short.has(id));
+  if (!out.length) return "";
+  return `<div class="set-notice warn small"><b>Подходят ${passed.length}, а в предложенный список (${short.size}) вошли не все — ${out.length} подходящих за его пределами.</b>
+    Выберите: <button type="button" class="link small" id="rvSug2">урезать до ${short.size}, как предложено</button> или
+    <button type="button" class="link small" id="rvPass2">оставить всех подходящих (${new Set([...short, ...passed]).size})</button>.
+    Подробная проверка — около $0,05–0,25 за кандидата.</div>`;
 }
 
 // охват обязательных поисков задания в коротком списке: сколько кандидатов каждой категории / типа
