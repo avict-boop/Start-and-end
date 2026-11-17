@@ -2044,7 +2044,7 @@ function stageResult(s, key) {
 
 // у «Отбора» внутренние имена запросов не совпадают с этапами на экране (frame ↔ framing, conclusion ↔ verdict…)
 const CALL_STAGE = { frame: "framing", conclusion: "verdict", angles: "discover", lists: "discover", list_read: "discover",
-  sources: "fill", screen_confirm: "screen" };
+  sources: "fill", screen_confirm: "screen", sites: "screen" };
 const sameStage = (call, stage) => !!call && (call.stage === stage || CALL_STAGE[call.stage] === stage);
 
 function workerRows(s, now) {

@@ -108,6 +108,16 @@ def save_events(runs_dir: str | Path, stem: str, events: list[dict[str, Any]]) -
     path = Path(runs_dir) / f"{stem}.events.jsonl"
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # продолжение заседания — новый запуск со своим журналом: прежний не затираем, а откладываем рядом
+        # (16.11 $3,55 повторного поиска не было видно в диагностике — сохранялся только последний запуск)
+        if path.is_file() and events:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    first = json.loads(f.readline() or "{}")
+            except (OSError, ValueError):
+                first = {}
+            if first.get("ts") and first.get("ts") != events[0].get("ts"):
+                path.rename(path.with_name(f"{stem}.events.{int(float(first['ts']))}.jsonl"))
         with open(path, "w", encoding="utf-8") as f:
             for ev in events:
                 f.write(json.dumps(_jsonable(ev), ensure_ascii=False, default=str) + "\n")
@@ -256,6 +266,14 @@ def bundle(runs_dir: str | Path, config_path: str | Path | None = None, *, stem:
                 raw = ev.read_text(encoding="utf-8", errors="replace")
                 z.writestr("session/events.jsonl", redact(raw))
                 events = [json.loads(ln) for ln in raw.splitlines() if ln.strip()]
+            # прежние запуски (до продолжений) и полный журнал заседания: все обращения и траты, включая
+            # забытые при возврате к этапу
+            for old in sorted(runs.glob(f"{stem}.events.*.jsonl")):
+                z.writestr(f"session/earlier/{old.name.replace(stem + '.', '')}",
+                           redact(old.read_text(encoding="utf-8", errors="replace")))
+            jr = runs / "paused" / stem / "journal.jsonl"
+            if jr.is_file() and jr.stat().st_size < 60_000_000:
+                z.writestr("session/journal.jsonl", redact(jr.read_text(encoding="utf-8", errors="replace")))
             fp = runs / FAILED_DIR / f"{stem}.json"
             if fp.is_file():
                 fdata = json.loads(fp.read_text(encoding="utf-8"))

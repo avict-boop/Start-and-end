@@ -231,3 +231,47 @@ def test_rule_less_screen_attribute_is_preference():
     assert r[0] == "unclear" and "Собственное" not in r[1]
     assert "PREFERENCE" in S.screen_read_prompt(S.SelectionFrame(refined_question="q"), [hard, soft],
                                                 [{"id": "O1", "name": "X"}], {"O1": []})
+
+
+def test_weak_sources_intermediary_and_city_core_merge(tmp_path):
+    """Разбор 17.11: «подходит» по карточке Alibaba или пресс-релизу — не подтверждение; признаки посредника —
+    не «подходит»; «威海百合» и «百合（威海）» — один кандидат; прежний запуск сохраняется в диагностике."""
+    from council.diagnostics import save_events
+    hard = S.Attribute(id="A1", name="OEM", kind="bool", screen=True, knockout="нет")
+    ok = S.ScreenCheck(attr="A1", verdict="pass", value="да", url="https://www.alibaba.com/product/1.html",
+                       quote="oem odm service available")
+    assert S.screen_decide([ok], [hard])[0] == "unclear"
+    own = ok.model_copy(update={"url": "https://www.factory-x.cn/oem"})
+    assert S.screen_decide([own], [hard])[0] == "pass"
+    mid = own.model_copy(update={"quote": "production runs in our partner facility in guangzhou"})
+    assert S.screen_decide([mid], [hard])[0] == "unclear"
+    a = S.Candidate(name="威海百合生物技术股份有限公司")
+    b = S.Candidate(name="百合生物（威海）", location="")
+    c = S.Candidate(name="上海百合")
+    ents = S.merge_candidates([("x", a), ("y", b), ("z", c)])
+    assert len(ents) == 2  # Вэйхай склеен, Шанхай — другая компания
+    save_events(tmp_path, "s1", [{"type": "start", "ts": 100.0}])
+    save_events(tmp_path, "s1", [{"type": "start", "ts": 200.0}])
+    assert (tmp_path / "s1.events.100.jsonl").is_file() and (tmp_path / "s1.events.jsonl").is_file()
+
+
+def test_own_site_and_find_sites():
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.session import Council
+    from council.modes import selection as SM
+    import tempfile
+    assert SM.own_site({"website": "https://www.sirio.com"}) and not SM.own_site({"website": "https://foodtalks.cn/a"})
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": tempfile.mkdtemp(),
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "ab"]})
+    c = Council(cfg, MockClient(delay=0))
+
+    async def ask(m, stage, prompt, schema, meta=None, **kw):
+        assert stage == "sites"
+        return S.Candidates(items=[S.Candidate(name="Sirio", website="https://www.siriopharma.com"),
+                                   S.Candidate(name="Beta", website="https://www.alibaba.com/beta")])
+    c._ask = ask
+    ents = [{"id": "O1", "name": "Sirio", "names": ["Sirio"], "website": ""},
+            {"id": "O2", "name": "Beta", "names": ["Beta"], "website": ""}]
+    assert asyncio.run(SM.find_sites(c, ents)) == 1
+    assert ents[0]["website"].endswith("siriopharma.com") and ents[1]["website"] == ""

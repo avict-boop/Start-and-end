@@ -334,7 +334,8 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
                                       (searches * (inp * p.prompt + outp * p.completion + p.request) + fee) if p else None))
     screen_search = sc.screen and sc.screen_by == "search"
     s_calls = (0 if start == "check" else sc.angles + (2 if sc.rounds > 1 else 0)
-               + (-(-cands // sc.screen_batch) if screen_search else 0)) + deep
+               + (-(-cands // sc.screen_batch) if screen_search else 0)
+               + (-(-int(cands * 0.5) // 10) if sc.screen and not screen_search else 0)) + deep  # поиск сайтов
     s_in = s_calls * (2000 + min(q, 3000))  # у модели поиска (Perplexity) найденное не идёт во вход — поиск встроен
     s_out = s_calls * 2200
     p = price_of(search_model)

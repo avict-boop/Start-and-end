@@ -240,7 +240,7 @@ class SelectionConfig(BaseModel):
     skip_neutral_disputes: bool = True
     # Отсев: короткая проверка признаков отсева у всех кандидатов (пачками по screen_batch)
     screen: bool = True
-    screen_batch: int = Field(default=5, ge=1, le=15)
+    screen_batch: int = Field(default=4, ge=1, le=15)  # 5 с цитатами упирались в предел ответа (16.11)
     # pages — программа скачивает уже найденные страницы кандидата (страница из поиска, сайт), дешёвая модель решает по
     # тексту (дёшево; поиск по пачке из 5 компаний почти всегда отвечал «не выяснено»); search — модель поиска ищет заново
     screen_by: Literal["pages", "search"] = "pages"

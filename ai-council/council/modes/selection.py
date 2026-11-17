@@ -480,6 +480,8 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         keep = passed + unclear + seeds_failed
     else:
         keep = list(entities)
+    SCREEN_WEIGHTS.clear()
+    SCREEN_WEIGHTS.update({a.id: max(0.5, float(a.weight)) for a in attrs})
     # сколько проверять подробно: из настроек; иначе — сколько просит задание (широкий список «60–80» → 80: это
     # число сильнее предела max_deep — его назвали вы сами), но не меньше первой группы; иначе — max_deep
     task_n = max(frame.shortlist, frame.top_n) if frame.shortlist else 0
@@ -933,9 +935,16 @@ def required_coverage(frame: S.SelectionFrame, keep: list[dict[str, Any]], short
     return out
 
 
-def screen_passes(e: dict[str, Any]) -> int:
-    """Сколько признаков отсева у кандидата подтверждены страницей («подходит»): у сомнительного 4 из 5 лучше, чем 1."""
-    return sum(1 for ch in (e.get("screen") or {}).get("checks") or [] if ch.get("verdict") == "pass")
+SCREEN_WEIGHTS: dict[str, float] = {}  # веса признаков рамки для порядка короткого списка (ставит run)
+
+
+def screen_passes(e: dict[str, Any]) -> float:
+    """Насколько кандидат подтверждён отсевом — по ВЕСАМ рамки: подтверждённый признак весом 10 (готовые формы,
+    сторонние заказы) значит больше, чем весом 2. Раньше считалось число подтверждений («заметность»), и крупный
+    завод с подтверждёнными главными признаками уступал карточке с Alibaba (16.11, IVC)."""
+    w = SCREEN_WEIGHTS
+    return sum((w.get(ch.get("attr") or "", 1.0) if w else 1.0)
+               for ch in (e.get("screen") or {}).get("checks") or [] if ch.get("verdict") == "pass")
 
 
 def diverse_order(keep: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1135,15 +1144,22 @@ async def screen_second_look(c: Council, frame: S.SelectionFrame, attrs: list[S.
     SCREEN_BROWSER кандидатов: браузер медленный). Обновлённых кандидатов читает та же модель."""
     sc = c.cfg.selection
     unclear = [e for e in entities if (out.get(e["id"]) or {}).get("result") == "unclear"]
+    # своего сайта нет (или указан чужой: новость, площадка, ассоциация) — модель поиска находит официальный сайт;
+    # отсев дочитывает его главную и «Контакты / О компании» (16.11 так за бортом остались Sirio, Baihe)
+    await find_sites(c, [e for e in unclear if not own_site(e)][:SCREEN_SITES])
+    homes = {e["id"]: _home(e["website"]) for e in unclear if own_site(e)}
+    if homes:
+        await fetch_pages(c, list(homes.values()), browser=False)  # ссылки «Контакты / О компании» — с главной
     more: dict[str, list[str]] = {}
     for e in unclear:
-        if not all_texts.get(e["id"]):
-            continue
-        seen = set(plan[e["id"]])
-        links = [u for u0 in plan[e["id"]] for u in (c.page_meta.get(u0) or {}).get("links") or [] if u not in seen]
-        if links:
-            more[e["id"]] = list(dict.fromkeys(links))[:2]
-    closed = [e for e in unclear if not all_texts.get(e["id"]) and plan[e["id"]]]
+        read = set(plan[e["id"]])
+        h = homes.get(e["id"], "")
+        cand = [h] if h and h not in read else []
+        cand += [u for u0 in [*plan[e["id"]], h] if u0 for u in (c.page_meta.get(u0) or {}).get("links") or []
+                 if u not in read]
+        if cand:
+            more[e["id"]] = list(dict.fromkeys(cand))[:3]
+    closed = [e for e in unclear if not all_texts.get(e["id"]) and e["id"] not in more and plan[e["id"]]]
     closed.sort(key=lambda e: -len(e.get("angles") or []))  # браузер — тем, кого находили чаще
     closed = closed[:SCREEN_BROWSER]
     if not more and not closed:
@@ -1189,11 +1205,54 @@ async def screen_second_look(c: Council, frame: S.SelectionFrame, attrs: list[S.
     log.info("%sотсев, второй взгляд: прочитано %d, яснее стало у %d", c._tag, len(redo), better)
 
 
+def own_site(e: dict[str, Any]) -> bool:
+    """У кандидата указан его собственный сайт (не площадка, не новость, не ассоциация)."""
+    w = e.get("website") or ""
+    return bool(S.site_of(w)) and not S.weak_source(w)
+
+
+async def find_sites(c: Council, ents: list[dict[str, Any]]) -> int:
+    """Официальные сайты кандидатов — пачками по 10 через модель поиска. Возвращает, у скольких нашёлся."""
+    if not ents:
+        return 0
+    found = 0
+
+    async def one(b: list[dict[str, Any]]) -> int:
+        try:
+            r = await c._ask(searcher(c), "sites", S.sites_prompt(b), S.Candidates,
+                             meta={**META, "objects": [e["id"] for e in b]}, web_search=True)
+        except (BudgetExceeded, OutOfCredits):
+            raise
+        except (ProviderError, InvalidResponse) as err:
+            if not _soft(err):
+                raise
+            log.warning("%sпоиск сайтов кандидатов не удался: %s", c._tag, err)
+            return 0
+        n = 0
+        for it in r.items:
+            e = _match_entity(it.name, b)
+            if e is not None and S.site_of(it.website) and not S.weak_source(it.website):
+                e["website"] = it.website
+                n += 1
+        return n
+
+    batches = [ents[k:k + 10] for k in range(0, len(ents), 10)]
+    for r in await asyncio.gather(*(one(b) for b in batches), return_exceptions=True):
+        if isinstance(r, BaseException):
+            raise r
+        found += r
+    log.info("%sотсев: официальные сайты найдены у %d из %d кандидатов без своего сайта", c._tag, found, len(ents))
+    c._emit("warning", stage="screen", member="",
+            text=f"отсев: найдены официальные сайты у {found} из {len(ents)} кандидатов без своего сайта — читаем их")
+    return found
+
+
 def _passes(r: dict[str, Any]) -> int:
     return sum(1 for ch in (r or {}).get("checks") or [] if ch.get("verdict") == "pass")
 
 
 SCREEN_BROWSER = 60        # сколько не открывшихся без браузера кандидатов открыть браузером при отсеве
+SCREEN_SITES = 200         # скольким «не выяснено» без своего сайта искать официальный сайт (пачками по 10)
 SCREEN_CHUNK = 25          # кандидатов в одной части отсева (скачать страницы → прочитать)
 SCREEN_CHUNKS_AT_ONCE = 3  # частей, которые качаются одновременно (по 5 страниц каждая — 15 загрузок сразу)
 
@@ -1254,7 +1313,7 @@ async def confirm_screen_fails(c: Council, out: dict[str, dict[str, Any]], prove
               + '\n\nReturn JSON: {"items": [{"n": 1, "exclude": true, "why": "short"}]}')
     try:
         who = pick_fillers(c)[0]
-        res = await c._ask(quick(c, who), "screen_confirm", prompt, S.ScreenConfirm, meta=META, max_tokens=3000)
+        res = await c._ask(quick(c, who), "screen_confirm", prompt, S.ScreenConfirm, meta=META, max_tokens=6000)
     except (ProviderError, InvalidResponse) as err:
         if not _soft(err):
             raise

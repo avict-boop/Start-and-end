@@ -115,7 +115,7 @@ ARCHIVE_PAGE = 8
 
 # у «Отбора» внутренние имена запросов не совпадают с этапами хода (frame ↔ framing, conclusion ↔ verdict…)
 CALL_STAGE = {"frame": "framing", "conclusion": "verdict", "angles": "discover", "lists": "discover",
-              "list_read": "discover", "sources": "fill", "screen_confirm": "screen"}
+              "list_read": "discover", "sources": "fill", "screen_confirm": "screen", "sites": "screen"}
 
 
 @dataclass

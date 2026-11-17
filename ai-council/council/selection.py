@@ -189,7 +189,7 @@ class Candidates(BaseModel):
     @field_validator("items", mode="before")
     @classmethod
     def _items(cls, v: Any) -> list:
-        return [x if isinstance(x, dict) else {"name": str(x)} for x in (v or []) if x]
+        return [x if isinstance(x, (dict, Candidate)) else {"name": str(x)} for x in (v or []) if x]
 
 
 class ListSource(BaseModel):
@@ -461,6 +461,28 @@ MARKETPLACES = {"alibaba.com", "1688.com", "made-in-china.com", "globalsources.c
                 "crunchbase.com", "zoominfo.com", "dnb.com", "europages.com", "kompass.com", "x.com", "twitter.com"}
 
 
+# не сайт компании: карточки B2B-площадок, пресс-релизы, новости, каталоги и справочники — то, что компания или
+# журналист пишет о ней сам. Одним таким источником формы, заказы со стороны и площадку не подтверждаем
+WEAK_SOURCES = MARKETPLACES | {
+    "einpresswire.com", "prnewswire.com", "businesswire.com", "globenewswire.com", "openpr.com", "newswire.com",
+    "foodtalks.cn", "foodaily.com", "sohu.com", "163.com", "sina.com.cn", "qq.com", "ifeng.com", "toutiao.com",
+    "hc360.com", "foodsc.cn", "caitongtong.com", "made-in-china.com", "ec21.com", "ecplaza.net", "tradeindia.com",
+    "exportersindia.com", "go4worldbusiness.com", "dhgate.com", "aliexpress.com", "zoominfo.com", "zhihu.com"}
+
+
+def weak_source(url: str) -> bool:
+    """Ссылка на площадку, пресс-релиз или новость, а не на сайт компании или документ."""
+    d = domain(url)
+    return not d or d in WEAK_SOURCES or any(d.endswith("." + w) for w in WEAK_SOURCES)
+
+
+# признаки посредника: сам не производит — «на заводе партнёра», «импорт/экспорт», «торговая компания»
+INTERMEDIARY = re.compile(
+    r"partner (?:facilit|factor|manufactur)|contract(?:ed)? (?:to|with) (?:a |our )?(?:partner|third)|"
+    r"import\s*(?:&|and)\s*export|trading compan|sourcing agent|we source|贸易有限公司|进出口|代理商|经销商|"
+    r"торгов(?:ая|ый) компан|импорт[её]р|дистрибьютор", re.I)
+
+
 def norm_name(s: str) -> str:
     """Имя для сравнения: без регистра, знаков, форм собственности и общих слов («биотех», «有限公司»)."""
     t = (s or "").lower().replace("ё", "е")
@@ -499,6 +521,33 @@ def site_of(url: str) -> str:
         u = url if "://" in url else "http://" + url
         return (urlsplit(u).hostname or "").lower().removeprefix("www.")
     return d
+
+
+# провинции и крупные города: «威海百合» и «百合（威海）» — одно ядро «百合» в одном городе
+CN_PLACES = ("内蒙古", "黑龙江", "北京", "天津", "上海", "重庆", "河北", "山西", "辽宁", "吉林", "江苏", "浙江", "安徽",
+             "福建", "江西", "山东", "河南", "湖北", "湖南", "广东", "海南", "四川", "贵州", "云南", "陕西", "甘肃", "青海",
+             "广西", "西藏", "宁夏", "新疆", "广州", "深圳", "杭州", "南京", "苏州", "威海", "青岛", "济南", "武汉", "成都",
+             "西安", "郑州", "长沙", "合肥", "厦门", "福州", "宁波", "无锡", "常州", "珠海", "佛山", "东莞", "中山", "汕头",
+             "烟台", "潍坊", "德州", "禹城", "石家庄", "哈尔滨", "长春", "沈阳", "大连", "昆明", "南宁", "海口", "兰州",
+             "银川", "太原", "南昌", "贵阳", "温州", "绍兴", "嘉兴", "湖州", "金华", "台州", "泰州", "扬州", "南通", "徐州",
+             "连云港", "盐城", "淄博", "临沂", "日照", "泰安", "荆州", "宜昌", "襄阳", "株洲", "湘潭", "江门", "惠州",
+             "肇庆", "清远", "揭阳", "漳州", "泉州", "莆田", "赣州", "九江", "保定", "廊坊", "唐山", "邯郸", "洛阳", "新乡")
+
+
+def cn_core_city(name: str, location: str = "") -> tuple[str, str]:
+    """(ядро, город) китайского названия: «威海百合生物技术有限公司» → («百合», «威海»). Город — из названия или,
+    если там нет, из «location». Не китайское — ("", "")."""
+    raw = re.sub(r"[（(]([^)）]*)[)）]", r" \1 ", name or "")
+    if not CJK.search(raw):
+        return "", ""
+    city = next((p for p in CN_PLACES if p in raw), "")
+    core = norm_name(raw)
+    for p in sorted(CN_PLACES, key=len, reverse=True):
+        core = core.replace(p, "")
+    core = re.sub(r"[省市县区]", "", core)
+    if not city:
+        city = next((p for p in CN_PLACES if p in (location or "")), "")
+    return core, city
 
 
 def site_brand(site: str) -> str:
@@ -602,7 +651,12 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
     by_key: dict[str, int] = {}
     for i, it in enumerate(items):
         c = it["c"]
-        for k in {f"n:{norm_name(x)}" for x in [c.name, c.local_name, *c.aliases] if _name_key_ok(norm_name(x))}:
+        keys = {f"n:{norm_name(x)}" for x in [c.name, c.local_name, *c.aliases] if _name_key_ok(norm_name(x))}
+        for x in [c.name, c.local_name, *c.aliases]:  # одно ядро названия в одном городе — одна компания
+            core, city = cn_core_city(x, c.location)
+            if city and len(core) >= 2:
+                keys.add(f"c:{core}@{city}")
+        for k in keys:
             if k in by_key:
                 union(i, by_key[k])
             else:
@@ -684,16 +738,28 @@ def screen_decide(checks: list[ScreenCheck], attrs: list[Attribute]) -> tuple[st
     # поднимает кандидата в списке (16.11 трое исключены за «сырьё закупает», а по заданию это не условие)
     hard = {a.id for a in attrs if a.screen and is_knockout(a)}
     got = {c.attr: c for c in checks if c.attr in want}
+    # «подходит» только с опорой на сайт компании или документ: карточка B2B-площадки, пресс-релиз, новость или
+    # —  не подтверждение (16.11 так «подходили» Alibaba-карточки и платный пресс-релиз)
+    weak = [c for c in got.values() if c.verdict == "pass" and c.url and weak_source(c.url)]
+    for c in weak:
+        got[c.attr] = c.model_copy(update={"verdict": "unclear"})
+    # признаки посредника в ответе — кандидат не «подходит», пока это не прояснено (Junzhao: «partner facility»)
+    middleman = next((c for c in checks if INTERMEDIARY.search(f"{c.value} {c.quote}")), None)
     fails = [c for c in got.values() if c.attr in hard and c.verdict == "fail" and len(c.quote.strip()) >= 8
              and not UNKNOWN.search(c.value or "") and not UNKNOWN.search(c.quote)]
     if fails:
         names = {a.id: a.name for a in attrs}
         return "fail", "; ".join(f"{names.get(c.attr, c.attr)}: {c.value or c.quote}"[:200] for c in fails)
     need = hard or want  # подходит — подтверждены все условия (а нет условий — все отмеченные признаки)
+    if middleman is not None:
+        return "unclear", f"не выяснено: признаки посредника — «{(middleman.quote or middleman.value)[:120]}»"
     if need and all(got.get(a) and got[a].verdict == "pass" for a in need):
         return "pass", ""
     unclear = [a.name for a in attrs if a.id in need and not (got.get(a.id) and got[a.id].verdict == "pass")]
-    return "unclear", "не выяснено: " + ", ".join(unclear)
+    why = "не выяснено: " + ", ".join(unclear)
+    if weak and any(c.attr in need for c in weak):
+        why += " (подтверждено только площадкой, новостью или пресс-релизом)"
+    return "unclear", why
 
 
 # ---------------------------------------------------------------------------------------------------- числа и единицы
@@ -1445,6 +1511,20 @@ def chair_screen_rules(frame: "SelectionFrame") -> "SelectionFrame":
     return frame
 
 
+def sites_prompt(objs: list[dict[str, Any]]) -> str:
+    lines = "\n".join(f"- {o['name']}" + (f" ({', '.join((o.get('names') or [])[1:3])})" if len(o.get('names') or []) > 1 else "")
+                      + (f" — {o['location']}" if o.get("location") else "") for o in objs)
+    return f"""Find the OFFICIAL website of each company below by searching the web: the company's own domain (its home
+page), not a marketplace listing (Alibaba, Made-in-China, 1688), a news site, a press release, an association or an
+exhibition page. A listed company may have an investor-relations page — the official site is still its own domain.
+Not sure it is the same company (name, city) → leave "website" empty. Do not guess domains.
+
+Companies:
+{lines}
+
+Return JSON: {{"items": [{{"name": "<name as given>", "website": "https://..."}}]}}"""
+
+
 def screen_read_prompt(frame: SelectionFrame, attrs: list[Attribute], objs: list[dict[str, Any]],
                        texts: dict[str, list[tuple[str, str]]]) -> str:
     lines = "\n".join(f"- {o['name']}" + (f" ({', '.join(o['names'][1:4])})" if len(o.get("names") or []) > 1 else "")
@@ -1463,7 +1543,11 @@ Objects:
 
 For each object and attribute: "verdict" pass | fail | unclear. "fail" ONLY when a page clearly proves the exclusion
 rule (a company that ALSO makes raw materials is not excluded for that if it makes finished products too); not on the
-pages → unclear. "value" (short), "url" (the page) and a short VERBATIM "quote" copied from that page. Return JSON:
+pages → unclear. "pass" ONLY when the page states it for THIS company and its own site: a statement about the parent
+group or another subsidiary, a province or "place of origin" without the city/address when the attribute asks for a
+location, a B2B listing card, a press release or a news item → unclear. Signs of an intermediary ("production in our
+partner facility", "import & export", "trading company", "sourcing agent") → the company does not manufacture: if a
+rule excludes traders or intermediaries, "fail" with that quote. "value" (short), "url" (the page) and a short VERBATIM "quote" copied from that page. Return JSON:
 {{"rows": [{{"object": "<name as given>", "website": "", "checks": [{{"attr": "A1", "verdict": "pass", "value": "",
 "url": "", "quote": ""}}]}}]}}
 
