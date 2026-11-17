@@ -274,3 +274,17 @@ def test_model_translations_are_cached_outside_the_archive(web, tmp_path):
     assert all(i["id"] != "telegram_settings" for i in c.get("/api/sessions").json()["items"])
     r = c.post("/api/models/translate", json={"ids": ["anthropic/claude-sonnet-5", "openai/gpt-5"]}).json()
     assert r["translations"] == {"anthropic/claude-sonnet-5": "Перевод"}  # без ключа — только то, что уже переведено
+
+
+def test_system_rollback_request(web):
+    """«Вернуть прошлую версию»: только если прошлая версия записана; заявка уходит службе на сервере."""
+    c, cfg_file = web
+    control = cfg_file.parent / "control"
+    control.mkdir()
+    (control / "version.json").write_text(json.dumps({"commit": "b" * 40, "branch": "x", "source": "stable",
+                                                      "remote": "https://github.com/owner/repo.git"}), encoding="utf-8")
+    assert c.post("/api/system/rollback").status_code == 409  # прошлая версия не записана
+    (control / "version.json").write_text(json.dumps({"commit": "b" * 40, "previous": "a" * 40, "source": "stable",
+                                                      "remote": "https://github.com/owner/repo.git"}), encoding="utf-8")
+    r = c.post("/api/system/rollback")
+    assert r.status_code == 200 and (control / "request").read_text().strip() == "rollback"

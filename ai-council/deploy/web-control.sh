@@ -8,6 +8,11 @@
 #
 #   sudo bash deploy/web-control.sh install     — один раз: служба, права на config.yaml, branding/, control/
 #   sudo bash deploy/web-control.sh update-now  — обновить сейчас из терминала (то же, что кнопка в вебе)
+#   sudo bash deploy/web-control.sh rollback    — вернуть прошлую версию (то же, что кнопка «Вернуть прошлую версию»)
+#
+# Откуда обновляться: ветка stable — туда GitHub переносит версию, только когда прошли все тесты (.github/workflows/
+# ai-council.yml). Нет такой ветки — из своей ветки, как раньше. Каждая установленная версия записывается в
+# control/history — по ней «Вернуть прошлую версию».
 #   bash deploy/web-control.sh run              — выполнить заявку (вызывает служба)
 #   bash deploy/web-control.sh version          — записать сведения о версии
 #   sudo bash deploy/web-control.sh backup-now  — резервная копия сейчас (сама делается каждую ночь)
@@ -23,6 +28,7 @@ UNIT=ai-council-control
 LOG="$CONTROL/update.log"
 BACKUPS="$APP_DIR/backups"     # резервные копии: ключи, настройки, логотип, архив заседаний, проекты
 BACKUP_LOG="$CONTROL/backup.log"
+HISTORY="$CONTROL/history"     # установленные раньше версии: «коммит дата» по строке, последняя — предыдущая
 
 compose() {
   local mode P=()
@@ -44,17 +50,44 @@ write_status() {  # write_status состояние действие сообщ�
   chmod 644 "$CONTROL/status.json" 2>/dev/null || true
 }
 
+update_source() {  # откуда обновляться: проверенная ветка stable, если она есть, иначе своя ветка
+  if git -C "$REPO_DIR" ls-remote --exit-code --heads origin stable >/dev/null 2>&1; then
+    echo stable
+  else
+    git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD
+  fi
+}
+
 write_version() {
   mkdir -p "$CONTROL"
-  local commit date subject branch remote
+  local commit date subject branch remote label prev changes source
   commit="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
   date="$(git -C "$REPO_DIR" log -1 --format=%cI 2>/dev/null || echo '')"
   subject="$(git -C "$REPO_DIR" log -1 --format=%s 2>/dev/null | json_escape)"
   branch="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
   remote="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || echo '')"
-  printf '{"commit": "%s", "date": "%s", "subject": %s, "branch": "%s", "remote": "%s", "written": "%s"}\n' \
-    "$commit" "$date" "${subject:-\"\"}" "$branch" "$remote" "$(now)" >"$CONTROL/version.json"
+  source="${1:-$(update_source 2>/dev/null || echo "$branch")}"
+  # номер версии: дата изменения и короткий код (2026.11.17 · 88047b7)
+  label="$(git -C "$REPO_DIR" log -1 --format=%cd --date=format:%Y.%m.%d 2>/dev/null || echo '') · ${commit:0:7}"
+  prev="$(tail -n1 "$HISTORY" 2>/dev/null | cut -d' ' -f1)"
+  changes="[]"
+  if [[ -n "$prev" && "$prev" != "$commit" ]]; then  # что изменилось с прошлой установленной версии
+    changes="$(git -C "$REPO_DIR" log --format=%s "$prev..$commit" 2>/dev/null | head -n 30 \
+      | python3 -c 'import json,sys; print(json.dumps([l.rstrip("\n")[:300] for l in sys.stdin if l.strip()], ensure_ascii=False))' \
+      2>/dev/null || echo '[]')"
+  fi
+  printf '{"commit": "%s", "date": "%s", "subject": %s, "branch": "%s", "source": "%s", "remote": "%s", "label": "%s", "previous": "%s", "changes": %s, "written": "%s"}\n' \
+    "$commit" "$date" "${subject:-\"\"}" "$branch" "$source" "$remote" "$label" "$prev" "$changes" "$(now)" >"$CONTROL/version.json"
   chmod 644 "$CONTROL/version.json" 2>/dev/null || true
+}
+
+rebuild() {
+  fix_permissions
+  ensure_swap
+  echo "== Сборка образа (может занять несколько минут)"
+  compose build -q || { echo "!! Ошибка сборки образа"; return 1; }
+  echo "== Перезапуск"
+  compose up -d --force-recreate || { echo "!! Ошибка перезапуска"; return 1; }
 }
 
 fix_permissions() {
@@ -88,29 +121,60 @@ ensure_swap() {
 }
 
 do_update() {
-  local branch cfg_backup
-  branch="$(git -C "$REPO_DIR" rev-parse --abbrev-ref HEAD)"
-  echo "== Обновление программы ($branch) — $(now)"
+  local branch cfg_backup before
+  branch="$(update_source)"
+  before="$(git -C "$REPO_DIR" rev-parse HEAD)"
+  echo "== Обновление программы (из ветки $branch$([[ $branch == stable ]] && echo ': версии, прошедшие все тесты')) — $(now)"
   # Ваши настройки (config.yaml) — главнее версии из репозитория: убираем их на время обновления и возвращаем.
   cfg_backup="$(mktemp)"
   cp "$APP_DIR/config.yaml" "$cfg_backup"
   git -C "$REPO_DIR" checkout -q -- "$APP_DIR/config.yaml" 2>/dev/null || true
-  if ! git -C "$REPO_DIR" fetch -q origin "$branch" || ! git -C "$REPO_DIR" merge -q --ff-only "origin/$branch"; then
+  # явная ссылка: клон мог быть одной ветки — тогда origin/stable сам не обновился бы
+  if ! git -C "$REPO_DIR" fetch -q origin "+refs/heads/$branch:refs/remotes/origin/$branch" \
+      || ! git -C "$REPO_DIR" merge -q --ff-only "origin/$branch"; then
     cp "$cfg_backup" "$APP_DIR/config.yaml"; rm -f "$cfg_backup"
     echo "!! Не удалось получить обновление (нет связи с GitHub или файлы программы меняли вручную)."
     return 1
   fi
   cp "$cfg_backup" "$APP_DIR/config.yaml"; rm -f "$cfg_backup"
+  if [[ "$(git -C "$REPO_DIR" rev-parse HEAD)" == "$before" ]]; then
+    echo "== Уже стоит последняя проверенная версия — обновлять нечего"
+    write_version "$branch"
+    return 0
+  fi
+  # запомнить версию, с которой обновились, — к ней ведёт «Вернуть прошлую версию»
+  [[ "$(tail -n1 "$HISTORY" 2>/dev/null | cut -d' ' -f1)" == "$before" ]] || { echo "$before $(now)" >>"$HISTORY"; chmod 644 "$HISTORY" 2>/dev/null || true; }
   echo "== Код обновлён до $(git -C "$REPO_DIR" log -1 --format='%h %s')"
-  fix_permissions
-  ensure_swap
-  echo "== Сборка образа (может занять несколько минут)"
-  compose build -q || { echo "!! Ошибка сборки образа"; return 1; }
-  echo "== Перезапуск"
-  compose up -d --force-recreate || { echo "!! Ошибка перезапуска"; return 1; }
-  write_version
+  rebuild || return 1
+  write_version "$branch"
   install_backup_timer
   echo "== Готово"
+}
+
+do_rollback() {  # вернуть версию, стоявшую до последнего обновления (настройки config.yaml сохраняются)
+  local prev cur cfg_backup
+  cur="$(git -C "$REPO_DIR" rev-parse HEAD)"
+  prev="$(grep -v "^$cur " "$HISTORY" 2>/dev/null | tail -n1 | cut -d' ' -f1)"
+  if [[ -z "$prev" ]]; then
+    echo "!! Прошлая версия не записана — возвращать не к чему (запись ведётся с этого обновления)."
+    return 1
+  fi
+  echo "== Возврат к прошлой версии $(git -C "$REPO_DIR" log -1 --format='%h %s' "$prev" 2>/dev/null || echo "$prev") — $(now)"
+  cfg_backup="$(mktemp)"
+  cp "$APP_DIR/config.yaml" "$cfg_backup"
+  git -C "$REPO_DIR" checkout -q -- "$APP_DIR/config.yaml" 2>/dev/null || true
+  if ! git -C "$REPO_DIR" reset -q --hard "$prev"; then
+    cp "$cfg_backup" "$APP_DIR/config.yaml"; rm -f "$cfg_backup"
+    echo "!! Не удалось вернуть прошлую версию"
+    return 1
+  fi
+  cp "$cfg_backup" "$APP_DIR/config.yaml"; rm -f "$cfg_backup"
+  # из истории убираем возвращённую версию: следующий возврат — ещё на шаг назад
+  grep -v "^$prev " "$HISTORY" | grep -v "^$cur " >"$HISTORY.tmp" || true
+  mv -f "$HISTORY.tmp" "$HISTORY"
+  rebuild || return 1
+  write_version
+  echo "== Готово: стоит прошлая версия. «Обновить программу» снова поставит последнюю проверенную."
 }
 
 env_get() { grep -E "^$1=" "$APP_DIR/.env" 2>/dev/null | tail -n1 | cut -d= -f2- || true; }
@@ -203,6 +267,7 @@ run_action() {  # run_action update|restart  (вывод — в журнал)
   case "$action" in
     update)  do_update >>"$LOG" 2>&1 || rc=$? ;;
     restart) do_restart >>"$LOG" 2>&1 || rc=$? ;;
+    rollback) do_rollback >>"$LOG" 2>&1 || rc=$? ;;
     backup)  do_backup >>"$LOG" 2>&1 || rc=$? ;;
     *) echo "неизвестная заявка: $action" >>"$LOG"; rc=2 ;;
   esac
@@ -282,6 +347,7 @@ case "${1:-}" in
   install)    cmd_install ;;
   run)        cmd_run ;;
   update-now) cmd_update_now ;;
+  rollback)   if run_action rollback; then tail -n 3 "$LOG"; else cat "$LOG"; exit 1; fi ;;
   version)    write_version ;;
   backup-now) cmd_backup_now ;;
   restore)    [[ -n "${2:-}" ]] || { echo "Укажите файл: restore backups/ai-council-ДАТА.tgz" >&2; exit 2; }

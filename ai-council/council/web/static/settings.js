@@ -703,7 +703,9 @@ async function renderSystem(first) {
   const st = sys.status || {};
   const running = st.state === "running" || sys.pending;
   const when = (iso) => (iso ? new Date(iso).toLocaleString("ru-RU") : "");
-  const ver = v ? `<code>${esc((v.commit || "").slice(0, 7))}</code> от ${esc(when(v.date))}<div class="muted small">${esc(v.subject || "")}</div>`
+  const ver = v ? `<b>${esc(v.label || (v.commit || "").slice(0, 7))}</b> <span class="muted small">от ${esc(when(v.date))}</span>`
+      + `${v.source === "stable" ? ' <span class="badge ok">прошла все тесты</span>' : ""}<div class="muted small">${esc(v.subject || "")}</div>`
+      + ((v.changes || []).length ? `<details><summary class="small">Что изменилось в этой версии (${v.changes.length})</summary><ul class="commits">${v.changes.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></details>` : "")
     : '<span class="muted">неизвестна</span>';
   const ch = SET.check;
   let upd = "";
@@ -722,14 +724,17 @@ async function renderSystem(first) {
         <button type="button" class="secondary" id="sysCheck">Проверить обновления</button>
         <button type="button" id="sysUpdate" ${!sys.control || running ? "disabled" : ""}>Обновить программу</button>
         <button type="button" class="secondary" id="sysRestart" ${!sys.control || running ? "disabled" : ""}>Перезапустить</button>
+        ${v && v.previous ? `<button type="button" class="secondary" id="sysRollback" ${!sys.control || running ? "disabled" : ""} title="Вернуть версию, стоявшую до последнего обновления">Вернуть прошлую версию</button>` : ""}
       </div>
     </div>
     ${upd}
-    ${st.action ? `<div class="sys-status"><b>${{ update: "Обновление", restart: "Перезапуск", backup: "Резервная копия" }[st.action] || st.action}:</b> ${stText}
+    ${st.action ? `<div class="sys-status"><b>${{ update: "Обновление", restart: "Перезапуск", backup: "Резервная копия", rollback: "Возврат прошлой версии" }[st.action] || st.action}:</b> ${stText}
       ${st.at ? `<span class="muted small">${esc(when(st.at))}</span>` : ""}${st.message && st.state === "failed" ? `<div class="bad-text">${esc(st.message)}</div>` : ""}</div>` : ""}
     ${sys.log ? `<details ${running || st.state === "failed" ? "open" : ""}><summary class="small">Журнал</summary><pre class="sys-log">${esc(sys.log)}</pre></details>` : ""}
     <p class="muted small">Обновление: программа скачивает новую версию, пересобирается и перезапускается (обычно 1–5 минут).
-      Ваши настройки, отчёты и архив сохраняются. Идущие заседания прервутся — обновляйте, когда совет не заседает.</p>
+      Приходят только версии, прошедшие все тесты на GitHub (ветка stable): если тесты упали, обновление не появится.
+      Ваши настройки, отчёты и архив сохраняются. Идущие заседания прервутся — обновляйте, когда совет не заседает.
+      Что-то пошло не так после обновления — «Вернуть прошлую версию» ставит предыдущую (настройки и архив не трогаются).</p>
     <h2 style="margin-top:1.2rem">Журналы для разбора ошибок</h2>
     <p class="muted small">Журнал программы и прерванные заседания одним архивом — его можно прислать для разбора.
       Ключи и пароли в журналах скрываются; вопросы и ответы моделей — внутри. Журнал отдельного заседания —
@@ -749,6 +754,7 @@ async function renderSystem(first) {
   $("sysCheck").addEventListener("click", () => checkVersion(true));
   $("sysUpdate").addEventListener("click", () => requestAction("update"));
   $("sysRestart").addEventListener("click", () => requestAction("restart"));
+  if ($("sysRollback")) $("sysRollback").addEventListener("click", () => requestAction("rollback"));
   $("showBackups").addEventListener("click", showBackups);
   $("backupNow").addEventListener("click", backupNow);
   loadFullBackups();
@@ -789,14 +795,17 @@ async function checkVersion(force) {
 }
 
 async function requestAction(action) {
-  const text = action === "update"
-    ? "Обновить программу? Она скачает новую версию, пересоберётся и перезапустится (1–5 минут). Идущие заседания прервутся."
-    : "Перезапустить программу? Идущие заседания прервутся.";
-  if (!(await ask({ title: action === "update" ? "Обновить программу?" : "Перезапустить программу?", html: `<p>${esc(text)}</p>`, ok: action === "update" ? "Обновить" : "Перезапустить" }))) return;
+  const TXT = {
+    update: ["Обновить программу?", "Она скачает новую проверенную версию, пересоберётся и перезапустится (1–5 минут). Идущие заседания прервутся.", "Обновить"],
+    restart: ["Перезапустить программу?", "Идущие заседания прервутся.", "Перезапустить"],
+    rollback: ["Вернуть прошлую версию?", "Программа вернётся к версии, стоявшей до последнего обновления, пересоберётся и перезапустится (1–5 минут). Настройки, отчёты и архив не меняются. Идущие заседания прервутся.", "Вернуть"],
+  }[action];
+  if (!(await ask({ title: TXT[0], html: `<p>${esc(TXT[1])}</p>`, ok: TXT[2] }))) return;
   try {
     await api(`/api/system/${action}`, { method: "POST" });
     SET.restarting = true;
-    notice(action === "update" ? "⏳ Обновление запущено. Страница обновится сама, когда программа перезапустится." : "⏳ Перезапуск…", "warn");
+    notice(action === "update" ? "⏳ Обновление запущено. Страница обновится сама, когда программа перезапустится."
+      : action === "rollback" ? "⏳ Возвращаю прошлую версию. Страница обновится сама, когда программа перезапустится." : "⏳ Перезапуск…", "warn");
     startPolling();
     renderSystem(false);
   } catch (e) { notice(esc(e.message), "bad"); }

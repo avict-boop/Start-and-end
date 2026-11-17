@@ -511,7 +511,8 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
     @app.get("/api/system/check")
     async def check_updates(force: bool = False) -> dict[str, Any]:
         ver = read_json("version.json") or {}
-        repo, branch, commit = _repo_of(ver.get("remote", "")), ver.get("branch"), ver.get("commit")
+        # откуда обновляется сервер: проверенная ветка stable (если служба её нашла) или своя ветка
+        repo, branch, commit = _repo_of(ver.get("remote", "")), ver.get("source") or ver.get("branch"), ver.get("commit")
         if not (repo and branch and commit and commit != "unknown"):
             raise HTTPException(409, "версия программы неизвестна — на сервере один раз выполните: "
                                      "sudo bash /opt/ai-council/ai-council/deploy/web-control.sh install")
@@ -555,6 +556,15 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
     async def update() -> dict[str, Any]:
         log.info("запрошено обновление программы с сайта")
         return request_action("update")
+
+    @app.post("/api/system/rollback")
+    async def rollback() -> dict[str, Any]:
+        """Вернуть версию, стоявшую до последнего обновления (служба на сервере, как и обновление)."""
+        ver = read_json("version.json") or {}
+        if not ver.get("previous"):
+            raise HTTPException(409, "прошлая версия не записана — возвращать не к чему")
+        log.info("запрошен возврат прошлой версии с сайта")
+        return request_action("rollback")
 
     @app.post("/api/system/restart")
     async def restart() -> dict[str, Any]:
