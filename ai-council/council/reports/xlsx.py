@@ -32,10 +32,12 @@ def selection_xlsx(d: dict[str, Any], weights: dict[str, float] | None = None, u
     ws = wb.active
     ws.title = "Ранг"
     scored = [a for a in attrs if a.scorable]
-    ws.append(["№", "Объект", "Сайт", "Балл", "Первая группа"] + [f"{a.name} (вес {a.weight:g})" for a in scored])
+    ws.append(["№", "Объект", "Сайт", "Балл", "Первая группа", "Кто подтвердил (отсев)", "Эксперты"]
+              + [f"{a.name} (вес {a.weight:g})" for a in scored])
     for r in rr["ranking"]:
         o = objs.get(r["object"], {})
-        ws.append([r["rank"], names.get(r["object"]), o.get("website", ""), r["score"], "да" if r["rank"] <= top_n else ""]
+        ws.append([r["rank"], names.get(r["object"]), o.get("website", ""), r["score"], "да" if r["rank"] <= top_n else "",
+                   S.agree_label(o), S.expert_votes(o)]
                   + [round(r["parts"].get(a.id, 0) * 100, 1) for a in scored])
     _style_head(ws, bold)
 
@@ -84,6 +86,12 @@ def selection_xlsx(d: dict[str, Any], weights: dict[str, float] | None = None, u
                        "; ".join(x.get("found_by") or []), ", ".join(x.get("confirmed") or []),
                        ", ".join(x.get("open") or []), x.get("reason", "")])
         _style_head(wp, bold)
+    if sel.get("experts"):
+        we = wb.create_sheet("Эксперты")
+        we.append(["Эксперт", "Модель", "«Да»", "Подтвердила проверка", "«Нет»", "Не знает"])
+        for x in sel["experts"]:
+            we.append([x["name"], x["model"], x["yes"], x["confirmed"], x["no"], x["unknown"]])
+        _style_head(we, bold)
     if sel.get("excluded"):
         ws5 = wb.create_sheet("Исключены")
         ws5.append(["Объект", "Причина"])

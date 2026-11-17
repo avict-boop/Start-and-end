@@ -630,3 +630,144 @@ def assign(advice: Advice, cfg: CouncilConfig) -> dict[str, Any]:
             web.append(slot)
     return {"members": members, "chair": chair, "devil_advocate": devil, "models": models, "extra_members": extra,
             "web_search": web}
+
+
+# ------------------------------------------------------------------ советник по экспертам «Отбора»
+# Эксперты отвечают по памяти, без поиска: важно, о каком рынке, стране, языке и отрасли задача — модели разных
+# разработчиков знают разные рынки (китайские — китайских производителей, европейские — европейских…). Советник
+# разбирает задание и предлагает, сколько и каких экспертов взять; выбирает человек.
+
+EXPERT_PROVIDERS = ("anthropic", "openai", "google", "x-ai", "deepseek", "qwen", "moonshotai", "z-ai", "minimax",
+                    "baidu", "tencent", "mistralai", "cohere", "ai21", "amazon", "microsoft", "nvidia", "meta-llama")
+EXPERT_CALLS_700 = 9                      # пачки по 80 на 700 кандидатов
+EXPERT_IN, EXPERT_OUT = 6100, 4400        # токенов на пачку (как в оценке стоимости)
+# рынок по словам задания → разработчики, чьи модели обычно лучше его знают (правила — без ключа и при сбое советника)
+REGIONS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
+    ("Китай", r"кита[йе]|кнр|\bchin|中国|大陆|广东|浙江|江苏|山东|上海|深圳", ("qwen", "deepseek", "moonshotai", "z-ai")),
+    ("Израиль", r"израил|israel|ישראל", ("ai21",)),
+    ("Европа", r"европ|\beu\b|europe|франц|франк|герман|итал|испан|польш|нидерланд|france|german|ital|spain", ("mistralai",)),
+    ("Корея, Япония", r"коре|япон|korea|japan|韓国|日本", ("google", "openai")),
+    ("Индия", r"инди[яи]|india|भारत", ("google", "openai")),
+    ("Ближний Восток", r"\bоаэ\b|эмират|сауд|катар|uae|emirat|saudi|qatar|арабск", ("openai", "google")),
+)
+
+
+class ExpertPick(BaseModel):
+    model: str
+    why: str = ""
+
+    @field_validator("model", "why", mode="before")
+    @classmethod
+    def _t(cls, v: Any) -> str:
+        return str(v or "").strip()
+
+
+class ExpertAdvice(BaseModel):
+    market: str = ""                                    # рынок и отрасль задачи своими словами
+    regions: list[str] = Field(default_factory=list)    # страны / регионы
+    languages: list[str] = Field(default_factory=list)  # языки, на которых называются компании
+    count_why: str = ""                                 # почему столько экспертов
+    experts: list[ExpertPick] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+
+
+def expert_candidates(models: list[dict[str, Any]], cfg: CouncilConfig, per_provider: int = 2) -> list[dict[str, Any]]:
+    """Из кого выбирать экспертов: у каждого заметного разработчика — по две свежие полноразмерные модели (знания —
+    у больших моделей) и модели участников совета."""
+    text = [m for m in sort_newest(models) if m.get("id") and is_text_model(m)]
+    out: dict[str, dict[str, Any]] = {}
+    for prov in EXPERT_PROVIDERS:
+        for m in [x for x in text if provider(x["id"]) == prov and not is_light(x["id"]) and ":" not in x["id"]][:per_provider]:
+            out[m["id"]] = m
+    by_id = {m["id"]: m for m in text}
+    for mem in cfg.members:
+        if mem.model in by_id:
+            out[mem.model] = by_id[mem.model]
+    return [facts(m) for m in out.values()]
+
+
+def expert_cost_700(c: dict[str, Any]) -> float:
+    """Цена одного эксперта на 700 кандидатов, $ (цены каталога — за 1M токенов)."""
+    return round(EXPERT_CALLS_700 * (EXPERT_IN * float(c.get("price_in") or 0) + EXPERT_OUT * float(c.get("price_out") or 0)) / 1e6, 2)
+
+
+def expert_advice_prompt(question: str, cands: list[dict[str, Any]], current: list[str], chair_model: str,
+                         question_chars: int = 12000) -> str:
+    rows = [{"id": c["id"], "date": c["date"], "context": c["context"], "price_in": c["price_in"],
+             "price_out": c["price_out"], "cost_per_700_candidates": expert_cost_700(c),
+             "developer_says": (c.get("description") or "")[:240]} for c in cands]
+    q = question if len(question) <= question_chars else question[:question_chars] + " …[truncated]"
+    return f"""You advise which EXPERT models to use in a selection study. After a cheap page check of every found
+candidate (companies, products, suppliers…), each expert model answers FROM ITS OWN MEMORY, without web search, for each
+candidate: fits / does not fit / does not know. A candidate is kept if at least ONE expert or the page check says "fits".
+So experts help find candidates whose web pages say little — but each extra expert also adds false "yes" answers, and
+every candidate kept only by experts goes to the expensive detailed check (~$0.05–0.25 each).
+
+Task:
+{q}
+
+Decide:
+1) market: what market / industry / kind of objects the task is about; regions: countries or regions; languages: the
+   languages candidate names and sources will be in.
+2) how many experts (usually 2–4; 1 for a narrow well-known market; up to 5–6 only for a broad multi-country task) and
+   which ones: pick models whose training is most likely to KNOW companies of these regions and this industry — e.g.
+   developers from that region (their models know local companies and local-language sources), plus at least one
+   strong general model of a different developer for diversity. Prefer large, recent, non-"mini/flash" models: memory
+   of niche companies grows with model size. Two models of the same developer rarely add much — avoid that.
+3) why for each (one sentence in Russian: what it likely knows better), and count_why (one sentence in Russian).
+Use ONLY ids from the candidate list. The chair model ({chair_model}) is a natural default if it fits.
+Currently selected experts: {', '.join(current) or 'none (chair by default)'}.
+
+Candidates:
+{json.dumps(rows, ensure_ascii=False)}
+
+Return JSON only: {{"market": "", "regions": [""], "languages": [""], "count_why": "", "experts": [{{"model": "id",
+"why": ""}}], "caveats": [""]}} — Russian text, model ids exactly as listed."""
+
+
+def rule_experts(question: str, cands: list[dict[str, Any]], chair_model: str) -> ExpertAdvice:
+    """Подбор экспертов по правилам: рынок — по словам задания; председатель + модели разработчиков этого региона +
+    одна сильная модель другого разработчика."""
+    by_prov: dict[str, list[dict[str, Any]]] = {}
+    for c in cands:
+        by_prov.setdefault(provider(c["id"]), []).append(c)
+    regions = [(name, provs) for name, rx, provs in REGIONS if re.search(rx, question, re.I)]
+    picks: list[ExpertPick] = []
+
+    def add(mid: str, why: str) -> None:
+        if mid and mid not in {p.model for p in picks} and provider(mid) not in {provider(p.model) for p in picks}:
+            picks.append(ExpertPick(model=mid, why=why))
+    add(chair_model if any(c["id"] == chair_model for c in cands) else "", "модель председателя — сильная общая модель")
+    for name, provs in regions:
+        for prov in provs:
+            if by_prov.get(prov):
+                add(by_prov[prov][0]["id"], f"разработчик связан с рынком «{name}» — вероятно, лучше знает местные компании")
+                if sum(1 for p in picks if provider(p.model) in provs) >= 2:
+                    break
+    for prov in ("anthropic", "openai", "google"):
+        if len(picks) >= (3 if regions else 2):
+            break
+        if by_prov.get(prov):
+            add(by_prov[prov][0]["id"], "сильная модель другого разработчика — для разнообразия знаний")
+    return ExpertAdvice(market="по словам задания (без анализа моделью)", regions=[n for n, _ in regions],
+                        count_why=(f"рынок: {', '.join(n for n, _ in regions)} — эксперты этого региона и общая модель"
+                                   if regions else "рынок не распознан — две сильные модели разных разработчиков"),
+                        experts=picks)
+
+
+def finalize_experts(adv: ExpertAdvice, cands: list[dict[str, Any]]) -> ExpertAdvice:
+    """Только модели каталога, без повторов; цена на 700 кандидатов — расчётом."""
+    by_id = {c["id"]: c for c in cands}
+    seen: set[str] = set()
+    keep = []
+    dropped = []
+    for p in adv.experts:
+        if p.model in by_id and p.model not in seen:
+            seen.add(p.model)
+            keep.append(p)
+        elif p.model not in by_id:
+            dropped.append(p.model)
+    cav = list(adv.caveats)
+    if dropped:
+        cav.append(f"Нет в каталоге OpenRouter — убраны: {', '.join(dropped)}")
+    return adv.model_copy(update={"experts": keep, "caveats": cav})

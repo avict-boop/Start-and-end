@@ -417,3 +417,18 @@ def test_several_experts_any_yes(tmp_path):
     md = S.report_md({"frame": {}, "attributes": [], "objects": [], "table": {}, "ranking": [], "top_n": 0,
                       "experts": st}, None)
     assert "Эксперты: чьи «да»" in md and "il/model-x" in md
+
+
+def test_order_tiers_survive_diverse_order():
+    """Чередование по направлениям — только внутри ступени: подтверждённые страницей и экспертом → страницей →
+    только экспертом → прочие; «не выяснено» не обгоняет подтверждённых экспертом."""
+    from council.modes import selection as SM
+
+    def e(i, res, yes, ang):
+        return {"id": i, "name": i, "angles": [ang], "screen": {"result": res, "checks": []},
+                "expert": {"verdict": "yes" if yes else "unknown", "yes": ["x"] if yes else []}}
+    ents = [e("U1", "unclear", False, "a"), e("X1", "unclear", True, "b"), e("P1", "pass", False, "c"),
+            e("B1", "pass", True, "d"), e("U2", "unclear", False, "e"), e("X2", "fail", True, "a")]
+    out = SM.diverse_order(sorted(ents, key=SM._order))
+    ids = [x["id"] for x in out]
+    assert ids[:2] == ["B1", "P1"] and set(ids[2:4]) == {"X1", "X2"} and set(ids[4:]) == {"U1", "U2"}

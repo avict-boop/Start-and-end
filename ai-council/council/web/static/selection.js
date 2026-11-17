@@ -546,7 +546,40 @@ function selExpertAdd() {
   selExpertsDraw();
   if (window.formChanged) formChanged();
 }
+// советник: сколько и каких экспертов взять под это задание (рынок, страны, языки)
+async function selExpertAdvise() {
+  const box = $("selExpertAdvice");
+  const q = ($("question") || {}).value || "";
+  if (q.trim().length < 3) { toast("Сначала напишите задание"); return; }
+  box.hidden = false;
+  box.innerHTML = '<p class="muted small">Советник разбирает задание…</p>';
+  let r;
+  try {
+    r = await api("/api/advise/experts", { method: "POST", body: { question: q, current: selExperts, mock: !!($("mock") && $("mock").checked) } });
+  } catch (e) { box.innerHTML = `<p class="muted small">Подбор не удался: ${esc(e.message)}</p>`; return; }
+  const a = r.advice || {};
+  const ex = a.experts || [];
+  const money2 = (v) => String(v ?? "?").replace(".", ",");
+  const meta = [a.market ? `рынок: ${esc(a.market)}` : "", (a.regions || []).length ? `регионы: ${esc(a.regions.join(", "))}` : "",
+    (a.languages || []).length ? `языки: ${esc(a.languages.join(", "))}` : ""].filter(Boolean).join(" · ");
+  box.innerHTML = `<p class="small"><b>Советник предлагает экспертов: ${ex.length}</b>${r.source === "rules" ? " (по правилам)" : r.advisor_model ? ` (${esc(r.advisor_model)})` : ""}${meta ? `<br><span class="muted">${meta}</span>` : ""}</p>
+    ${a.count_why ? `<p class="small muted">${esc(a.count_why)}</p>` : ""}
+    <ul class="small">${ex.map((p) => `<li><b>${esc(p.model)}</b> — ≈ $${money2((r.price_700 || {})[p.model])} на 700 кандидатов${p.why ? `<br><span class="muted">${esc(p.why)}</span>` : ""}</li>`).join("")}</ul>
+    ${(a.caveats || []).length ? `<p class="small muted">${a.caveats.map(esc).join("<br>")}</p>` : ""}
+    <p class="small">Всего ≈ $${money2(r.total_700 ?? 0)} на 700 кандидатов${r.cost ? ` · подбор стоил $${money2(r.cost)}` : ""}.</p>
+    ${ex.length ? '<button type="button" class="btn small" id="selExpertTake">Взять этих экспертов</button>' : ""}`;
+  if ($("selExpertTake")) $("selExpertTake").addEventListener("click", () => {
+    selExperts = ex.map((p) => p.model);
+    selExpertsDraw();
+    box.hidden = true;
+    if (window.formChanged) formChanged();
+    toast(`Эксперты: ${selExperts.length}`);
+  });
+}
 document.addEventListener("DOMContentLoaded", () => {
+  if ($("selExpertAdvise")) $("selExpertAdvise").addEventListener("click", selExpertAdvise);
+  const offNote = () => { if ($("selExpertOff")) $("selExpertOff").hidden = $("selStart").value !== "check"; };
+  if ($("selStart")) { $("selStart").addEventListener("change", offNote); offNote(); }
   if (!$("selExpertAdd")) return;
   $("selExpertAdd").addEventListener("focus", selModelsLoad, { once: true });
   $("selExpertAdd").addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); selExpertAdd(); } });
@@ -567,7 +600,7 @@ function selectionRequest() {
 }
 
 function selectionRestore(o) {
-  if (o.start) $("selStart").value = o.start;
+  if (o.start) { $("selStart").value = o.start; $("selStart").dispatchEvent(new Event("change")); }
   $("selShortlist").value = o.shortlist ?? "";
   $("selTop").value = o.top_n ?? "";
   selExperts = [...(o.experts || [])];

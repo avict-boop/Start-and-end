@@ -155,6 +155,10 @@ button.pill:disabled { opacity: 1; cursor: default; }
 .chip { font-size: .85rem; padding: .2rem .65rem; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); display: inline-flex; align-items: center; gap: .35rem; }
 .row-inline { display: flex; gap: .4rem; align-items: center; margin-top: .4rem; }
 .row-inline input { flex: 1; min-width: 0; font-size: 16px; }
+#selExpertAdvise { margin-top: .5rem; }
+.sel-advice { margin-top: .5rem; padding: .6rem .8rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.sel-advice ul { padding-left: 1.1rem; margin: .3rem 0; }
+.sel-advice li { margin: .3rem 0; overflow-wrap: anywhere; }
 .chip.done { background: var(--ok-soft); color: var(--ok); border-color: transparent; }
 .chip.fail { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
 .chip.work { border-color: var(--accent); color: var(--accent); }
@@ -1097,8 +1101,9 @@ details[open] > summary .params-edit { visibility: hidden; }
 .link.danger { color: var(--bad); }
 .bad-input { outline: 2px solid var(--bad); outline-offset: 1px; }
 .sel-review .kind-inline { display: none; }
-.field.is-off { opacity: .5; }
+.field.is-off, .switch.is-off { opacity: .5; }
 .field.is-off::after { content: attr(data-off); display: block; font-size: .78rem; color: var(--muted); }
+.switch.is-off small::after { content: " · " attr(data-off); }
 .w-prog { display: block; font-size: .82rem; color: var(--muted); }
 /* приложение на телефоне */
 .pwa-box { margin-bottom: 1.6rem; padding-bottom: 1.2rem; border-bottom: 1px solid var(--line); }

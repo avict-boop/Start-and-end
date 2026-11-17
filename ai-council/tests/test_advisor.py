@@ -318,3 +318,22 @@ def test_advice_for_every_mode_keeps_mode_and_runs(site, mode):
                                          **({"research": plan["research"]} if mode == "research" and plan.get("research") else {})})
     assert s.status_code == 200, s.text
     assert read_events(site, s.json()["id"])[-1]["type"] == "done"
+
+
+def test_expert_advisor_by_market(site):
+    """Советник по экспертам: рынок по заданию → модели разработчиков этого рынка + сильная модель другого;
+    только модели каталога; цена на 700 кандидатов — расчётом."""
+    r = site.post("/api/advise/experts", json={"question": "Найди контрактных производителей БАД в Китае", "mock": True})
+    assert r.status_code == 200
+    b = r.json()
+    ids = [p["model"] for p in b["advice"]["experts"]]
+    assert b["source"] == "rules" and "Китай" in b["advice"]["regions"]
+    assert ids[0] == "anthropic/claude-sonnet-5.5"                        # председатель
+    assert any(i.startswith(("qwen/", "deepseek/")) for i in ids)          # знает китайский рынок
+    assert all(not A.is_light(i) for i in ids) and len({i.split("/")[0] for i in ids}) == len(ids)
+    assert b["total_700"] > 0 and set(b["price_700"]) == set(ids)
+    r2 = site.post("/api/advise/experts", json={"question": "Подбери поставщиков упаковки", "mock": True}).json()
+    assert r2["advice"]["regions"] == [] and len(r2["advice"]["experts"]) == 2
+    adv = A.finalize_experts(A.ExpertAdvice(experts=[A.ExpertPick(model="x/none"), A.ExpertPick(model="qwen/qwen4-max"),
+                                                     A.ExpertPick(model="qwen/qwen4-max")]), A.expert_candidates(CATALOG, cfg()))
+    assert [p.model for p in adv.experts] == ["qwen/qwen4-max"] and "x/none" in adv.caveats[0]

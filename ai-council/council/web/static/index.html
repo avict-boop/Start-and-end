@@ -154,7 +154,10 @@
                   <div class="chips" id="selExperts"></div>
                   <div class="row-inline"><input id="selExpertAdd" type="text" list="modelList" placeholder="модель OpenRouter, например deepseek/deepseek-chat" autocomplete="off">
                     <button type="button" class="btn small" id="selExpertAddBtn">Добавить</button></div>
-                  <small class="hint">Модели отвечают по памяти, без поиска: «подходит / нет / не знаю» о каждом кандидате. «Да» хоть одного — кандидат подходит. Пусто — как в настройках (по умолчанию председатель). Каждый эксперт ≈ $0,5–1,5 на 700 кандидатов; больше экспертов — больше компаний на подробную проверку.</small></div>
+                  <small class="hint">Модели отвечают по памяти, без поиска: «подходит / нет / не знаю» о каждом кандидате. «Да» хоть одного — кандидат подходит. Пусто — как в настройках (по умолчанию председатель). Каждый эксперт ≈ $0,5–1,5 на 700 кандидатов; больше экспертов — больше компаний на подробную проверку.</small>
+                  <button type="button" class="btn small" id="selExpertAdvise">Подобрать экспертов под задание</button>
+                  <div id="selExpertAdvice" class="sel-advice" hidden aria-live="polite"></div>
+                  <small class="hint warn-text" id="selExpertOff" hidden>«Проверить мой список»: отсева нет — эксперты не спрашиваются.</small></div>
                 <div class="field"><span class="label">Остановиться и показать мне</span>
                   <label class="check"><input type="checkbox" id="selRevFrame"> признаки и веса — до поиска</label>
                   <label class="check"><input type="checkbox" id="selRevCand" checked> найденных кандидатов</label>

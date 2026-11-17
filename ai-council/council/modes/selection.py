@@ -265,7 +265,7 @@ def pick_judges(c: Council, fillers: list[MemberConfig]) -> list[MemberConfig]:
 
 
 # «Вернуться к этапу» на паузе: что забыть (спросить заново), где только точное совпадение, какие остановки открыть
-_FRAME, _FIND, _SCREEN, _FILL = ["frame"], ["lists", "list_read", "discover", "angles"], ["screen", "screen_confirm"], \
+_FRAME, _FIND, _SCREEN, _FILL = ["frame"], ["lists", "list_read", "discover", "angles"], ["screen", "screen_confirm", "expert"], \
     ["sources", "fill", "dispute", "conclusion"]
 REWIND: dict[str, dict[str, Any]] = {
     "frame": {"title": "Рамка — председатель заново", "forget": _FRAME, "strict": _FIND + _SCREEN + _FILL,
@@ -287,11 +287,14 @@ def _uniq(xs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _order(e: dict[str, Any]) -> tuple:
-    """Порядок короткого списка: ваш список; подходящие (проверка или эксперт), сначала подтверждённые обоими;
-    затем по весу подтверждённого и числу нашедших поисков."""
-    both = (e.get("screen") or {}).get("result") == "pass" and (e.get("expert") or {}).get("verdict") == "yes"
-    return (not e.get("seed"), not S.suits(e), not both, -len((e.get("expert") or {}).get("yes") or []),
-            (e.get("screen") or {}).get("result") != "pass", -screen_passes(e), -len(e.get("angles") or []))
+    """Порядок короткого списка: ваш список; подходящие — сначала подтверждённые и страницей, и экспертами, затем
+    только страницей, затем только экспертами (память модели — слабее цитаты со страницы: при пределе таблицы
+    они не вытесняют подтверждённых страницей); внутри — по числу «да» экспертов, весу подтверждённого и числу
+    нашедших поисков."""
+    page = (e.get("screen") or {}).get("result") == "pass"
+    yes = len((e.get("expert") or {}).get("yes") or [])
+    return (not e.get("seed"), not S.suits(e), not (page and yes), not page, -yes, -screen_passes(e),
+            -len(e.get("angles") or []))
 
 
 def expert_members(c: Council) -> list[MemberConfig]:
@@ -395,6 +398,10 @@ def pending_list(entities: list[dict[str, Any]], keep_ids: set[str], excluded_id
         if sc.get("result") == "pass":
             reason = "подтверждено отсевом; в таблицу не вошло — предел подробной проверки"
             open_ = []
+        elif S.suits(e):
+            reason = (f"подходит по мнению экспертов ({S.expert_votes(e)}); в таблицу не вошло — предел подробной "
+                      f"проверки. Проверка по страницам: {sc.get('reason') or 'не выяснено'}")
+            open_ = [names[a] for a in hard if a in names and a not in ok]
         elif sc:
             reason = sc.get("reason") or "не выяснено"
             open_ = [names[a] for a in hard if a in names and a not in ok]
@@ -408,7 +415,7 @@ def pending_list(entities: list[dict[str, Any]], keep_ids: set[str], excluded_id
                     "website": e.get("website") or "", "location": e.get("location") or "",
                     "found_by": [str(a) for a in (e.get("angles") or [])][:4], "angles": len(e.get("angles") or []),
                     "confirmed": [names[a] for a in ok if a in names], "open": open_, "reason": reason,
-                    "passed": sc.get("result") == "pass"})
+                    "passed": S.suits(e)})
     out.sort(key=lambda x: (not x["passed"], -len(x["confirmed"]), -x["angles"]))
     return out
 
@@ -657,7 +664,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         keep = _uniq(passed + by_expert + unclear + seeds_failed)
         # в таблицу — подтверждённые отсевом и ваши; «не выяснено» — только если подтверждённых нет вовсе
         keep_all = list(keep)
-        if sc.shortlist_only_pass and passed:
+        if sc.shortlist_only_pass and (passed or by_expert):
             # «почти подтверждённые»: из условий отсева не подтверждено одно (обычно город площадки — на главной его
             # нет), остальные — да. 17.11 так за бортом остались Sirio, 汤臣倍健, 艾兰得, 百合, 金达威, 长兴, 科拓:
             # подробная проверка ищет их адрес по годовым отчётам и сайту
@@ -682,7 +689,9 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     keep.sort(key=_order)
     keep = diverse_order(keep)
     # «Проверять подробно» = 0 — без предела: подробно проверяются все прошедшие отсев и сомнительные
-    shortlist = keep if not sc.max_deep else keep[:min(limit, cap)]
+    # число на экране вопроса («Проверять подробно: 30») — ваше прямое указание: оно сильнее и «проверять подробно
+    # всех» из настроек (раньше при max_deep 0 оно молча не действовало)
+    shortlist = keep[:sc.shortlist] if sc.shortlist else keep if not sc.max_deep else keep[:min(limit, cap)]
     keep_all.sort(key=_order)
     coverage = required_coverage(frame, keep_all, shortlist)  # для охвата категорий — и «не выяснено»
     added = [e for x in coverage for e in x.pop("_add")]
@@ -1057,14 +1066,14 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     for _, cd in old:
         if S.site_of(cd.website) and not S.weak_source(cd.website):
             for x in [cd.name, cd.local_name, *cd.aliases]:
-                if x and S.norm_name(x):
+                if x and S._name_key_ok(S.norm_name(x)):  # общее слово («Biotech») — не ключ
                     old_site.setdefault(S.norm_name(x), cd.website)
     kept = 0
     for i, (a, cd) in enumerate(found):
         if S.site_of(cd.website) and not S.weak_source(cd.website):
             continue
         site = next((old_site[S.norm_name(x)] for x in [cd.name, cd.local_name, *cd.aliases]
-                     if x and S.norm_name(x) in old_site), "")
+                     if x and S._name_key_ok(S.norm_name(x)) and S.norm_name(x) in old_site), "")
         if site:
             found[i] = (a, cd.model_copy(update={"website": site}))
             kept += 1
@@ -1185,8 +1194,8 @@ def diverse_order(keep: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Порядок короткого списка: внутри каждой ступени (ваши → прошедшие отсев → сомнительные) — по очереди из каждого
     направления поиска. Раньше брали «найденных чаще всего», и универсальные заводы, которых находит любой поиск,
     вытесняли специалистов категории (пробиотики, пребиотики…), найденных одним направлением."""
-    def tier(e: dict[str, Any]) -> tuple[bool, bool]:
-        return (not e.get("seed"), (e.get("screen") or {}).get("result") != "pass")
+    def tier(e: dict[str, Any]) -> tuple[bool, ...]:  # ступени — те же, что в _order: чередование их не смешивает
+        return _order(e)[:4]
     out: list[dict[str, Any]] = []
     i = 0
     while i < len(keep):

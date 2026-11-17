@@ -68,6 +68,12 @@ class _AdviseReq(BaseModel):
     refresh: bool = False  # обновить досье моделей, даже если они свежие
 
 
+class _ExpertAdviseReq(BaseModel):
+    question: str
+    current: list[str] = []
+    mock: bool = False
+
+
 def _short(text: str, limit: int = 220) -> str:
     """Первое предложение-два описания разработчика (для списков)."""
     t = " ".join(str(text).split())
@@ -433,6 +439,60 @@ def register(app: FastAPI, config_path: Path, base_config: Callable[[], CouncilC
             return finish(adv)
         finally:
             await client.aclose()
+
+    @app.post("/api/advise/experts")
+    async def advise_experts(body: _ExpertAdviseReq) -> dict[str, Any]:
+        """«Отбор»: советник по экспертам — разбирает задание (рынок, страны, языки, отрасль) и предлагает, сколько и
+        каких моделей взять экспертами (см. council/advisor.py). Ничего не запускает; выбирает человек."""
+        from .. import advisor as A
+        from ..client import OpenRouterClient, ProviderError
+        from ..voting import extract_json
+        if len(body.question.strip()) < 3:
+            raise HTTPException(400, "сначала напишите задание")
+        cfg = base_config()
+        models = await catalog.get()
+        if models is None:
+            raise HTTPException(503, "каталог OpenRouter недоступен — подбор экспертов невозможен")
+        cands = A.expert_candidates(models, cfg)
+        chair_model = cfg.member(cfg.chair).model
+        key = os.environ.get("OPENROUTER_API_KEY")
+        cost, source, notes, used = 0.0, "rules", [], ""
+        adv = None
+        if key and not body.mock:
+            model = cfg.advisor.model or chair_model
+            client = OpenRouterClient(key, timeout=120, max_retries=1)
+            messages = [{"role": "user", "content": A.expert_advice_prompt(body.question, cands, body.current, chair_model,
+                                                                         cfg.advisor.question_chars)}]
+            try:
+                for _ in range(2):
+                    try:
+                        comp = await client.complete(model, messages, temperature=0.2, max_tokens=4000,
+                                                     reasoning_effort="medium")
+                    except ProviderError as e:
+                        notes.append(f"Советник ({model}) не ответил: {str(e)[:200]}")
+                        break
+                    cost += comp.cost
+                    try:
+                        adv = A.ExpertAdvice.model_validate(extract_json(comp.text))
+                        source, used = "advisor", model
+                        break
+                    except ValueError as e:
+                        messages = [*messages, {"role": "assistant", "content": comp.text},
+                                    {"role": "user", "content": f"Not valid JSON of the requested format ({str(e)[:200]}). "
+                                                                "Reply with the JSON object only."}]
+            finally:
+                await client.aclose()
+        elif not key and not body.mock:
+            notes.append("Нет ключа OpenRouter — подбор по правилам, без анализа задания моделью.")
+        if adv is None or not adv.experts:
+            adv = A.rule_experts(body.question, cands, chair_model)
+            source = "rules"
+        adv = A.finalize_experts(adv, cands)
+        adv.caveats.extend(notes)
+        by_id = {c["id"]: c for c in cands}
+        return {"advice": adv.model_dump(), "source": source, "advisor_model": used, "cost": round(cost, 4),
+                "price_700": {p.model: A.expert_cost_700(by_id[p.model]) for p in adv.experts},
+                "total_700": round(sum(A.expert_cost_700(by_id[p.model]) for p in adv.experts), 2)}
 
     @app.get("/api/models/upgrades")
     async def model_upgrades() -> dict[str, Any]:
