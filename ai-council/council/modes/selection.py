@@ -964,21 +964,46 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
     chunks = [entities[k:k + SCREEN_CHUNK] for k in range(0, len(entities), SCREEN_CHUNK)]
     gate_chunks = asyncio.Semaphore(SCREEN_CHUNKS_AT_ONCE)
 
-    async def check(b: list[dict[str, Any]], texts: dict[str, list[tuple[str, str]]]) -> None:
+    # кто не получил ответа у первой модели (сбой пачки или пропущен в ответе) — его дочитывает вторая
+    fillers = pick_fillers(c)
+    backup = quick(c, fillers[1]) if len(fillers) > 1 and fillers[1].name != fillers[0].name else None
+    again: list[dict[str, Any]] = []
+    all_texts: dict[str, list[tuple[str, str]]] = {}
+
+    def unanswered(b: list[dict[str, Any]], why: str, who: Any, last: bool) -> None:
+        """Кандидаты без ответа: первая модель — на дочитывание второй; вторая — «не выяснено» с причиной."""
+        if not last and backup is not None:
+            again.extend(b)
+            return
+        for e in b:
+            out[e["id"]] = {"result": "unclear", "reason": f"не выяснено: {why}", "name": e["name"], "checks": []}
+
+    async def check(b: list[dict[str, Any]], texts: dict[str, list[tuple[str, str]]], who: Any = None,
+                    last: bool = False) -> None:
+        who = who or reader
         try:
-            r = await c._ask(reader, "screen", S.screen_read_prompt(frame, attrs, b, texts), S.ScreenBatch,
-                             meta={**META, "objects": [e["id"] for e in b]}, max_tokens=4000)
+            # 5 кандидатов × 5 признаков с цитатами не помещались в 4000: обрывы и «рассуждения съели лимит» (16.11)
+            r = await c._ask(who, "screen", S.screen_read_prompt(frame, attrs, b, texts), S.ScreenBatch,
+                             meta={**META, "objects": [e["id"] for e in b]}, max_tokens=8000)
         except (BudgetExceeded, OutOfCredits):
             raise
         except (ProviderError, InvalidResponse) as err:
             if not _soft(err):
                 raise
-            c.stats.setdefault(reader.name, MemberStats()).failures.append(f"screen: {err}")
+            why = str(err)[:300]
+            c.stats.setdefault(who.name, MemberStats()).failures.append(f"screen: {why}")
+            log.warning("%sотсев: %s — пачка не проверена (%s): %s%s", c._tag, who.name,
+                        ", ".join(e["name"][:40] for e in b), why,
+                        f" — дочитает {backup.name}" if backup is not None and not last else "")
+            c._emit("member_failed", stage="screen", member=f"{who.name} (отсев: {len(b)} кандидатов)",
+                    error=why + (f" — дочитает {backup.name}" if backup is not None and not last else ""))
+            unanswered(b, f"отсев не удался у {who.name} — {why[:160]}", who, last)
             return
         finally:
-            prog["done"] += len(b)
-            prog["checked"] += len(b)
-            c._emit("progress", stage="screen", unit="кандидатов", **prog)
+            if not last:
+                prog["done"] += len(b)
+                prog["checked"] += len(b)
+                c._emit("progress", stage="screen", unit="кандидатов", **prog)
         for row in r.rows:
             e = _match_entity(row.object, b)
             if not e:
@@ -990,6 +1015,17 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
                             "checks": [x.model_dump() for x in checks]}
             if row.website and not e.get("website"):
                 e["website"] = row.website
+        # кандидат, по которому модель не вернула строки (пропустила или назвала иначе), — с причиной в журнале
+        missed = [e for e in b if e["id"] not in out]
+        if missed:
+            got_names = [row.object[:40] for row in r.rows]
+            then = f"дочитает {backup.name}" if backup is not None and not last else "они «не выяснено»"
+            log.warning("%sотсев: в ответе %s нет строк для %s (модель вернула: %s) — %s", c._tag, who.name,
+                        ", ".join(e["name"][:40] for e in missed), "; ".join(got_names) or "пусто", then)
+            c._emit("warning", stage="screen", member=who.name,
+                    text=f"отсев: {who.name} не ответила по {len(missed)} из {len(b)} кандидатов пачки "
+                         f"({', '.join(e['name'][:30] for e in missed)}) — {then}")
+            unanswered(missed, f"в ответе {who.name} нет строки по этому кандидату", who, last)
 
     async def chunk(ch: list[dict[str, Any]]) -> None:
         async with gate_chunks:
@@ -1005,6 +1041,7 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
                     budget -= len(ex)
                     got.append((u, ex))
             texts[e["id"]] = got
+        all_texts.update(texts)
         readable = [e for e in ch if texts[e["id"]]]
         stats["readable"] += len(readable)
         for e in ch:
@@ -1025,6 +1062,16 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
     for r in done:
         if isinstance(r, BaseException):
             raise r
+    if again and backup is not None:  # вторая модель дочитывает тех, по кому первая не ответила
+        log.info("%sотсев: %s дочитывает %d кандидатов, по которым не ответила %s", c._tag, backup.name, len(again),
+                 reader.name)
+        c._emit("warning", stage="screen", member=backup.name,
+                text=f"отсев: {backup.name} дочитывает {len(again)} кандидатов, по которым не ответила {reader.name}")
+        batches = [again[k:k + sc.screen_batch] for k in range(0, len(again), sc.screen_batch)]
+        got = await asyncio.gather(*(check(b, all_texts, backup, True) for b in batches), return_exceptions=True)
+        for r in got:
+            if isinstance(r, BaseException):
+                raise r
     await verify_screen_fails(c, out, frame, attrs)
     counts = {k: sum(1 for v in out.values() if v["result"] == k) for k in ("pass", "fail", "unclear")}
     c._emit("screened", **counts, total=len(entities))

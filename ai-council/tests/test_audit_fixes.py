@@ -111,3 +111,60 @@ def test_gate_decision_follows_names_when_ids_shift():
     assert SM.remap_decision({"keep": ["O1"]}, ents) == {"keep": ["O1"]}
     two = SM.remap_decision({"keep": ["O9"], "_names": {"O9": "BioGrowing Co., Ltd. / 均瑶润盈"}}, ents)
     assert two["keep"] == ["O5"]  # старые решения без названий — как были
+
+
+def test_screen_logs_exact_reason_for_missing_rows(tmp_path):
+    """Отсев: если модель не вернула строку по кандидату или пачка не удалась — причина в журнале и у кандидата."""
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.session import Council
+    from council.modes import selection as SM
+
+    async def pages(urls, texts=False, **kw):
+        return {u: {"status": "ok", "text": "demo plant page oem capsules factory in guangzhou"} for u in urls}
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path),
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "abc"]})
+    c = Council(cfg, MockClient(delay=0), link_checker=pages)
+    events = []
+    c._emit = lambda t, **k: events.append({"type": t, **k})
+
+    asked = []
+
+    async def ask(m, stage, prompt, schema, meta=None, **kw):
+        asked.append(m.name)
+        return S.ScreenBatch(rows=[])  # модель «забыла» всех
+    c._ask = ask
+    attrs = [S.Attribute(id="A1", name="OEM", kind="bool", screen=True, knockout="нет")]
+    ents = [{"id": "O1", "name": "Alpha", "names": ["Alpha"], "url": "https://alpha.cn/", "website": "https://alpha.cn"}]
+    out = asyncio.run(SM.screen_pages(c, S.SelectionFrame(refined_question="q"), attrs, ents))
+    assert "нет строки" in out["O1"]["reason"]
+    assert any(e["type"] == "warning" and "не ответила" in e["text"] for e in events)
+    assert len(asked) == 2 and asked[0] != asked[1]  # не ответила первая — дочитывала вторая модель
+
+
+def test_screen_backup_model_answers_missed():
+    """Первая модель пропустила кандидата — вторая дочитала, у кандидата её ответ, а не «не выяснено»."""
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.session import Council
+    from council.modes import selection as SM
+    import tempfile
+
+    async def pages(urls, texts=False, **kw):
+        return {u: {"status": "ok", "text": "alpha oem factory guangzhou"} for u in urls}
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": tempfile.mkdtemp(),
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "abc"]})
+    c = Council(cfg, MockClient(delay=0), link_checker=pages)
+    first = []
+
+    async def ask(m, stage, prompt, schema, meta=None, **kw):
+        if not first:
+            first.append(m.name)
+            return S.ScreenBatch(rows=[])
+        return S.ScreenBatch.model_validate({"rows": [{"object": "Alpha", "checks": [
+            {"attr": "A1", "verdict": "pass", "value": "да", "url": "https://alpha.cn/", "quote": "alpha oem factory"}]}]})
+    c._ask = ask
+    attrs = [S.Attribute(id="A1", name="OEM", kind="bool", screen=True, knockout="нет")]
+    ents = [{"id": "O1", "name": "Alpha", "names": ["Alpha"], "url": "https://alpha.cn/", "website": "https://alpha.cn"}]
+    out = asyncio.run(SM.screen_pages(c, S.SelectionFrame(refined_question="q"), attrs, ents))
+    assert out["O1"]["result"] == "pass"
