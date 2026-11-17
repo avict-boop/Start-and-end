@@ -491,8 +491,9 @@ def test_scouts_search_every_angle(tmp_path):
     asyncio.run(SM.discover(c, fr, []))
     who = {n for n, *_ in asked}
     # поиск Google по умолчанию не берём (scouts_skip): дорого и меньше всех новых компаний (заседание 16.11)
-    assert who == {"факт-чек", "поиск Perplexity", "поиск OpenAI", "поиск Anthropic", "поиск xAI"}
-    assert len(asked) == 3 * 5 and not any(m.startswith("m/") for _, m, *_ in asked)
+    # модель поиска (Sonar Pro) кандидатов не ищет — ищут разведчики, включая дешёвый Sonar (разбор 17.11)
+    assert who == {"поиск Perplexity", "поиск OpenAI", "поиск Anthropic", "поиск xAI"}
+    assert len(asked) == 3 * 4 and not any(m.startswith("m/") for _, m, *_ in asked)
     assert "discover:поиск xAI" not in c.stage_search_engine  # свой поиск xAI
     assert all(e == "low" for n, m, _, e in asked if m.startswith(("google/", "openai/", "anthropic/")))
     cfg.selection.scouts_skip = []

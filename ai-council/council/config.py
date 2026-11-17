@@ -198,6 +198,12 @@ class SelectionConfig(BaseModel):
     # компании, чьих разведчиков не берём при подборе по каталогу: поиск Google (Gemini) в заседании 16.11 стоил
     # $0,20 за обращение — 42% всего «Отбора» — и дал меньше всех новых компаний
     scouts_skip: list[str] = Field(default_factory=lambda: ["google"])
+    # чьи разведчики ищут только по обязательным поискам задания (категории, типы): GPT mini дорог ($3,5 за запуск),
+    # а уникальные находки даёт в основном там (разбор 17.11)
+    scouts_required_only: list[str] = Field(default_factory=lambda: ["openai"])
+    # модель поиска (Sonar Pro) тоже ищет кандидатов; выключено — ищут разведчики, включая дешёвый Sonar
+    # (17.11: Sonar Pro за $1,7 нашёл 3 подходящих, которых не нашли другие)
+    discover_search_model: bool = False
     # Поисковик участников на этом этапе: native — собственный поиск модели, где он есть (OpenAI, Google, Anthropic,
     # xAI), у остальных — поиск OpenRouter; exa — у всех один поиск OpenRouter (дешевле, но одинаковые слепые зоны)
     discover_engine: Literal["native", "exa", "auto"] = "native"
@@ -248,6 +254,9 @@ class SelectionConfig(BaseModel):
     # Сколько проверять подробно: 0 — всех прошедших отсев и сомнительных (не больше max_deep) или сколько сказано
     # в задании; первая группа (на переговоры) — top_n, 0 — как в задании или все
     shortlist: int = Field(default=0, ge=0, le=200)
+    # в таблицу (подробная проверка — самый дорогой этап) — только подтверждённые отсевом; «не выяснено» — вручную
+    # на остановке или для охвата категорий, где подтверждённых мало
+    shortlist_only_pass: bool = True
     max_deep: int = Field(default=40, ge=0, le=200)  # 0 — без предела: всех прошедших отсев и сомнительных
     top_n: int = Field(default=0, ge=0, le=100)
     # Заполнение: две модели независимо читают скачанные страницы; пусто — две самые дешёвые из участников
@@ -453,7 +462,8 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
-                     "scouts_skip", "screen_by", "screen_chars", "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
+                     "scouts_skip", "screen_by", "screen_chars", "scouts_required_only", "discover_search_model",
+                     "shortlist_only_pass", "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
                      "search_results", "search_reasoning", "discover_waves", "lists", "list_chars", "list_reader", "second_read", "judges_on_demand", "skip_neutral_disputes",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",

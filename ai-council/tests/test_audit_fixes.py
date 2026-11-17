@@ -275,3 +275,15 @@ def test_own_site_and_find_sites():
             {"id": "O2", "name": "Beta", "names": ["Beta"], "website": ""}]
     assert asyncio.run(SM.find_sites(c, ents)) == 1
     assert ents[0]["website"].endswith("siriopharma.com") and ents[1]["website"] == ""
+
+
+def test_traders_registry_and_required_only():
+    """Разбор 17.11: торговцы по названию — мимо отсева; находка из реестра поднимает кандидата;
+    GPT mini ищет только по обязательным поискам."""
+    from council.modes import selection as SM
+    assert S.trader_name({"names": ["Guangzhou ABC Trading Co., Ltd."]})
+    assert S.trader_name({"names": ["广州某某贸易有限公司"]})
+    assert not S.trader_name({"names": ["仙乐健康科技股份有限公司"]})
+    reg = {"id": "O1", "angles": ["реестр: SC" + S.BY + "x"], "screen": {"checks": []}}
+    plain = {"id": "O2", "angles": ["список: выставка" + S.BY + "x"], "screen": {"checks": []}}
+    assert SM.screen_passes(reg) > SM.screen_passes(plain)

@@ -483,6 +483,15 @@ INTERMEDIARY = re.compile(
     r"торгов(?:ая|ый) компан|импорт[её]р|дистрибьютор", re.I)
 
 
+# торговцы по названию: «贸易有限公司», «进出口», «Trading», «Import & Export» — сами не производят
+TRADER_NAME = re.compile(r"贸易|进出口|商贸|经贸|国际贸易|\btrading\b|import\s*(?:&|and)\s*export|\bimp\.?\s*&\s*exp\b", re.I)
+
+
+def trader_name(e: dict[str, Any]) -> str:
+    """Название, по которому видно торговую компанию (или пусто)."""
+    return next((x for x in e.get("names") or [e.get("name") or ""] if TRADER_NAME.search(x or "")), "")
+
+
 def norm_name(s: str) -> str:
     """Имя для сравнения: без регистра, знаков, форм собственности и общих слов («биотех», «有限公司»)."""
     t = (s or "").lower().replace("ё", "е")
@@ -1448,12 +1457,16 @@ at once, so a program can download them and read every name.
 Study: {frame.refined_question}
 A candidate is: {frame.object_kind}. Inclusion rules: {'; '.join(frame.inclusion) or '—'}.
 
-Good lists: exhibitor lists of the main trade shows (current or last edition), official registries and licence
-databases, member directories of industry associations, published industry rankings, category pages of B2B
-platforms, supplier lists. Prefer lists in the local language and the largest, most complete ones; the page must
-show company names itself (not just a search form). Up to {n} lists, the most useful first.
-Return JSON: {{"lists": [{{"url": "https://...", "title": "what the list is", "kind": "exhibitors | registry |
-association | ranking | b2b | other", "size": "about how many companies"}}]}}"""
+Find BOTH kinds, about half each:
+1) precise sources — official registries and licence databases (e.g. production-licence lists of the regulator, lists
+   of licensed manufacturers by product type), annual reports / prospectuses of listed companies that name their
+   production subsidiaries, published industry rankings of manufacturers;
+2) broad sources — exhibitor lists of the main trade shows (current or last edition), member directories of industry
+   associations, supplier lists.
+Prefer lists in the local language and the largest, most complete ones; the page must show company names itself (not
+just a search form). Up to {n} lists, the most useful first.
+Return JSON: {{"lists": [{{"url": "https://...", "title": "what the list is", "kind": "registry | annual_report |
+ranking | exhibitors | association | b2b | other", "size": "about how many companies"}}]}}"""
 
 
 def list_read_prompt(frame: SelectionFrame, title: str, url: str, text: str, part: int, parts: int) -> str:
@@ -1464,7 +1477,8 @@ Study: {frame.refined_question}
 A candidate is: {frame.object_kind}. Inclusion rules: {'; '.join(frame.inclusion) or '—'}. Exclude: {'; '.join(frame.exclusion) or '—'}.
 
 Write out EVERY company in this text that may be a candidate (when unsure — include it, a later check will decide;
-skip only those clearly excluded or clearly of another kind). For each: "name" (as written; English if given),
+skip only those clearly excluded or clearly of another kind). Skip trading and import-export companies, distributors,
+agents, packaging, empty-capsule and equipment suppliers, media and service firms — they are not manufacturers. For each: "name" (as written; English if given),
 "local_name" (name in the local language if given), "website" (if the text shows it), "quote" (the list line or
 fragment with this company, copied VERBATIM, up to 15 words), "location" (if shown), "why" (2–4 words). Keep each
 item short: the whole part must fit in one answer.

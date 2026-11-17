@@ -121,7 +121,9 @@ async def harvest_lists(c: Council, frame: S.SelectionFrame, hunters: list[Membe
             continue
         text = text[:sc.list_chars]
         parts = [text[i:i + LIST_CHUNK] for i in range(0, len(text), LIST_CHUNK)]
-        label = f"список: {(x.title or S.site_of(x.url) or x.url)[:80]}"
+        # реестры, годовые отчёты, рейтинги — точные источники: их находки помечены «реестр:» и идут в списке выше
+        precise = (x.kind or "").lower() in ("registry", "annual_report", "ranking", "licence", "license", "filing")
+        label = f"{'реестр' if precise else 'список'}: {(x.title or S.site_of(x.url) or x.url)[:80]}"
         for k, part in enumerate(parts, 1):
             jobs.append((label, S.list_read_prompt(frame, x.title, x.url, part, k, len(parts))))
             meta_of.append((label, x.url))
@@ -191,7 +193,9 @@ def discover_hunters(c: Council) -> list[MemberConfig]:
         if len(scouts) >= 2:
             c._emit("labels", labels=labels)
             log.info("%sпоиск кандидатов: разведчики %s", c._tag, {s.name: s.model for s in scouts})
-            return base + scouts
+            # модель поиска ищет кандидатов, только если включено или среди разведчиков нет Perplexity
+            ppx = any(s.model.startswith("perplexity/") for s in scouts)
+            return (base if sc.discover_search_model or not ppx else []) + scouts
         log.warning("%sразведчиков не подобрать (нет каталога моделей) — ищут участники совета", c._tag)
     return base + [quick(c, m) for m in c.cfg.active_members]
 
@@ -256,6 +260,10 @@ REWIND: dict[str, dict[str, Any]] = {
     "shortlist_gate": {"title": "Остановка «короткий список»", "forget": [], "strict": _FILL, "gates": ["shortlist"]},
     "fill": {"title": "Заполнение таблицы — заново", "forget": _FILL, "strict": [], "gates": []},
 }
+
+
+def trader_name_of(e: dict[str, Any]) -> str:
+    return S.trader_name(e)
 
 
 def remap_decision(dec: dict[str, Any] | None, entities: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -468,7 +476,16 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     screened: dict[str, dict[str, Any]] = {}
     screen_attrs = [a for a in attrs if a.screen]
     if sc.screen and screen_attrs and start != "check":
-        screened = await screen(c, frame, screen_attrs, entities)
+        # торговые компании по названию (贸易, 进出口, Trading) — не производители: в отсев не идут (бесплатно),
+        # сразу «не подходит» с причиной; на остановке их можно вернуть
+        traders = {e["id"]: trader_name_of(e) for e in entities if not e.get("seed") and trader_name_of(e)}
+        if traders:
+            log.info("%sотбор: %d торговых компаний по названию — без отсева", c._tag, len(traders))
+            c._emit("warning", stage="screen", member="",
+                    text=f"отсев: {len(traders)} торговых компаний по названию (贸易, 进出口, Trading) — сразу «не подходит»")
+        screened = await screen(c, frame, screen_attrs, [e for e in entities if e["id"] not in traders])
+        for oid, nm in traders.items():
+            screened[oid] = {"result": "fail", "reason": f"торговая компания по названию: {nm[:80]}", "checks": []}
         for e in entities:
             r = screened.get(e["id"]) or {"result": "unclear", "reason": "отсев не дал ответа"}
             e["screen"] = r
@@ -479,8 +496,13 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         unclear = [e for e in entities if e["screen"]["result"] == "unclear"]
         seeds_failed = [e for e in entities if e["screen"]["result"] == "fail" and e.get("seed")]
         keep = passed + unclear + seeds_failed
+        # в таблицу — подтверждённые отсевом и ваши; «не выяснено» — только если подтверждённых нет вовсе
+        keep_all = list(keep)
+        if sc.shortlist_only_pass and passed:
+            keep = passed + seeds_failed + [e for e in unclear if e.get("seed")]
     else:
         keep = list(entities)
+        keep_all = list(keep)
     SCREEN_WEIGHTS.clear()
     SCREEN_WEIGHTS.update({a.id: max(0.5, float(a.weight)) for a in attrs})
     # сколько проверять подробно: из настроек; иначе — сколько просит задание (широкий список «60–80» → 80: это
@@ -493,7 +515,9 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     keep = diverse_order(keep)
     # «Проверять подробно» = 0 — без предела: подробно проверяются все прошедшие отсев и сомнительные
     shortlist = keep if not sc.max_deep else keep[:min(limit, cap)]
-    coverage = required_coverage(frame, keep, shortlist)
+    keep_all.sort(key=lambda e: (not e.get("seed"), (e.get("screen") or {}).get("result") != "pass", -screen_passes(e),
+                                 -len(e["angles"])))
+    coverage = required_coverage(frame, keep_all, shortlist)  # для охвата категорий — и «не выяснено»
     added = [e for x in coverage for e in x.pop("_add")]
     if added:
         shortlist = shortlist + [e for e in dict((e["id"], e) for e in added).values() if e not in shortlist]
@@ -774,6 +798,11 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
                                                  f"(всего ищут: {', '.join(m.name for m in hunters)})",
                 members=[m.name for m in hunters])
         plan = discover_plan(angles, hunters, 0 if scouting else sc.discover_models, shift=len(used))
+        # дорогие разведчики (по умолчанию OpenAI) — только по обязательным поискам задания
+        must = set(frame.required_angles)
+        if must and sc.scouts_required_only:
+            plan = [(a, m) for a, m in plan
+                    if a in must or not any(m.model.startswith(p + "/") for p in sc.scouts_required_only)]
         left = {m.name: sum(1 for _, x in plan if x.name == m.name) for m in hunters}
         left = {k: v for k, v in left.items() if v}
         by = {k: {"done": 0, "total": v, "found": 0, "failed": 0} for k, v in left.items()}
@@ -944,8 +973,12 @@ def screen_passes(e: dict[str, Any]) -> float:
     сторонние заказы) значит больше, чем весом 2. Раньше считалось число подтверждений («заметность»), и крупный
     завод с подтверждёнными главными признаками уступал карточке с Alibaba (16.11, IVC)."""
     w = SCREEN_WEIGHTS
-    return sum((w.get(ch.get("attr") or "", 1.0) if w else 1.0)
-               for ch in (e.get("screen") or {}).get("checks") or [] if ch.get("verdict") == "pass")
+    got = sum((w.get(ch.get("attr") or "", 1.0) if w else 1.0)
+              for ch in (e.get("screen") or {}).get("checks") or [] if ch.get("verdict") == "pass")
+    # найден в официальном реестре, годовом отчёте или рейтинге — сильный признак настоящего завода
+    if any(str(a).startswith("реестр:") for a in e.get("angles") or []):
+        got += 3.0
+    return got
 
 
 def diverse_order(keep: list[dict[str, Any]]) -> list[dict[str, Any]]:
