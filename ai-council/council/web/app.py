@@ -1221,6 +1221,19 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
                              for a in sel["attributes"]]
         out["top_n"] = sel.get("top_n")
         out["use_trust"] = sel.get("settings", {}).get("use_trust", True) if body.use_trust is None else body.use_trust
+        # все кандидаты для поиска по названию и сайту: в таблице, требуют проверки, исключены
+        place = {r["object"]: r["rank"] for r in out.get("ranking") or []}
+        out["directory"] = (
+            [{"name": o["name"], "names": (o.get("names") or [])[:4], "website": o.get("website") or "",
+              "status": f"в таблице, место {place[o['id']]}" if o["id"] in place else "в таблице", "reason": ""}
+             for o in sel.get("objects") or []]
+            + [{"name": x["name"], "names": x.get("names") or [], "website": x.get("website") or "",
+                "status": "подтверждена, не вошла в таблицу" if x.get("passed") else "требует проверки",
+                "reason": x.get("reason") or ""} for x in sel.get("pending") or []]
+            + [{"name": x["name"], "names": [], "website": "", "status": "исключена при отсеве",
+                "reason": x.get("reason") or ""} for x in sel.get("excluded") or []]
+            + [{"name": x["name"], "names": [], "website": "", "status": "не удалось проверить", "reason": ""}
+               for x in sel.get("unchecked") or []])
         return jsonable(out)
 
     @app.get("/api/sessions/{sid}/selection.xlsx")

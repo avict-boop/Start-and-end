@@ -440,7 +440,11 @@ function selDraw(id) {
     <div class="sel-actions"><a class="btn small" id="selXlsx" href="#"><svg class="ic" aria-hidden="true"><use href="#i-dl"/></svg>Excel с этими весами</a>
       <button type="button" class="link small" id="selReset">Веса как в заседании</button></div>
     <div id="selTableBox"></div>
-    <div id="selCellBox" class="sel-cellbox" hidden></div>`;
+    <div id="selCellBox" class="sel-cellbox" hidden></div>
+    ${(d.directory || []).length ? `<h4>Найти компанию среди всех кандидатов (${d.directory.length})</h4>
+      <input type="search" id="selFind" class="sel-find" placeholder="Название латиницей, иероглифами или сайт" autocomplete="off">
+      <div id="selFindBox" class="sel-find-box"></div>` : ""}`;
+  if ($("selFind")) $("selFind").addEventListener("input", () => selFind(id));
   let timer = null;
   box.querySelectorAll("input[data-wa]").forEach((inp) => inp.addEventListener("input", () => {
     inp.nextElementSibling.textContent = inp.value;
@@ -475,6 +479,17 @@ function selTable(id) {
     ${(d.sensitivity || []).length ? `<h4>Устойчивость ранга к весам</h4><ul>${d.sensitivity.slice(0, 8).map((x) => `<li>${esc(x.text)}</li>`).join("")}</ul>` : ""}`;
   $("selXlsx").href = `/api/sessions/${encodeURIComponent(id)}/selection.xlsx?weights=${encodeURIComponent(Object.entries(w).map(([k, v]) => `${k}:${v}`).join(","))}&trust=${st.trust === false ? 0 : 1}`;
   $("selTableBox").querySelectorAll(".sel-cell").forEach((b) => b.addEventListener("click", () => selCell(id, b.dataset.o, b.dataset.a)));
+}
+
+function selFind(id) {
+  const q = $("selFind").value.trim().toLowerCase();
+  const box = $("selFindBox");
+  if (q.length < 2) { box.innerHTML = ""; return; }
+  const hits = (selState[id].data.directory || []).filter((x) => [x.name, ...(x.names || []), x.website || ""]
+    .some((n) => String(n).toLowerCase().includes(q))).slice(0, 30);
+  box.innerHTML = hits.length ? `<ul>${hits.map((x) => `<li><b>${esc(x.name)}</b>${(x.names || []).filter((n) => n !== x.name).length ? ` <span class="muted small">${esc(x.names.filter((n) => n !== x.name).join(", "))}</span>` : ""}
+    — ${esc(x.status)}${x.website ? ` · <span class="muted small">${esc(x.website.replace(/^https?:\/\//, ""))}</span>` : ""}${x.reason ? `<br><span class="muted small">${esc(x.reason)}</span>` : ""}</li>`).join("")}</ul>`
+    : '<p class="muted small">Такой компании среди найденных нет.</p>';
 }
 
 function selCell(id, oid, aid) {

@@ -282,6 +282,37 @@ REWIND: dict[str, dict[str, Any]] = {
 }
 
 
+def pending_list(entities: list[dict[str, Any]], keep_ids: set[str], excluded_ids: set[str],
+                 screen_attrs: list[S.Attribute]) -> list[dict[str, Any]]:
+    """Кандидаты, не вошедшие в таблицу и не исключённые: что о каждом уже подтверждено и какой вопрос открыт.
+    Без этого сотни найденных компаний («не выяснено») пропадали из отчёта — нельзя было узнать судьбу завода."""
+    names = {a.id: a.name for a in screen_attrs}
+    hard = [a.id for a in screen_attrs if S.is_knockout(a)] or [a.id for a in screen_attrs]
+    out = []
+    for e in entities:
+        if e["id"] in keep_ids or e["id"] in excluded_ids:
+            continue
+        sc = e.get("screen") or {}
+        checks = sc.get("checks") or []
+        ok = [ch.get("attr") for ch in checks if ch.get("verdict") == "pass"]
+        if sc.get("result") == "pass":
+            reason = "подтверждено отсевом; в таблицу не вошло — предел подробной проверки"
+            open_ = []
+        elif sc:
+            reason = sc.get("reason") or "не выяснено"
+            open_ = [names[a] for a in hard if a in names and a not in ok]
+        else:
+            reason = "не вошло в предел подробной проверки (отсев выключен)"
+            open_ = []
+        out.append({"id": e["id"], "name": e["name"], "names": (e.get("names") or [])[:4],
+                    "website": e.get("website") or "", "location": e.get("location") or "",
+                    "found_by": [str(a) for a in (e.get("angles") or [])][:4], "angles": len(e.get("angles") or []),
+                    "confirmed": [names[a] for a in ok if a in names], "open": open_, "reason": reason,
+                    "passed": sc.get("result") == "pass"})
+    out.sort(key=lambda x: (not x["passed"], -len(x["confirmed"]), -x["angles"]))
+    return out
+
+
 def trader_name_of(e: dict[str, Any]) -> str:
     return S.trader_name(e)
 
@@ -496,16 +527,19 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     screened: dict[str, dict[str, Any]] = {}
     screen_attrs = [a for a in attrs if a.screen]
     if sc.screen and screen_attrs and start != "check":
-        # торговые компании по названию (贸易, 进出口, Trading) — не производители: в отсев не идут (бесплатно),
-        # сразу «не подходит» с причиной; на остановке их можно вернуть
+        # торговое название (贸易, 进出口, Trading) — не повод исключать: у группы завод и экспортная фирма бывают
+        # разными юрлицами. В отсев не идут (бесплатно), остаются «не выяснено» с вопросом и видны в отчёте в разделе
+        # «требуют проверки»; в таблицу сами не попадают
         traders = {e["id"]: trader_name_of(e) for e in entities if not e.get("seed") and trader_name_of(e)}
         if traders:
-            log.info("%sотбор: %d торговых компаний по названию — без отсева", c._tag, len(traders))
+            log.info("%sотбор: %d компаний с торговым названием — без отсева, «требуют проверки»", c._tag, len(traders))
             c._emit("warning", stage="screen", member="",
-                    text=f"отсев: {len(traders)} торговых компаний по названию (贸易, 进出口, Trading) — сразу «не подходит»")
+                    text=f"отсев: {len(traders)} компаний с торговым названием (贸易, 进出口, Trading) — не проверяются, "
+                         "в отчёте среди «требуют проверки»")
         screened = await screen(c, frame, screen_attrs, [e for e in entities if e["id"] not in traders])
         for oid, nm in traders.items():
-            screened[oid] = {"result": "fail", "reason": f"торговая компания по названию: {nm[:80]}", "checks": []}
+            screened[oid] = {"result": "unclear", "trader": True, "checks": [],
+                             "reason": f"не выяснено: торговое название («{nm[:80]}») — есть ли свой завод или связь с ним"}
         for e in entities:
             r = screened.get(e["id"]) or {"result": "unclear", "reason": "отсев не дал ответа"}
             e["screen"] = r
@@ -525,9 +559,10 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
             hard = [a.id for a in screen_attrs if S.is_knockout(a)]
             # и «заметные»: их нашли 3+ независимых поиска — так находятся крупные заводы, чья главная страница
             # ничего не говорит отсеву (百合, 汤臣倍健, 长兴)
-            near = [e for e in unclear if (hard and sum(1 for ch in (e["screen"].get("checks") or [])
-                                                        if ch.get("attr") in hard and ch.get("verdict") == "pass")
-                                           >= len(hard) - 1) or len(e.get("angles") or []) >= 3]
+            near = [e for e in unclear if not e["screen"].get("trader") and (
+                (hard and sum(1 for ch in (e["screen"].get("checks") or [])
+                              if ch.get("attr") in hard and ch.get("verdict") == "pass") >= len(hard) - 1)
+                or len(e.get("angles") or []) >= 3)]
             keep = passed + near + seeds_failed + [e for e in unclear if e.get("seed") and e not in near]
     else:
         keep = list(entities)
@@ -577,6 +612,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
             entities += [e for e in shortlist if e not in entities]
     keep_ids = {e["id"] for e in shortlist}
     excluded = [x for x in excluded if x["id"] not in keep_ids]  # возвращённые вами на остановке — не «исключены»
+    pending = pending_list(entities, keep_ids, {x["id"] for x in excluded}, screen_attrs)
     c._emit("shortlist", count=len(shortlist), excluded=len(excluded), total=len(entities),
             objects=[{"id": e["id"], "name": e["name"]} for e in shortlist])
 
@@ -648,7 +684,8 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     voi = S.value_of_information(attrs, table, names, top_n, use_trust=sc.use_trust)
     sel = {"frame": frame.model_dump(), "start": start, "attributes": [a.model_dump() for a in attrs],
            "objects": objects, "table": table, "ranking": rank, "top_n": top_n, "sensitivity": sens, "voi": voi,
-           "excluded": excluded, "unchecked": unchecked, "candidates": len(entities), "discovery": found_meta,
+           "excluded": excluded, "unchecked": unchecked, "pending": pending, "candidates": len(entities),
+           "discovery": found_meta,
            "fillers": [m.name for m in fillers], "sources": sources_used(c, table, rows),
            "stats": cell_stats(table), "settings": sc.model_dump()}
     c._emit("ranked", ranking=rank[:30], names=names, top_n=top_n, stats=sel["stats"])
@@ -907,8 +944,28 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     # находки прежних запусков (поиск заново, обновление программы), которых нет среди нынешних, — добавляем:
     # однажды найденная компания не теряется
     have = {S.norm_name(x) for _, cd in found for x in [cd.name, cd.local_name, *cd.aliases] if x}
-    prior = [(a, cd) for a, cd in prior_finds(c)
+    old = prior_finds(c)
+    prior = [(a, cd) for a, cd in old
              if not any(S.norm_name(x) in have for x in [cd.name, cd.local_name, *cd.aliases] if x)]
+    # найдена снова, но без сайта, а прежде сайт был — берём прежний (17.11 у IVC/艾兰得 сайт пропал после
+    # повторного поиска, и отсев читал только список выставки)
+    old_site: dict[str, str] = {}
+    for _, cd in old:
+        if S.site_of(cd.website) and not S.weak_source(cd.website):
+            for x in [cd.name, cd.local_name, *cd.aliases]:
+                if x and S.norm_name(x):
+                    old_site.setdefault(S.norm_name(x), cd.website)
+    kept = 0
+    for i, (a, cd) in enumerate(found):
+        if S.site_of(cd.website) and not S.weak_source(cd.website):
+            continue
+        site = next((old_site[S.norm_name(x)] for x in [cd.name, cd.local_name, *cd.aliases]
+                     if x and S.norm_name(x) in old_site), "")
+        if site:
+            found[i] = (a, cd.model_copy(update={"website": site}))
+            kept += 1
+    if kept:
+        log.info("%sпоиск кандидатов: %d находкам возвращён сайт из прежних запусков", c._tag, kept)
     if prior:
         found.extend(prior)
         log.info("%sпоиск кандидатов: из прежних запусков возвращено %d находок", c._tag, len(prior))

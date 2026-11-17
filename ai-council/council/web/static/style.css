@@ -1072,6 +1072,9 @@ details[open] > summary .params-edit { visibility: hidden; }
 .sel-cell:hover { text-decoration: underline; }
 .sel-cellbox { margin-top: .8rem; padding: .7rem .9rem; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-2); }
 .sel-cellbox blockquote { margin: .4rem 0; padding-left: .7rem; border-left: 3px solid var(--accent); }
+.sel-find { width: 100%; margin: .3rem 0 .5rem; font-size: 16px; }
+.sel-find-box ul { padding-left: 1.1rem; margin: .3rem 0; }
+.sel-find-box li { margin: .35rem 0; overflow-wrap: anywhere; }
 .sel-copy pre { white-space: pre-wrap; max-height: 20rem; overflow: auto; font-size: .8rem; background: var(--surface); padding: .5rem; border-radius: 6px; }
 .decisions .sel-opts { grid-column: 1 / -1; }
 .sel-wide td:nth-child(1), .sel-wide td:nth-child(3) { white-space: nowrap; }

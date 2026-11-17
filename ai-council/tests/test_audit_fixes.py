@@ -320,3 +320,34 @@ def test_prior_finds_survive_new_search(tmp_path):
     c = Council(cfg, MockClient(delay=0), journal=Journal(p))
     names = [cd.name for _, cd in SM.prior_finds(c)]
     assert any("Penglai" in n for n in names)
+
+
+def test_screen_consistency_planned_and_pending():
+    """Разбор итога 17.11: «подходит» понижается признаком посредника только по цитате (не по пересказу модели);
+    строящаяся линия — не производство; кто не вошёл в таблицу — в «требуют проверки» с открытым вопросом;
+    свой сайт важнее карточки площадки при склейке; торговое название — вопрос, а не исключение."""
+    from council.modes import selection as SM
+    hard = S.Attribute(id="A1", name="Готовые формы", kind="bool", screen=True, knockout="нет")
+    ok = S.ScreenCheck(attr="A1", verdict="pass", value="Manufacturer/Factory & Trading Company",
+                       url="https://www.biogrowing.com/about", quote="softgel and tablet production lines")
+    assert S.screen_decide([ok], [hard])[0] == "pass"
+    mid = ok.model_copy(update={"quote": "we are a sourcing agent for nutrition brands"})
+    r = S.screen_decide([mid], [hard])
+    assert r[0] == "unclear" and "biogrowing.com" in r[1]
+    plan = ok.model_copy(update={"quote": "公司计划建设年产10亿粒软胶囊生产线，预计2027年投产"})
+    r = S.screen_decide([plan], [hard])
+    assert r[0] == "unclear" and "проект" in r[1]
+    a = S.Candidate(name="Aland", website="https://www.alibaba.com/aland")
+    b = S.Candidate(name="Aland", website="https://www.ivcinc.cn")
+    assert S.merge_candidates([("x", a), ("y", b)])[0]["website"] == "https://www.ivcinc.cn"
+    ents = [{"id": "O1", "name": "A", "angles": ["p"], "screen": {"result": "pass", "checks": []}},
+            {"id": "O2", "name": "B", "names": ["B", "乙"], "angles": ["p", "q"],
+             "screen": {"result": "unclear", "reason": "не выяснено: Готовые формы", "checks": []}},
+            {"id": "O3", "name": "C", "angles": [], "screen": {"result": "fail", "reason": "нет", "checks": []}},
+            {"id": "O4", "name": "D", "angles": [], "screen": {"result": "pass", "checks": []}}]
+    pend = SM.pending_list(ents, {"O1"}, {"O3"}, [hard])
+    assert [x["id"] for x in pend] == ["O4", "O2"]
+    assert pend[1]["open"] == ["Готовые формы"] and pend[0]["passed"]
+    md = S.report_md({"frame": {}, "attributes": [], "objects": [], "table": {}, "ranking": [], "top_n": 0,
+                      "pending": pend}, None)
+    assert "требуют проверки (2)" in md and "乙" in md

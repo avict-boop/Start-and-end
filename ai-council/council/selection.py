@@ -477,6 +477,14 @@ def weak_source(url: str) -> bool:
 
 
 # признаки посредника: сам не производит — «на заводе партнёра», «импорт/экспорт», «торговая компания»
+# производство в планах, строится, будет введено — ещё не производство
+PLANNED = re.compile(
+    r"计划(?:建设|投资|新建|投产)|拟建|拟投资|在建|建设中|正在建设|筹建|将于.{0,12}(?:投产|建成|竣工)|预计.{0,12}(?:投产|建成|竣工)|"
+    r"\bplann(?:ed|ing) (?:to (?:build|construct|launch|open)|production|plant|facilit|line)|under construction|"
+    r"will be (?:completed|built|commissioned|put into (?:operation|production))|expected to (?:start|begin|commence) "
+    r"(?:production|operation)|строит(?:ся|ельство)|планиру\w* (?:запуск|построить|ввести)|будет (?:построен|введен)", re.I)
+
+
 # Только то, что говорит «сами не производим». НЕ признаки: «经销商» (у крупного завода — сеть дилеров),
 # «Manufacturer/Factory & Trading Company» (метка Alibaba у заводов) — 17.11 так ушли BioGrowing и Timage
 INTERMEDIARY = re.compile(
@@ -713,7 +721,9 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
         ev = next((c for c in cs if c.url and c.quote), None)
         out.append({
             "id": f"O{n}", "name": main, "names": names,
-            "website": next((c.website for c in cs if site_of(c.website)
+            # свой сайт важнее карточки площадки или новости: иначе после склейки оставалась карточка Alibaba,
+            # а сайт компании терялся
+            "website": next((c.website for c in sorted(cs, key=lambda c: weak_source(c.website)) if site_of(c.website)
                              and site_brand(site_of(c.website)) not in foreign), ""),
             "location": next((c.location for c in cs if c.location), ""),
             "group": re.sub(r"\s*[（(][^)）]*[)）]", "", next((c.group for c in cs if c.group), "")).strip(),
@@ -769,7 +779,13 @@ def screen_decide(checks: list[ScreenCheck], attrs: list[Attribute]) -> tuple[st
     for c in weak:
         got[c.attr] = c.model_copy(update={"verdict": "unclear"})
     # признаки посредника в ответе — кандидат не «подходит», пока это не прояснено (Junzhao: «partner facility»)
-    middleman = next((c for c in checks if INTERMEDIARY.search(f"{c.value} {c.quote}")), None)
+    # итог отсева согласован с проверками по условиям: понизить «подходит» можно только дословной цитатой со
+    # страницы (не пересказом модели) — 17.11 BioGrowing прошёл все пять проверок и стал «не выяснено» по «value»
+    middleman = next((c for c in checks if len(c.quote.strip()) >= 8 and INTERMEDIARY.search(c.quote)), None)
+    # 5. проект — не производство: «планирует», «строится», «будет введена» (17.11 晨光: линии только в планах)
+    planned = [c for c in got.values() if c.verdict == "pass" and PLANNED.search(f"{c.value} {c.quote}")]
+    for c in planned:
+        got[c.attr] = c.model_copy(update={"verdict": "unclear"})
     fails = [c for c in got.values() if c.attr in hard and c.verdict == "fail" and len(c.quote.strip()) >= 8
              and not UNKNOWN.search(c.value or "") and not UNKNOWN.search(c.quote)]
     if fails:
@@ -777,13 +793,16 @@ def screen_decide(checks: list[ScreenCheck], attrs: list[Attribute]) -> tuple[st
         return "fail", "; ".join(f"{names.get(c.attr, c.attr)}: {c.value or c.quote}"[:200] for c in fails)
     need = hard or want  # подходит — подтверждены все условия (а нет условий — все отмеченные признаки)
     if middleman is not None:
-        return "unclear", f"не выяснено: признаки посредника — «{(middleman.quote or middleman.value)[:120]}»"
+        src = f" ({domain(middleman.url)})" if middleman.url and domain(middleman.url) else ""
+        return "unclear", f"не выяснено: признаки посредника — «{middleman.quote[:120]}»{src}"
     if need and all(got.get(a) and got[a].verdict == "pass" for a in need):
         return "pass", ""
     unclear = [a.name for a in attrs if a.id in need and not (got.get(a.id) and got[a.id].verdict == "pass")]
     why = "не выяснено: " + ", ".join(unclear)
     if weak and any(c.attr in need for c in weak):
         why += " (подтверждено только площадкой, новостью или пресс-релизом)"
+    if planned and any(c.attr in need for c in planned):
+        why += " (в источнике — проект или строительство, а не действующее производство)"
     return "unclear", why
 
 
@@ -1574,7 +1593,8 @@ Objects:
 
 For each object and attribute: "verdict" pass | fail | unclear. "fail" ONLY when a page clearly proves the exclusion
 rule (a company that ALSO makes raw materials is not excluded for that if it makes finished products too); not on the
-pages → unclear. "pass" ONLY when the page states it for THIS company and its own site: a statement about the parent
+pages → unclear. Planned, under construction or "will be put into production" is not production → unclear, quote it.
+"pass" ONLY when the page states it for THIS company and its own site: a statement about the parent
 group or another subsidiary, a province or "place of origin" without the city/address when the attribute asks for a
 location, a B2B listing card, a press release or a news item → unclear. Signs of an intermediary ("production in our
 partner facility", "import & export", "trading company", "sourcing agent") → the company does not manufacture: if a
@@ -1629,7 +1649,8 @@ and the unit in "unit" (e.g. 25亿粒 → value "2500", unit "млн капсу�
 attribute's unit and period; if the source gives another measure (money instead of pieces, tonnes, per day instead of
 per year) — copy it as is and write that unit exactly ("млн юаней/год", "шт/сутки"): the program will not mix it in.
 Yes/no attributes: "value" is "да" or "нет". Lists: short items separated by commas. Say what the number is
-(capacity vs actual output, which year) in "note". Not on the pages → omit the attribute. Do not guess.
+(capacity vs actual output, which year) in "note"; a line or plant that is only planned or under construction is
+not current production — write "проект" or "строится" in "note". Not on the pages → omit the attribute. Do not guess.
 "value" and "note" are written in the language of the attribute names (translate source terms: 软胶囊 → мягкие
 капсулы, 口服液 → питьевой раствор); only "quote" stays in the page's language. NEVER translate proper names —
 company, group, brand and product names, addresses, licence numbers: copy them exactly as in the source (Chinese
@@ -1828,6 +1849,21 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
     if sel.get("unchecked"):
         out.append("### Не удалось проверить\n\nПо этим объектам не нашлось ни одного значения (сайт не открылся, "
                    "поиск ничего не вернул) — в ранг они не вошли:\n\n" + "\n".join(f"- {esc(x['name'])}" for x in sel["unchecked"]))
+    if sel.get("pending"):
+        pend = sel["pending"]
+        npass = sum(1 for x in pend if x.get("passed"))
+        out.append(f"### Не вошли в таблицу — требуют проверки ({len(pend)})\n\n"
+                   "Найдены, но подробно не проверялись: исключать их не за что, но один из вопросов отсева остался открытым"
+                   + (f"; {npass} из них отсев подтвердил, в таблицу не вошли по пределу" if npass else "")
+                   + ". Названия — как в источниках: ищите по латинице, иероглифам или сайту.\n\n"
+                   "| Компания | Сайт | Где найдена | Подтверждено | Открытый вопрос |\n|---|---|---|---|---|\n"
+                   + "\n".join(
+                       f"| {esc(x['name'])}" + (f"<br>{esc(', '.join(n for n in x.get('names') or [] if n != x['name'])[:120])}"
+                                               if len(x.get("names") or []) > 1 else "")
+                       + f" | {esc(domain(x.get('website') or '') or '—')}"
+                       + f" | {esc('; '.join(x.get('found_by') or [])[:120]) or '—'}"
+                       + f" | {esc(', '.join(short_name(a) for a in x.get('confirmed') or [])) or '—'}"
+                       + f" | {esc(x.get('reason') or '')[:200]} |" for x in pend))
     if sel.get("excluded"):
         out.append("### Исключены при отсеве\n\n" + "\n".join(f"- {esc(x['name'])}: {esc(x['reason'])}"
                                                              for x in sel["excluded"]))

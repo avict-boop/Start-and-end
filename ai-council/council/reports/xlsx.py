@@ -76,6 +76,14 @@ def selection_xlsx(d: dict[str, Any], weights: dict[str, float] | None = None, u
         for v in rr.get("voi") or []:
             ws4.append([names.get(v["object"]), v["text"], v["rank"], v["best"], v["worst"]])
         _style_head(ws4, bold)
+    if sel.get("pending"):
+        wp = wb.create_sheet("Требуют проверки")
+        wp.append(["Объект", "Другие названия", "Сайт", "Где найдена", "Подтверждено", "Не выяснено", "Причина"])
+        for x in sel["pending"]:
+            wp.append([x["name"], ", ".join(n for n in x.get("names") or [] if n != x["name"]), x.get("website", ""),
+                       "; ".join(x.get("found_by") or []), ", ".join(x.get("confirmed") or []),
+                       ", ".join(x.get("open") or []), x.get("reason", "")])
+        _style_head(wp, bold)
     if sel.get("excluded"):
         ws5 = wb.create_sheet("Исключены")
         ws5.append(["Объект", "Причина"])
