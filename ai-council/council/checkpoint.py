@@ -67,6 +67,10 @@ class Journal:
         # обновления программы поиск оплачивался бы ещё раз; 17.11 «отсев заново» перезапустил поиск.)
         self.strict: set[str] = set()
         self._cutoff: dict[str, int] = {}  # этап -> сколько записей стенограммы было на момент возврата
+        # находки поиска и чтения списков из прежних запусков (в т. ч. забытых возвратом): компания, однажды
+        # найденная, не теряется при повторном поиске (17.11 Penglai, Porshealth, 晨光 были найдены, а после
+        # повторного поиска пропали)
+        self.prior_finds: list[dict[str, Any]] = []
         self._key_stage: dict[str, str] = {}
         if path is not None and path.is_file():
             self._load()
@@ -169,6 +173,8 @@ class Journal:
             self.results.pop(k, None)
             self.failures.pop(k, None)
         if forget:
+            self.prior_finds += [e for e in self.transcript if e.get("stage") in forget
+                                 and e.get("stage") in ("discover", "list_read") and e.get("parsed")]
             self.transcript = [e for e in self.transcript if e.get("stage") not in forget]
         stages = forget | set(r.get("strict") or [])
         # ответы этих этапов, полученные до возврата, по номеру обращения больше не подставляются

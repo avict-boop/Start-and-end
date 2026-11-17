@@ -302,3 +302,21 @@ def test_rewind_keeps_answers_received_after_it(tmp_path):
     j2 = Journal(p)
     assert j2.loose[("discover", "a", 0)] == {"v": "new"}   # поиск после возврата — подставляется
     assert ("screen", "a", 0) not in j2.loose              # отсев забыт — спросим заново
+
+
+def test_prior_finds_survive_new_search(tmp_path):
+    """Компания, найденная в прежнем запуске (потом «поиск заново»), не теряется."""
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.session import Council
+    from council.modes import selection as SM
+    p = tmp_path / "j.jsonl"
+    j = Journal(p)
+    j.entry({"stage": "list_read", "member": "x", "call": 0,
+             "parsed": {"items": [{"name": "Penglai Marine (Shandong) Co., Ltd", "local_name": "蓬莱海洋（山东）股份有限公司"}]}})
+    j.rewind(["lists", "list_read", "discover"], ["screen"])
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path),
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "ab"]})
+    c = Council(cfg, MockClient(delay=0), journal=Journal(p))
+    names = [cd.name for _, cd in SM.prior_finds(c)]
+    assert any("Penglai" in n for n in names)

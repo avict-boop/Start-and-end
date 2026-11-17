@@ -164,6 +164,26 @@ async def harvest_lists(c: Council, frame: S.SelectionFrame, hunters: list[Membe
     return out, len(per)
 
 
+def prior_finds(c: Council) -> list[tuple[str, S.Candidate]]:
+    """Находки поиска кандидатов и чтения списков из прежних запусков этого заседания: забытые при «поиск заново»
+    и полученные до обновления программы. Метка — «прежний поиск»; для полноты не считаются."""
+    j = getattr(c, "journal", None)
+    if j is None:
+        return []
+    entries = list(getattr(j, "prior_finds", []) or []) + [e for e in j.transcript
+                                                           if e.get("stage") in ("discover", "list_read")]
+    out: list[tuple[str, S.Candidate]] = []
+    for e in entries:
+        for it in (e.get("parsed") or {}).get("items") or []:
+            try:
+                cand = S.Candidate.model_validate(it)
+            except ValueError:
+                continue
+            if cand.name.strip():
+                out.append((f"прежний поиск{S.BY}{e.get('member') or ''}", cand))
+    return out
+
+
 def discover_hunters(c: Council) -> list[MemberConfig]:
     """Кто ищет кандидатов. scouts — модель поиска, вторая модель Perplexity и младшие модели Google, OpenAI,
     Anthropic, xAI со своими поисковиками (каждый — по всем направлениям); all — модель поиска и участники совета;
@@ -884,6 +904,16 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     first_angles = set(frame_angles) or set(used)  # направления рамки и готовые списки (без новых от председателя)
     first = [x for x in found if x[0].split(S.BY)[0] in first_angles]
     comp = S.completeness(S.merge_candidates(first), first_pairs)
+    # находки прежних запусков (поиск заново, обновление программы), которых нет среди нынешних, — добавляем:
+    # однажды найденная компания не теряется
+    have = {S.norm_name(x) for _, cd in found for x in [cd.name, cd.local_name, *cd.aliases] if x}
+    prior = [(a, cd) for a, cd in prior_finds(c)
+             if not any(S.norm_name(x) in have for x in [cd.name, cd.local_name, *cd.aliases] if x)]
+    if prior:
+        found.extend(prior)
+        log.info("%sпоиск кандидатов: из прежних запусков возвращено %d находок", c._tag, len(prior))
+        c._emit("warning", stage="discover", member="",
+                text=f"поиск: {len(S.merge_candidates(prior))} компаний, найденных в прежних запусках, возвращены в список")
     entities = S.merge_candidates(found, seeds)
     bench = {S.norm_name(b) for b in frame.benchmarks if S.norm_name(b)}
     if bench:  # конкуренты и исключённые, названные в задании, — не кандидаты, даже если поиск их принёс
@@ -1044,14 +1074,29 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
     c._emit("stage", stage="screen", title=f"Отсев: {len(entities)} кандидатов по {len(attrs)} признакам "
                                           f"({', '.join(a.name for a in attrs)}) — читаем их страницы",
             members=[reader.name])
-    shared = getattr(c, "list_urls", set())
+    # страница, общая для 3+ кандидатов (список выставки, ассоциации, обзор брокера), — не страница завода: по ней
+    # отсев ничего не узнаёт (17.11 艾兰得, 金达威, 安琪, 科拓 «проверялись» по спискам выставок и вышли «не выяснено»)
+    freq: dict[str, int] = {}
+    for e in entities:
+        for u in {e.get("url") or "", *(e.get("urls") or [])}:
+            if u:
+                freq[u] = freq.get(u, 0) + 1
+    shared = set(getattr(c, "list_urls", set())) | {u for u, k in freq.items() if k >= 3}
     plan: dict[str, list[str]] = {}
     for e in entities:
         us = [u for u in [e.get("url") or "", *(e.get("urls") or [])] if u.startswith(("http://", "https://"))
-              and u not in shared]
+              and u not in shared and not S.weak_source(u)]
         home = _home(e["website"]) if S.site_of(e.get("website") or "") else ""
         # страница, где нашли кандидата, и главная его сайта (если это другая страница) — не больше двух
         plan[e["id"]] = list(dict.fromkeys(([us[0]] if us else []) + ([home] if home else [])))[:2]
+    # своей страницы нет совсем (нашли только в списке) и сайт не указан — ищем официальный сайт сразу
+    lost = [e for e in entities if not plan[e["id"]] and not own_site(e)]
+    if lost:
+        lost.sort(key=lambda e: -len(e.get("angles") or []))
+        await find_sites(c, lost[:SCREEN_SITES])
+        for e in lost:
+            if own_site(e):
+                plan[e["id"]] = [_home(e["website"])]
     words = [w for a in attrs for w in [a.name, *a.keywords]]
     out: dict[str, dict[str, Any]] = {}
     prog = {"done": 0, "total": len(entities), "checked": 0, "objects": len(entities)}
@@ -1189,7 +1234,8 @@ async def screen_second_look(c: Council, frame: S.SelectionFrame, attrs: list[S.
     unclear = [e for e in entities if (out.get(e["id"]) or {}).get("result") == "unclear"]
     # своего сайта нет (или указан чужой: новость, площадка, ассоциация) — модель поиска находит официальный сайт;
     # отсев дочитывает его главную и «Контакты / О компании» (16.11 так за бортом остались Sirio, Baihe)
-    await find_sites(c, [e for e in unclear if not own_site(e)][:SCREEN_SITES])
+    await find_sites(c, sorted([e for e in unclear if not own_site(e) and not e.get("_sites_tried")],
+                               key=lambda e: -len(e.get("angles") or []))[:SCREEN_SITES])
     homes = {e["id"]: _home(e["website"]) for e in unclear if own_site(e)}
     if homes:
         await fetch_pages(c, list(homes.values()), browser=False)  # ссылки «Контакты / О компании» — с главной
@@ -1289,6 +1335,8 @@ async def find_sites(c: Council, ents: list[dict[str, Any]]) -> int:
             log.warning("%sпоиск сайтов кандидатов не удался: %s", c._tag, err)
             return 0
         n = 0
+        for e in b:
+            e["_sites_tried"] = True
         for it in r.items:
             e = _match_entity(it.name, b)
             if e is not None and S.site_of(it.website) and not S.weak_source(it.website):
@@ -1313,8 +1361,8 @@ def _passes(r: dict[str, Any]) -> int:
 
 
 SCREEN_BROWSER = 60        # сколько не открывшихся без браузера кандидатов открыть браузером при отсеве
-SCREEN_SITES = 200         # скольким «не выяснено» без своего сайта искать официальный сайт
-SITES_BATCH = 5            # компаний в одном поиске сайтов (10 — один короткий поиск на всех, сайтов мало)
+SCREEN_SITES = 500         # скольким кандидатам без своего сайта искать официальный сайт (Sonar, ≈$0,006 за 3)
+SITES_BATCH = 3            # компаний в одном поиске сайтов (по 10 нашлось 34% сайтов — модель ищет одну-две)
 SCREEN_CHUNK = 25          # кандидатов в одной части отсева (скачать страницы → прочитать)
 SCREEN_CHUNKS_AT_ONCE = 3  # частей, которые качаются одновременно (по 5 страниц каждая — 15 загрузок сразу)
 
