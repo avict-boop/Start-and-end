@@ -168,3 +168,51 @@ def test_screen_backup_model_answers_missed():
     ents = [{"id": "O1", "name": "Alpha", "names": ["Alpha"], "url": "https://alpha.cn/", "website": "https://alpha.cn"}]
     out = asyncio.run(SM.screen_pages(c, S.SelectionFrame(refined_question="q"), attrs, ents))
     assert out["O1"]["result"] == "pass"
+
+
+def test_second_look_reads_contact_page():
+    """Отсев: адреса на главной нет — программа берёт ссылку «Контакты» со страницы и дочитывает её."""
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.session import Council
+    from council.modes import selection as SM
+    import tempfile
+
+    async def pages(urls, texts=False, **kw):
+        out = {}
+        for u in urls:
+            if u.endswith("/lxwm/"):
+                out[u] = {"status": "ok", "text": "地址：广东省广州市白云区 alpha factory"}
+            else:
+                out[u] = {"status": "ok", "text": "alpha oem capsules", "links": ["https://alpha.cn/lxwm/"]}
+        return out
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": tempfile.mkdtemp(),
+                                        "members": [{"name": n, "model": f"m/{n}"} for n in "abc"]})
+    c = Council(cfg, MockClient(delay=0), link_checker=pages)
+
+    async def ask(m, stage, prompt, schema, meta=None, **kw):
+        found = "广州市" in prompt
+        return S.ScreenBatch.model_validate({"rows": [{"object": "Alpha", "checks": [
+            {"attr": "A1", "verdict": "pass" if found else "unclear", "value": "Гуанчжоу" if found else "",
+             "url": "https://alpha.cn/lxwm/" if found else "", "quote": "广东省广州市白云区" if found else ""}]}]})
+    c._ask = ask
+    attrs = [S.Attribute(id="A1", name="Площадка", kind="text", screen=True, knockout="вне Китая")]
+    ents = [{"id": "O1", "name": "Alpha", "names": ["Alpha"], "url": "https://alpha.cn/", "website": "https://alpha.cn"}]
+    out = asyncio.run(SM.screen_pages(c, S.SelectionFrame(refined_question="q"), attrs, ents))
+    assert out["O1"]["result"] == "pass"
+
+
+def test_required_coverage_and_group_merge():
+    from council.modes import selection as SM
+    fr = S.SelectionFrame(refined_question="q", required_angles=["пробиотики", "омега"])
+    mk = lambda i, a: {"id": f"O{i}", "name": f"N{i}", "angles": [a + S.BY + "x"]}
+    keep = [mk(1, "омега"), mk(2, "омега"), mk(3, "омега"), mk(4, "пробиотики"), mk(5, "пробиотики")]
+    cov = SM.required_coverage(fr, keep, keep[:3])
+    pro = next(x for x in cov if x["angle"] == "пробиотики")
+    assert pro["added"] == 2 and [e["id"] for e in pro["_add"]] == ["O4", "O5"]
+    ents = [{"id": "O1", "name": "BioGrowing", "names": ["BioGrowing"], "group": "均瑶健康", "angles": ["a"], "urls": []},
+            {"id": "O2", "name": "均瑶健康", "names": ["均瑶健康"], "group": "", "angles": ["b"], "urls": []}]
+    hints = S.group_hints(ents)
+    assert hints and set(hints[0]["ids"]) == {"O1", "O2"}
+    merged = S.merge_entities(ents, [["O1", "O2"]])
+    assert len(merged) == 1 and set(merged[0]["names"]) == {"BioGrowing", "均瑶健康"} and len(merged[0]["angles"]) == 2

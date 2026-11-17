@@ -159,8 +159,9 @@ class Candidate(BaseModel):
     quote: str = ""        # дословная короткая цитата с этой страницы
     location: str = ""
     why: str = ""
+    group: str = ""        # материнская группа / холдинг, если известны (заводы одной группы — один кандидат)
 
-    @field_validator("name", "local_name", "website", "url", "quote", "location", "why", mode="before")
+    @field_validator("name", "local_name", "website", "url", "quote", "location", "why", "group", mode="before")
     @classmethod
     def _t(cls, v: Any) -> str:
         return _txt(v)
@@ -527,6 +528,51 @@ def display_name(cs: list["Candidate"]) -> str:
     return lat or loc or best([c.name for c in cs])
 
 
+def group_hints(entities: list[dict[str, Any]], limit: int = 30) -> list[dict[str, Any]]:
+    """Кандидаты, возможно, из одной группы: одна и та же материнская группа у нескольких или группа одного — это
+    другой кандидат (Biogrowing и материнская 均瑶健康 шли отдельными, 16.11). Только подсказка: склеивает человек."""
+    by_name: dict[str, str] = {}
+    for e in entities:
+        for x in e.get("names") or [e["name"]]:
+            n = norm_name(x)
+            if _name_key_ok(n):
+                by_name.setdefault(n, e["id"])
+    groups: dict[str, set[str]] = {}
+    title: dict[str, str] = {}
+    for e in entities:
+        g = norm_name(re.sub(r"[（(].*?[)）]", " ", e.get("group") or ""))
+        if not _name_key_ok(g):
+            continue
+        title.setdefault(g, e.get("group") or "")
+        groups.setdefault(g, set()).add(e["id"])
+        if g in by_name:
+            groups[g].add(by_name[g])
+    out = [{"group": title[g], "ids": sorted(ids, key=lambda i: int(i[1:]) if i[1:].isdigit() else 0)}
+           for g, ids in groups.items() if len(ids) >= 2]
+    return out[:limit]
+
+
+def merge_entities(entities: list[dict[str, Any]], merge: list[list[str]]) -> list[dict[str, Any]]:
+    """Склеить кандидатов по решению человека: первый в группе вбирает названия, страницы и находки остальных."""
+    by_id = {e["id"]: e for e in entities}
+    gone: set[str] = set()
+    for ids in merge or []:
+        ids = [i for i in dict.fromkeys(ids) if i in by_id and i not in gone]
+        if len(ids) < 2:
+            continue
+        head = by_id[ids[0]]
+        for i in ids[1:]:
+            e = by_id[i]
+            head["names"] = list(dict.fromkeys([*(head.get("names") or [head["name"]]), *(e.get("names") or [e["name"]])]))
+            head["urls"] = list(dict.fromkeys([*(head.get("urls") or []), *(e.get("urls") or [])]))[:10]
+            head["angles"] = sorted(set(head.get("angles") or []) | set(e.get("angles") or []))
+            head["website"] = head.get("website") or e.get("website") or ""
+            head["seed"] = bool(head.get("seed") or e.get("seed"))
+            head["merged"] = True
+            gone.add(i)
+    return [e for e in entities if e["id"] not in gone]
+
+
 def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None = None) -> list[dict[str, Any]]:
     """Склейка дублей: одно и то же имя (без форм собственности), имя-псевдоним или один сайт компании — один объект.
     found — (направление поиска, кандидат). seeds — объекты, которые дал человек (направление «ваш список»)."""
@@ -591,6 +637,7 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
             "website": next((c.website for c in cs if site_of(c.website)
                              and site_brand(site_of(c.website)) not in foreign), ""),
             "location": next((c.location for c in cs if c.location), ""),
+            "group": next((c.group for c in cs if c.group), ""),
             "angles": angles, "seed": bool(seed),
             "url": ev.url if ev else next((c.url for c in cs if c.url), ""),
             "urls": list(dict.fromkeys(c.url for c in cs if c.url.startswith(("http://", "https://"))))[:6],
@@ -1306,9 +1353,10 @@ companies that clearly match an exclusion rule.
 List up to {per_angle} distinct candidates that this direction finds. For each: "name" (official name, English if
 available), "local_name" (name in the local language, e.g. Chinese — exactly as written, never translated), "aliases", "website" (official site), "url"
 (the page you saw that shows it fits), "quote" (a short VERBATIM fragment of that page proving it fits — copied
-exactly, in the page's language), "location", "why" (one line). Do not invent: only what the search returned.{ex}
+exactly, in the page's language), "location", "why" (one line), "group" (the parent group or holding if the page
+names one, e.g. a listed parent company; else ""). Do not invent: only what the search returned.{ex}
 Return JSON: {{"items": [{{"name": "...", "local_name": "", "aliases": [], "website": "", "url": "", "quote": "",
-"location": "", "why": ""}}]}}"""
+"location": "", "why": "", "group": ""}}]}}"""
 
 
 def list_sources_prompt(frame: SelectionFrame, n: int) -> str:

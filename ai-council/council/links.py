@@ -91,6 +91,31 @@ def image_text(data: bytes, ctype: str = "") -> str:
     return plain(ocr.image_text(data, OPTIONS["ocr_langs"], ext))
 
 
+# ссылки на «Контакты», «О компании», «Завод»: там адрес площадки, формы, лицензии (на главной их часто нет)
+INFO_LINK = re.compile(r"contact|about|company|profile|factory|introduc|联系|关于|简介|公司|工厂|基地|lxwm|gywm|qyjj|"
+                       r"контакт|о-компании|about-us|aboutus|who-we-are", re.I)
+
+
+def page_links(raw: str, base: str, limit: int = 6) -> list[str]:
+    """Ссылки той же площадки на страницы «Контакты / О компании / Завод» (по адресу или тексту ссылки)."""
+    host = (urlsplit(base).hostname or "").lower().removeprefix("www.")
+    out: list[str] = []
+    for m in re.finditer(r"(?is)<a\b[^>]*href\s*=\s*[\"']([^\"'#]+)[\"'][^>]*>(.*?)</a>", raw[:400_000]):
+        href, label = m.group(1).strip(), re.sub(r"(?s)<[^>]+>", " ", m.group(2))
+        if href.lower().startswith(("javascript:", "mailto:", "tel:")):
+            continue
+        if not (INFO_LINK.search(href) or INFO_LINK.search(label)):
+            continue
+        u = urljoin(base, href)
+        h = (urlsplit(u).hostname or "").lower().removeprefix("www.")
+        if u.startswith(("http://", "https://")) and h and (h == host or h.endswith("." + host) or host.endswith("." + h)) \
+                and u.rstrip("/") != base.rstrip("/") and u not in out:
+            out.append(u)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def page_text(raw: str) -> str:
     raw = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", raw)
     raw = re.sub(r"(?s)<[^>]+>", " ", raw)
@@ -164,7 +189,10 @@ async def _one(client: httpx.AsyncClient, url: str, sem: asyncio.Semaphore, quot
                         elif is_img:
                             text = await asyncio.to_thread(image_text, body, ctype)
                         else:
-                            text = page_text(body.decode(r.encoding or "utf-8", errors="ignore"))
+                            html = body.decode(r.encoding or "utf-8", errors="ignore")
+                            text = page_text(html)
+                            if want_text:
+                                out["links"] = page_links(html, str(r.url))
                         out["text_len"] = len(text)
                         out["pdf"] = is_pdf
                         if quotes:

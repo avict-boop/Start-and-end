@@ -1192,6 +1192,7 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         if isinstance(items, list):  # «Отбор»: названия к номерам — номера после обновления программы могут сдвинуться
             nm = {str(x.get("id")): str(x.get("name") or "") for x in items if isinstance(x, dict) and x.get("id")}
             dec["_names"] = {i: nm[i] for k in ("drop", "keep") for i in dec.get(k) or [] if i in nm}
+            dec["_names"].update({i: nm[i] for ids in dec.get("merge") or [] for i in ids if i in nm})
         decisions = {**(cp.spec.get("review_decisions") or {}), body.gate: dec}
         cp.update(review_decisions=decisions, review=None)
         log.info("заседание %s: проверка «%s» — решение принято", sid, body.gate)

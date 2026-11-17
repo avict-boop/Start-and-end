@@ -52,6 +52,12 @@ function selEvent(s, ev) {
         + (c.share != null ? ` · полнота списка ≈ ${Math.round(c.share * 100)}% (оценка ~${c.estimate})` : ""), "k-ok");
       return true;
     }
+    case "coverage": {
+      const low = (ev.items || []).filter((x) => x.in < 3), add = (ev.items || []).reduce((t, x) => t + (x.added || 0), 0);
+      logAdd(s, `Охват обязательных поисков: ${(ev.items || []).length - low.length} из ${(ev.items || []).length} с 3+ кандидатами в коротком списке`
+        + (add ? `, добавлено ${add} для недостающих` : "") + (low.length ? `; мало найдено: ${low.map((x) => x.angle.slice(0, 40)).join("; ")}` : ""), low.length ? "k-warn" : "k-ok");
+      return true;
+    }
     case "candidates_cut":  // предел можно снять: «Без предела кандидатов» там же
       logAdd(s, `Найдено больше предела: показаны ${ev.shown}, ещё ${ev.cut} не вошли (предел ${ev.limit} — «Настройки → Проверка и голосование → Отбор»: «Кандидатов всего, до» или переключатель «Без предела кандидатов»). Отобраны по очереди из каждого направления поиска`, "k-warn");
       return true;
@@ -223,6 +229,7 @@ function renderReview(s) {
     const sc = { pass: ["ok", "подходит"], fail: ["bad", "не подходит"], unclear: ["plain", "не выяснено"] };
     body = (rv.gate === "candidates" && comp.share != null ? `<p class="small">Полнота списка ≈ <b>${Math.round(comp.share * 100)}%</b> (найдено ${comp.found}, оценка всего ~${comp.estimate}): `
       + (comp.share >= 0.75 ? "разные направления поиска часто находят одних и тех же — список близок к полному." : "многих нашло только одно направление — вероятно, есть ещё; добавьте известных вам.") + "</p>" : "")
+      + selCoverage(pl.coverage) + selGroups(pl.groups, items)
       + `<p class="muted small">${rv.gate === "candidates" ? "Снимите галочку у лишних; склеенные дубли отмечены «склеено»." : "Галочка — проверять подробно. Исключённые при отсеве можно вернуть."}
         ${rv.gate === "shortlist" ? `<button type="button" class="link small" id="rvSug">как предложено (${short.size})</button> · ` : ""}<button type="button" class="link small" id="rvAll">отметить всех (${items.length})</button> · <button type="button" class="link small" id="rvNone">снять все</button></p>
       <div class="sel-review-list">${items.map((x) => {
@@ -312,6 +319,26 @@ function selFrameSummary(fr, li) {
     <div class="sel-frame-grid">${parts.join("")}</div></details>`;
 }
 
+// охват обязательных поисков задания в коротком списке: сколько кандидатов каждой категории / типа
+function selCoverage(cov) {
+  if (!(cov || []).length) return "";
+  const rows = cov.map((x) => `<tr class="${x.in < 3 ? "sel-cov-low" : ""}"><td>${esc(x.angle.length > 90 ? x.angle.slice(0, 88) + "…" : x.angle)}</td>`
+    + `<td>${x.in}${x.added ? ` <span class="muted small">(+${x.added} добавлено)</span>` : ""}</td><td>${x.found}</td></tr>`).join("");
+  const low = cov.filter((x) => x.in < 3).length;
+  return `<details class="sel-help" ${low ? "open" : ""}><summary>Охват обязательных поисков задания${low ? ` — <span class="warn-text">мало в ${low}</span>` : ""}</summary>
+    <p class="muted small">Сколько кандидатов каждого поиска из задания (категория, тип производителя) в коротком списке. Если меньше 3, программа сама добавила лучших из этого поиска; если и найдено меньше — больше взять неоткуда.</p>
+    <div class="table-wrap"><table class="sel-table"><thead><tr><th>Поиск</th><th>В списке</th><th>Найдено</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
+}
+
+// возможно, одна группа компаний: склеить — по галочке
+function selGroups(groups, items) {
+  if (!(groups || []).length) return "";
+  const nm = Object.fromEntries((items || []).map((x) => [x.id, x.name]));
+  return `<div class="sel-groups"><p class="small"><b>Возможно, одна группа компаний</b> — задание считает группу одним кандидатом. Отметьте, что склеить:</p>`
+    + groups.map((g, i) => `<label class="sel-item"><input type="checkbox" data-merge="${i}"><span>${g.ids.map((id) => `<b>${esc(nm[id] || id)}</b>`).join(" + ")}`
+      + ` <small class="muted">группа: ${esc(g.group)}</small></span></label>`).join("") + "</div>";
+}
+
 async function sendReview(s, rv) {
   const box = $("pReview");
   let decision = {};
@@ -328,6 +355,9 @@ async function sendReview(s, rv) {
       ? { drop: boxes.filter((i) => !i.checked).map((i) => i.dataset.id), add }
       : { keep: boxes.filter((i) => i.checked).map((i) => i.dataset.id), add };
     if (rv.gate === "shortlist" && !decision.keep.length && !add.length) { toast("Отметьте хотя бы один объект"); return; }
+    const groups = ((rv.payload || {}).groups) || [];
+    const merge = [...box.querySelectorAll("input[data-merge]")].filter((i) => i.checked).map((i) => (groups[Number(i.dataset.merge)] || {}).ids || []).filter((x) => x.length > 1);
+    if (merge.length) decision.merge = merge;
   }
   $("rvGo").disabled = true;
   try {

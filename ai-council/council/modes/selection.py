@@ -279,6 +279,8 @@ def remap_decision(dec: dict[str, Any] | None, entities: list[dict[str, Any]]) -
     for k in ("drop", "keep"):
         if dec.get(k) is not None:
             out[k] = [j for j in (fix(i) for i in dec[k]) if j]
+    if dec.get("merge"):
+        out["merge"] = [[j for j in (fix(i) for i in ids) if j] for ids in dec["merge"]]
     return out
 
 
@@ -302,13 +304,14 @@ def _snap_path(c: Council, url: str) -> Path | None:
     return Path(d) / f"{S.sha(url)}.json.gz" if d and c.cfg.selection.snapshots else None
 
 
-async def fetch_pages(c: Council, urls: list[str], browser: bool = True) -> dict[str, dict[str, Any]]:
+async def fetch_pages(c: Council, urls: list[str], browser: bool = True, retry_empty: bool = False
+                      ) -> dict[str, dict[str, Any]]:
     """Текст страниц (HTML и PDF): из памяти, из копии на диске (продолжение — те же тексты, ответы моделей из
     журнала совпадут) или скачать заново; скачанное сохраняется копией с датой."""
     out: dict[str, dict[str, Any]] = {}
     todo = []
     for u in dict.fromkeys(u for u in urls if u and u.startswith(("http://", "https://"))):
-        if u in c.page_cache:
+        if u in c.page_cache and (c.page_cache[u] or not retry_empty):  # retry_empty: не открылась — ещё раз
             out[u] = {"text": c.page_cache[u], "fetched": c.page_meta.get(u, {}).get("fetched", ""),
                       "status": c.page_meta.get(u, {}).get("status", "ok")}
             continue
@@ -317,7 +320,8 @@ async def fetch_pages(c: Council, urls: list[str], browser: bool = True) -> dict
             try:
                 d = await asyncio.to_thread(lambda: json.loads(gzip.decompress(p.read_bytes())))
                 c.page_cache[u] = d.get("text", "")
-                c.page_meta[u] = {"fetched": d.get("fetched", ""), "status": d.get("status", "ok"), "sha": d.get("sha", "")}
+                c.page_meta[u] = {"fetched": d.get("fetched", ""), "status": d.get("status", "ok"), "sha": d.get("sha", ""),
+                                  "links": d.get("links") or []}
                 out[u] = {"text": c.page_cache[u], "fetched": d.get("fetched", ""), "status": d.get("status", "ok")}
                 continue
             except (OSError, ValueError):
@@ -341,13 +345,14 @@ async def fetch_pages(c: Council, urls: list[str], browser: bool = True) -> dict
             status = r.get("status") or "error"
             c.page_cache[u] = text
             c.page_meta[u] = {"fetched": now, "status": status, "sha": S.sha(text) if text else "",
-                              "pdf": bool(r.get("pdf"))}
+                              "pdf": bool(r.get("pdf")), "links": list(r.get("links") or [])[:6]}
             out[u] = {"text": text, "fetched": now, "status": status}
             p = _snap_path(c, u)
             if p and text:
                 try:
                     await asyncio.to_thread(_save_snapshot, p, {"url": u, "fetched": now, "status": status,
-                                                                "sha": S.sha(text), "text": text})
+                                                                "sha": S.sha(text), "text": text,
+                                                                "links": list(r.get("links") or [])[:6]})
                 except OSError as e:
                     log.warning("%sкопия страницы не сохранилась: %s", c._tag, e)
     for u in todo:
@@ -446,8 +451,12 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         log.info("%sотбор: кандидатов %d, предел %d — %d не вошли", c._tag, cap_c + cut, cap_c, cut)
         c._emit("candidates_cut", shown=len(entities), cut=cut, limit=cap_c)
     if start in ("find", "extend"):
-        dec = gate(c, "candidates", {"items": entities, "completeness": found_meta.get("completeness"), "cut": cut})
-        entities = apply_list_edits(entities, remap_decision(dec, entities))
+        dec = gate(c, "candidates", {"items": entities, "completeness": found_meta.get("completeness"), "cut": cut,
+                                     "groups": S.group_hints(entities)})
+        dec = remap_decision(dec, entities)
+        if dec and dec.get("merge"):
+            entities = S.merge_entities(entities, dec["merge"])
+        entities = apply_list_edits(entities, dec)
 
     # 3. Отсев
     excluded: list[dict[str, Any]] = []
@@ -477,11 +486,20 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     keep = diverse_order(keep)
     # «Проверять подробно» = 0 — без предела: подробно проверяются все прошедшие отсев и сомнительные
     shortlist = keep if not sc.max_deep else keep[:min(limit, cap)]
+    coverage = required_coverage(frame, keep, shortlist)
+    added = [e for x in coverage for e in x.pop("_add")]
+    if added:
+        shortlist = shortlist + [e for e in dict((e["id"], e) for e in added).values() if e not in shortlist]
+        log.info("%sотбор: охват обязательных поисков — добавлено %d кандидатов", c._tag, len(added))
+    if coverage:
+        c._emit("coverage", items=coverage)
     if start != "check":
         dec = gate(c, "shortlist", {"items": entities, "shortlist": [e["id"] for e in shortlist],
-                                    "excluded": excluded})
+                                    "excluded": excluded, "coverage": coverage, "groups": S.group_hints(entities)})
         if dec is not None:
             dec = remap_decision(dec, entities)
+            if dec.get("merge"):
+                entities = S.merge_entities(entities, dec["merge"])
             ids = [i for i in dec.get("keep") or [] if any(e["id"] == i for e in entities)]
             # добавленное вами по имени, если программа его уже нашла (под другим названием) — это тот же кандидат
             # с его страницами, а не новый пустой объект
@@ -889,6 +907,28 @@ async def screen(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], 
     return out
 
 
+COVER_MIN = 3  # задание обычно просит «3–5 кандидатов по каждой категории»
+
+
+def required_coverage(frame: S.SelectionFrame, keep: list[dict[str, Any]], shortlist: list[dict[str, Any]]
+                      ) -> list[dict[str, Any]]:
+    """Сколько кандидатов каждого обязательного поиска задания (категория, тип производителя) попало в короткий
+    список; меньше COVER_MIN — добавить лучших из этого поиска (по числу подтверждённых отсевом признаков).
+    «_add» — кого добавить (вызывающий забирает)."""
+    out = []
+    taken = {e["id"] for e in shortlist}
+    for ra in frame.required_angles:
+        def has(e: dict[str, Any]) -> bool:
+            return any(a.split(S.BY)[0] == ra for a in e.get("angles") or [])
+        inn = [e for e in shortlist if has(e)]
+        rest = [e for e in keep if has(e) and e["id"] not in taken]
+        add = rest[:max(0, COVER_MIN - len(inn))]
+        taken |= {e["id"] for e in add}
+        out.append({"angle": ra[:160], "in": len(inn) + len(add), "found": len(inn) + len(rest), "added": len(add),
+                    "_add": add})
+    return out
+
+
 def screen_passes(e: dict[str, Any]) -> int:
     """Сколько признаков отсева у кандидата подтверждены страницей («подходит»): у сомнительного 4 из 5 лучше, чем 1."""
     return sum(1 for ch in (e.get("screen") or {}).get("checks") or [] if ch.get("verdict") == "pass")
@@ -1062,6 +1102,7 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
     for r in done:
         if isinstance(r, BaseException):
             raise r
+    await screen_second_look(c, frame, attrs, entities, plan, words, out, all_texts, check, stats)
     if again and backup is not None:  # вторая модель дочитывает тех, по кому первая не ответила
         log.info("%sотсев: %s дочитывает %d кандидатов, по которым не ответила %s", c._tag, backup.name, len(again),
                  reader.name)
@@ -1080,6 +1121,75 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
     return out
 
 
+async def screen_second_look(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute],
+                             entities: list[dict[str, Any]], plan: dict[str, list[str]], words: list[str],
+                             out: dict[str, dict[str, Any]], all_texts: dict[str, list[tuple[str, str]]],
+                             check: Any, stats: dict[str, int]) -> None:
+    """Второй взгляд отсева. «Не выяснено» с открывшимися страницами — программа берёт со страниц кандидата ссылки
+    «Контакты / О компании / Завод» (адрес площадки и формы на главной часто не пишут: 16.11 так «не выяснено» вышло
+    у 285 из 556) и дочитывает их. Страницы, не открывшиеся без браузера, — открывает браузером (до
+    SCREEN_BROWSER кандидатов: браузер медленный). Обновлённых кандидатов читает та же модель."""
+    sc = c.cfg.selection
+    unclear = [e for e in entities if (out.get(e["id"]) or {}).get("result") == "unclear"]
+    more: dict[str, list[str]] = {}
+    for e in unclear:
+        if not all_texts.get(e["id"]):
+            continue
+        seen = set(plan[e["id"]])
+        links = [u for u0 in plan[e["id"]] for u in (c.page_meta.get(u0) or {}).get("links") or [] if u not in seen]
+        if links:
+            more[e["id"]] = list(dict.fromkeys(links))[:2]
+    closed = [e for e in unclear if not all_texts.get(e["id"]) and plan[e["id"]]]
+    closed.sort(key=lambda e: -len(e.get("angles") or []))  # браузер — тем, кого находили чаще
+    closed = closed[:SCREEN_BROWSER]
+    if not more and not closed:
+        return
+    log.info("%sотсев, второй взгляд: «Контакты / О компании» у %d, браузером — %d", c._tag, len(more), len(closed))
+    c._emit("warning", stage="screen", member="",
+            text=f"отсев: дочитываем «Контакты / О компании» у {len(more)} кандидатов"
+                 + (f" и открываем браузером страницы ещё {len(closed)}, не открывшиеся с первого раза" if closed else ""))
+    pages = await fetch_pages(c, [u for us in more.values() for u in us], browser=False) if more else {}
+    if closed:
+        pages.update(await fetch_pages(c, [u for e in closed for u in plan[e["id"]]], browser=True, retry_empty=True))
+    redo: list[dict[str, Any]] = []
+    for e in entities:
+        urls = more.get(e["id"]) or (plan[e["id"]] if e in closed else [])
+        got = []
+        for u in urls:
+            t = (pages.get(u) or {}).get("text") or ""
+            if t:
+                got.append((u, S.excerpts(t, words + list(e.get("names") or [e["name"]]), sc.screen_chars // 2)))
+        if got:
+            if e in closed:
+                stats["readable"] += 1
+            all_texts[e["id"]] = (all_texts.get(e["id"]) or []) + got
+            redo.append(e)
+    if not redo:
+        return
+    before = {e["id"]: out.get(e["id"]) for e in redo}
+    for e in redo:
+        out.pop(e["id"], None)
+    batches = [redo[k:k + sc.screen_batch] for k in range(0, len(redo), sc.screen_batch)]
+    got_all = await asyncio.gather(*(check(b, all_texts, None, True) for b in batches), return_exceptions=True)
+    for r in got_all:
+        if isinstance(r, BaseException):
+            raise r
+    better = 0
+    for e in redo:
+        new, old = out.get(e["id"]), before[e["id"]]
+        # второй взгляд не может ухудшить: «не выяснено» с меньшим числом подтверждений — прежний ответ
+        if new is None or (new["result"] == "unclear" and old and _passes(new) < _passes(old)):
+            out[e["id"]] = old
+        elif new["result"] != "unclear" or _passes(new) > _passes(old or {}):
+            better += 1
+    log.info("%sотсев, второй взгляд: прочитано %d, яснее стало у %d", c._tag, len(redo), better)
+
+
+def _passes(r: dict[str, Any]) -> int:
+    return sum(1 for ch in (r or {}).get("checks") or [] if ch.get("verdict") == "pass")
+
+
+SCREEN_BROWSER = 60        # сколько не открывшихся без браузера кандидатов открыть браузером при отсеве
 SCREEN_CHUNK = 25          # кандидатов в одной части отсева (скачать страницы → прочитать)
 SCREEN_CHUNKS_AT_ONCE = 3  # частей, которые качаются одновременно (по 5 страниц каждая — 15 загрузок сразу)
 

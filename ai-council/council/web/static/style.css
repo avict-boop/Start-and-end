@@ -720,6 +720,8 @@ a.brand:hover .brand-name { color: var(--accent); }
 .paused-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .6rem; margin-top: .6rem; }
 .paused-row label { font-weight: 600; }
 .p-rewind { margin-top: .9rem; }
+.sel-cov-low td { color: var(--warn, #a15c00); }
+.sel-groups { margin: .6rem 0; padding: .5rem .7rem; border: 1px dashed var(--line); border-radius: 10px; }
 .p-rewind summary { cursor: pointer; font-weight: 600; }
 .p-rewind select { max-width: 100%; }
 .paused-row input { width: 7.5rem; }
