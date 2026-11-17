@@ -287,3 +287,18 @@ def test_traders_registry_and_required_only():
     reg = {"id": "O1", "angles": ["реестр: SC" + S.BY + "x"], "screen": {"checks": []}}
     plain = {"id": "O2", "angles": ["список: выставка" + S.BY + "x"], "screen": {"checks": []}}
     assert SM.screen_passes(reg) > SM.screen_passes(plain)
+
+
+def test_rewind_keeps_answers_received_after_it(tmp_path):
+    """17.11: после «поиск заново» и затем «отсев заново» поиск снова оплачивался — ответы поиска, полученные после
+    первого возврата, не подставлялись по номеру. Теперь не подставляются только ответы ДО возврата."""
+    p = tmp_path / "j.jsonl"
+    j = Journal(p)
+    j.entry({"stage": "discover", "member": "a", "call": 0, "parsed": {"v": "old"}})
+    j.rewind(["discover"], ["screen"])
+    j.entry({"stage": "discover", "member": "a", "call": 0, "parsed": {"v": "new"}})
+    j.entry({"stage": "screen", "member": "a", "call": 0, "parsed": {"v": "s1"}})
+    j.rewind(["screen"], [])
+    j2 = Journal(p)
+    assert j2.loose[("discover", "a", 0)] == {"v": "new"}   # поиск после возврата — подставляется
+    assert ("screen", "a", 0) not in j2.loose              # отсев забыт — спросим заново

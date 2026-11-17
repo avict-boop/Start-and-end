@@ -451,8 +451,6 @@ class Council:
             # из журнала (по номеру обращения) могли быть даны на другой вход: спрашиваем заново
             loose = False
             cached = None
-        if loose and stage in self.journal.strict:  # «вернуться к этапу»: вход мог измениться — только точный ответ
-            loose = False
         if loose:  # запрос изменился (обновление программы) или «доделать» из архива: ответ того же участника
             cached = self.journal.loose.get((stage, member.name, n))  # на том же этапе по порядку обращений
             was = self.journal.loose_model.get((stage, member.name, n), "")

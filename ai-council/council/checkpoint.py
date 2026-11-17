@@ -63,21 +63,27 @@ class Journal:
         self.loose_model: dict[tuple[str, str, int], str] = {}  # какая модель дала этот ответ
         # «Вернуться к этапу»: этапы, ответы которых по номеру обращения не подставляются (вход мог измениться —
         # годится только точное совпадение запроса); забытые этапы спрашиваются заново
+        # (Ответы, полученные ПОСЛЕ возврата, снова подставляются и по номеру — иначе после «поиск заново» и
+        # обновления программы поиск оплачивался бы ещё раз; 17.11 «отсев заново» перезапустил поиск.)
         self.strict: set[str] = set()
+        self._cutoff: dict[str, int] = {}  # этап -> сколько записей стенограммы было на момент возврата
         self._key_stage: dict[str, str] = {}
         if path is not None and path.is_file():
             self._load()
             self._close_tail()
         loose = (path.parent / "archive_transcript.json") if path is not None else None
         if loose is not None and loose.is_file():
-            try:
-                self.load_transcript(json.loads(loose.read_text(encoding="utf-8")))
+            try:  # стенограмма архива — раньше любого возврата: этапы, к которым возвращались, из неё не берём
+                self.load_transcript([e for e in json.loads(loose.read_text(encoding="utf-8"))
+                                      if not (isinstance(e, dict) and e.get("stage") in self._cutoff)])
             except ValueError:
                 pass
         # Ответы из собственной стенограммы журнала — запасной путь, если точный отпечаток запроса не совпал:
         # после обновления программы тексты запросов меняются, и без этого продолжение начиналось бы заново.
+        # Ответы этапа, полученные ДО возврата к нему, — не подставляем (вход мог измениться), после — да.
         if self.transcript:
-            self.load_transcript(self.transcript)
+            self.load_transcript([e for i, e in enumerate(self.transcript)
+                                  if i >= self._cutoff.get(e.get("stage", "") if isinstance(e, dict) else "", 0)])
 
     def _close_tail(self) -> None:
         """После аварийной остановки последняя строка журнала может быть недописана (без перевода строки). Тогда
@@ -164,8 +170,12 @@ class Journal:
             self.failures.pop(k, None)
         if forget:
             self.transcript = [e for e in self.transcript if e.get("stage") not in forget]
-            self.loose = {k: v for k, v in self.loose.items() if k[0] not in forget}
-        self.strict |= forget | set(r.get("strict") or [])
+        stages = forget | set(r.get("strict") or [])
+        # ответы этих этапов, полученные до возврата, по номеру обращения больше не подставляются
+        for st in stages:
+            self._cutoff[st] = len(self.transcript)
+        self.loose = {k: v for k, v in self.loose.items() if k[0] not in stages}
+        self.strict |= stages
 
     def rewind(self, forget: list[str], strict: list[str]) -> None:
         """Вернуться к этапу: ответы этапов forget забываются (спросим заново, за деньги), у этапов strict годится
