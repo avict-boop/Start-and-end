@@ -499,7 +499,16 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         # в таблицу — подтверждённые отсевом и ваши; «не выяснено» — только если подтверждённых нет вовсе
         keep_all = list(keep)
         if sc.shortlist_only_pass and passed:
-            keep = passed + seeds_failed + [e for e in unclear if e.get("seed")]
+            # «почти подтверждённые»: из условий отсева не подтверждено одно (обычно город площадки — на главной его
+            # нет), остальные — да. 17.11 так за бортом остались Sirio, 汤臣倍健, 艾兰得, 百合, 金达威, 长兴, 科拓:
+            # подробная проверка ищет их адрес по годовым отчётам и сайту
+            hard = [a.id for a in screen_attrs if S.is_knockout(a)]
+            # и «заметные»: их нашли 3+ независимых поиска — так находятся крупные заводы, чья главная страница
+            # ничего не говорит отсеву (百合, 汤臣倍健, 长兴)
+            near = [e for e in unclear if (hard and sum(1 for ch in (e["screen"].get("checks") or [])
+                                                        if ch.get("attr") in hard and ch.get("verdict") == "pass")
+                                           >= len(hard) - 1) or len(e.get("angles") or []) >= 3]
+            keep = passed + near + seeds_failed + [e for e in unclear if e.get("seed") and e not in near]
     else:
         keep = list(entities)
         keep_all = list(keep)

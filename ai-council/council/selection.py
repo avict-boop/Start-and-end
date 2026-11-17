@@ -477,9 +477,12 @@ def weak_source(url: str) -> bool:
 
 
 # признаки посредника: сам не производит — «на заводе партнёра», «импорт/экспорт», «торговая компания»
+# Только то, что говорит «сами не производим». НЕ признаки: «经销商» (у крупного завода — сеть дилеров),
+# «Manufacturer/Factory & Trading Company» (метка Alibaba у заводов) — 17.11 так ушли BioGrowing и Timage
 INTERMEDIARY = re.compile(
     r"partner (?:facilit|factor|manufactur)|contract(?:ed)? (?:to|with) (?:a |our )?(?:partner|third)|"
-    r"import\s*(?:&|and)\s*export|trading compan|sourcing agent|we source|贸易有限公司|进出口|代理商|经销商|"
+    r"(?<!factory & )(?<!manufacturer & )(?<!factory and )\btrading company only|sourcing agent|we source (?:from|our)|"
+    r"we (?:do not|don't) (?:own|have) (?:a |our own )?factory|贸易有限公司|代工厂(?:为|是)合作|无自有工厂|"
     r"торгов(?:ая|ый) компан|импорт[её]р|дистрибьютор", re.I)
 
 
@@ -492,9 +495,15 @@ def trader_name(e: dict[str, Any]) -> str:
     return next((x for x in e.get("names") or [e.get("name") or ""] if TRADER_NAME.search(x or "")), "")
 
 
+# частые традиционные иероглифы → упрощённые: «威海百合生物技術» и «威海百合生物技术», «仙樂» и «仙乐» — одна
+# компания (17.11 обе пары шли отдельными строками)
+_T2S = str.maketrans("術樂業藥醫營養東廣華國際開發興實製劑產廠團億長門龍鳳寶葉臺灣蘇蘭麗陽貿進務體種農質優電網訊華豐慶紅綠為樓團衛連鎮輕鐵銀關圖書協會濟環境飲務貨費資車馬",
+                     "术乐业药医营养东广华国际开发兴实制剂产厂团亿长门龙凤宝叶台湾苏兰丽阳贸进务体种农质优电网讯华丰庆红绿为楼团卫连镇轻铁银关图书协会济环境饮务货费资车马")
+
+
 def norm_name(s: str) -> str:
     """Имя для сравнения: без регистра, знаков, форм собственности и общих слов («биотех», «有限公司»)."""
-    t = (s or "").lower().replace("ё", "е")
+    t = (s or "").translate(_T2S).lower().replace("ё", "е")
     t = re.sub(r"[（(].*?[)）]", " ", t)
     t = LEGAL_ZH.sub(" ", t)
     t = re.sub(r"[^\w\s]", " ", t)
@@ -573,14 +582,19 @@ def _name_key_ok(n: str) -> bool:
     return len(n) >= (2 if CJK.search(n) else 3)
 
 
+def _sure(x: str) -> str:
+    """Название с «?» — догадка модели (16.11 «浙江胡庆余堂中药材有限公司?» приклеилось к Huisong): не берём."""
+    return "" if "?" in (x or "") or "？" in (x or "") else x
+
+
 def display_name(cs: list["Candidate"]) -> str:
     """Имя объекта на экране: самое частое латинское (по нему вы ищете) и китайское рядом — «BioGrowing Co., Ltd. /
     均瑶润盈生物科技（上海）有限公司». Раньше бралось самое частое короткое, и выходило только китайское — нужный завод
     в списке было не узнать."""
     def best(xs: list[str]) -> str:
         return max(xs, key=lambda x: (sum(1 for y in xs if y == x), -len(x))) if xs else ""
-    lat = best([x.split(" / ")[0].strip() for c in cs for x in [c.name] if x.strip() and not CJK.search(x.split(" / ")[0])])
-    loc = best([x.strip() for c in cs for x in [c.local_name, c.name] if x.strip() and CJK.search(x) and " / " not in x])
+    lat = best([x.split(" / ")[0].strip() for c in cs for x in [_sure(c.name)] if x.strip() and not CJK.search(x.split(" / ")[0])])
+    loc = best([x.strip() for c in cs for x in [_sure(c.local_name), _sure(c.name)] if x.strip() and CJK.search(x) and " / " not in x])
     if lat and loc and norm_name(loc) not in norm_name(lat):
         return f"{lat} / {loc}"
     return lat or loc or best([c.name for c in cs])
@@ -660,8 +674,10 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
     by_key: dict[str, int] = {}
     for i, it in enumerate(items):
         c = it["c"]
-        keys = {f"n:{norm_name(x)}" for x in [c.name, c.local_name, *c.aliases] if _name_key_ok(norm_name(x))}
+        keys = {f"n:{norm_name(x)}" for x in [c.name, c.local_name, *c.aliases] if _sure(x) and _name_key_ok(norm_name(x))}
         for x in [c.name, c.local_name, *c.aliases]:  # одно ядро названия в одном городе — одна компания
+            if not _sure(x):
+                continue
             core, city = cn_core_city(x, c.location)
             if city and len(core) >= 2:
                 keys.add(f"c:{core}@{city}")
