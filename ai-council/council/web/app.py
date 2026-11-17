@@ -2039,5 +2039,6 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
     if password:
         user = os.environ.get("WEB_USER", "").strip() or "admin"
         trust = os.environ.get("TRUST_PROXY", "") == "1"
-        return BasicAuth(app, user=user, password=password, trust_proxy=trust)  # type: ignore[return-value]
+        return BasicAuth(app, user=user, password=password, trust_proxy=trust,  # type: ignore[return-value]
+                         read_token=os.environ.get("READ_TOKEN", "").strip())
     return app

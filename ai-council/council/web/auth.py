@@ -13,6 +13,7 @@ import base64
 import hashlib
 import hmac
 import html
+import re
 import time
 from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qs
@@ -22,6 +23,10 @@ ASGIApp = Callable[[Scope, Callable, Callable], Awaitable[None]]
 
 OPEN_PATHS = {"/healthz", "/manifest.webmanifest"}  # описание приложения браузер читает без пароля
 OPEN_PREFIXES = ("/static/icons/", "/static/brand/")  # значки — тоже
+# Ключ «только чтение» (READ_TOKEN в .env): для разбора заседаний снаружи — список, ход, журнал, отчёты, диагностика.
+# Только GET и только эти адреса: запустить заседание, поменять настройки или потратить деньги с ним нельзя.
+READ_PATHS = re.compile(r"^/api/(sessions(/[^/]+(/(events|diagnostics|report|costs|request|selection\.xlsx|thoughts))?)?"
+                        r"|diagnostics|stats|paused|system)$")
 COOKIE = "council_auth"
 COOKIE_DAYS = 180
 
@@ -37,8 +42,10 @@ class BasicAuth:
         max_failures: int = 10,
         lock_seconds: float = 900,
         clock: Callable[[], float] = time.monotonic,
+        read_token: str = "",
     ) -> None:
         self.app = app
+        self.read_token = read_token.encode() if len(read_token) >= 24 else b""  # короткий ключ — не включаем
         self.user = user.encode()
         self.password = password.encode()
         self.trust_proxy = trust_proxy
@@ -118,6 +125,20 @@ class BasicAuth:
         if path == "/login":
             await self._login(scope, receive, send, ip, count, first)
             return
+        if self.read_token:
+            headers = dict(scope.get("headers") or [])
+            raw = headers.get(b"authorization", b"")
+            if raw.lower().startswith(b"bearer "):
+                if not hmac.compare_digest(raw[7:].strip(), self.read_token):
+                    self.failures[ip] = (count + 1, first)
+                    await _respond(send, 401, "Неверный ключ.", [])
+                    return
+                if scope.get("method") not in ("GET", "HEAD") or not READ_PATHS.match(path):
+                    await _respond(send, 403, "Ключ только для чтения: эта операция с ним недоступна.", [])
+                    return
+                self.failures.pop(ip, None)
+                await self.app(scope, receive, send)
+                return
         if self._check(scope):
             self.failures.pop(ip, None)
             await self.app(scope, receive, send)

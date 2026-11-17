@@ -853,3 +853,22 @@ def test_selection_rewind_to_previous_stage(client):
     assert ev[-1]["type"] == "paused" and ev[-1]["review"]["gate"] == "shortlist"
     assert any(e["type"] == "screened" for e in ev)
     assert client.get("/api/rewind_targets").json()["items"][0]["id"] == "frame"
+
+
+def test_read_token_only_reads(tmp_path, monkeypatch):
+    """Ключ «только чтение»: список заседаний и диагностика — да; запуск, настройки, отмена — нет; неверный — 401."""
+    import yaml
+    tok = "r" * 32
+    monkeypatch.setenv("READ_TOKEN", tok)
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text(yaml.safe_dump({"members": [{"name": "a", "model": "m/a"}, {"name": "b", "model": "m/b"}],
+                                   "chair": "a", "runs_dir": str(tmp_path / "runs")}), encoding="utf-8")
+    with TestClient(create_app(cfg, mock_delay=0, password="s3cret-pass")) as c:
+        h = {"Authorization": f"Bearer {tok}"}
+        assert c.get("/api/sessions", headers=h).status_code == 200
+        assert c.get("/api/diagnostics", headers=h).status_code == 200
+        assert c.get("/api/settings", headers=h).status_code == 403
+        assert c.post("/api/sessions", headers=h, json={"question": "x", "mock": True}).status_code == 403
+        assert c.post("/api/system/update", headers=h).status_code == 403
+        assert c.get("/api/sessions", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        assert c.get("/api/sessions").status_code == 401
