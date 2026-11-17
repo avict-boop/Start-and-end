@@ -1,0 +1,713 @@
+<title>Модель дистрибьютора 2027</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: sticky header + tab rail; each tab is a single column of summary → charts → detailed tables */
+:root{
+  --bg:#f4f5f3; --surface:#ffffff; --surface-2:#eef0ed; --ink:#121614; --muted:#5a615d; --faint:#8a918c;
+  --line:#e0e3df; --grid:#eceeeb; --accent:#2a78d6; --accent-ink:#ffffff; --focus:#2a78d6;
+  --pos:#0f7a3d; --neg:#c7302f; --warn:#a86a00; --pos-bg:#e3f2e8; --neg-bg:#fbe7e6; --warn-bg:#fbf0d9;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4;
+  --input-bg:#f8faf7;
+  --f-ui:"Onest",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --f-mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#111312; --surface:#191c1a; --surface-2:#222623; --ink:#eef0ec; --muted:#a5aca7; --faint:#7c837e;
+  --line:#2c312e; --grid:#252926; --accent:#3987e5; --accent-ink:#ffffff; --focus:#6da7ec;
+  --pos:#4cc27a; --neg:#ef7473; --warn:#e0a63a; --pos-bg:#173123; --neg-bg:#3a1c1c; --warn-bg:#3a2c12;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --input-bg:#1e221f; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#111312; --surface:#191c1a; --surface-2:#222623; --ink:#eef0ec; --muted:#a5aca7; --faint:#7c837e;
+  --line:#2c312e; --grid:#252926; --accent:#3987e5; --accent-ink:#ffffff; --focus:#6da7ec;
+  --pos:#4cc27a; --neg:#ef7473; --warn:#e0a63a; --pos-bg:#173123; --neg-bg:#3a1c1c; --warn-bg:#3a2c12;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --input-bg:#1e221f; color-scheme:dark}
+
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font-family:var(--f-ui);font-size:14px;line-height:1.5;font-variant-numeric:tabular-nums}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--surface)}
+.gut{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.inner{max-width:1240px;margin:0 auto}
+header.top{background:var(--surface);border-bottom:1px solid var(--line)}
+header.top .inner{display:flex;flex-wrap:wrap;gap:12px 24px;align-items:center;justify-content:space-between;padding-block:18px 14px}
+h1{font-size:22px;font-weight:700;letter-spacing:-.01em;margin:0;text-wrap:balance}
+.sub{color:var(--muted);font-size:13px;margin-top:2px}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.seg{display:inline-flex;background:var(--surface-2);border-radius:8px;padding:3px;gap:2px}
+.seg button{border:0;background:transparent;color:var(--muted);font:500 13px var(--f-ui);padding:6px 12px;border-radius:6px;cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.btn{border:1px solid var(--line);background:var(--surface);color:var(--ink);font:500 13px var(--f-ui);padding:7px 12px;border-radius:8px;cursor:pointer}
+.btn:hover{background:var(--surface-2)}
+button:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;padding:3px 9px;border-radius:999px}
+.pill.ok{background:var(--pos-bg);color:var(--pos)} .pill.bad{background:var(--neg-bg);color:var(--neg)} .pill.wn{background:var(--warn-bg);color:var(--warn)}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+
+nav.tabs{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--surface);border-bottom:1px solid var(--line)}
+nav.tabs .inner{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none}
+nav.tabs a{flex:none;color:var(--muted);text-decoration:none;font-weight:500;padding:11px 12px 10px;border-bottom:2px solid transparent;white-space:nowrap}
+nav.tabs a:hover{color:var(--ink)}
+nav.tabs a[aria-current="page"]{color:var(--ink);border-bottom-color:var(--accent)}
+
+main .inner{padding-block:22px 48px;display:flex;flex-direction:column;gap:22px}
+section[data-tab]{display:flex;flex-direction:column;gap:22px}
+h2{font-size:17px;font-weight:600;margin:0}
+h3{font-size:14px;font-weight:600;margin:0}
+.lede{color:var(--muted);max-width:72ch;margin:4px 0 0}
+.note{font-size:12.5px;color:var(--muted);max-width:80ch}
+.unit{font-family:var(--f-mono);font-size:11.5px;color:var(--faint);letter-spacing:.02em}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(178px,1fr));gap:12px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.kpi .k{font-size:12px;color:var(--muted);letter-spacing:.02em}
+.kpi .v{font-size:24px;font-weight:600;letter-spacing:-.01em;line-height:1.15}
+.kpi .d{font-size:12px;color:var(--muted)}
+
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,520px),1fr));gap:16px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;min-width:0;display:flex;flex-direction:column;gap:10px}
+.panel-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:10px;height:10px;border-radius:2px;display:inline-block}
+.legend i.ln{height:2px;width:14px;border-radius:1px}
+.plot{position:relative;width:100%}
+.plot svg{display:block;width:100%;overflow:visible}
+.plot text{fill:var(--muted);font-family:var(--f-ui);font-size:11px}
+.plot .gl{stroke:var(--grid);stroke-width:1}
+.plot .zl{stroke:var(--faint);stroke-width:1}
+.plot .seg{stroke:var(--surface);stroke-width:1.5}
+.plot .hov{fill:var(--ink);opacity:0}
+.plot .hit:hover + .hov, .plot .hov.on{opacity:.05}
+.tip{position:absolute;pointer-events:none;background:var(--surface);border:1px solid var(--line);box-shadow:0 6px 18px rgba(0,0,0,.12);border-radius:8px;padding:8px 10px;font-size:12px;min-width:170px;z-index:3}
+.tip b{display:block;margin-bottom:4px;font-weight:600}
+.tip .r{display:flex;justify-content:space-between;gap:14px;color:var(--muted)}
+.tip .r span:last-child{color:var(--ink)}
+.tip i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px}
+
+.hbars{display:flex;flex-direction:column;gap:10px}
+.hb{display:grid;grid-template-columns:minmax(110px,170px) 1fr 74px;gap:10px;align-items:center;font-size:13px}
+.hb .track{position:relative;height:16px}
+.hb .bar{position:absolute;top:0;height:16px;border-radius:0 4px 4px 0}
+.hb .bar.n{border-radius:4px 0 0 4px}
+.hb .axis{position:absolute;top:-3px;bottom:-3px;width:1px;background:var(--faint)}
+.hb .val{text-align:right;font-weight:500}
+
+.tw{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{padding:7px 10px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--grid)}
+th{font-weight:500;color:var(--muted);font-size:12px;background:var(--surface);position:sticky;top:0}
+th:first-child,td:first-child{text-align:left;position:sticky;left:0;background:var(--surface);z-index:1}
+tr:last-child td{border-bottom:0}
+tr.tot td{font-weight:600;border-top:1px solid var(--line)}
+tr.sub td:first-child{padding-left:22px;color:var(--muted)}
+tr.pct td{color:var(--muted);font-size:12px}
+tr.hd td{background:var(--surface-2);font-weight:600;font-size:12px;color:var(--muted);letter-spacing:.02em}
+tr.hd td:first-child{background:var(--surface-2)}
+td.ytd,th.ytd{background:var(--surface-2)}
+.neg{color:var(--neg)}
+.posv{color:var(--pos)}
+
+table.inp td{padding:4px 6px}
+table.inp input{width:100%;min-width:72px;max-width:120px;font:500 13px var(--f-ui);font-variant-numeric:tabular-nums;color:var(--ink);background:var(--input-bg);border:1px solid var(--line);border-radius:6px;padding:5px 7px;text-align:right}
+table.inp input.wide{max-width:none;min-width:150px;text-align:left}
+table.inp input:hover{border-color:var(--faint)}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,250px),1fr));gap:16px}
+.fset{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.f{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px}
+.f label{color:var(--muted)}
+.f input{width:118px;font:500 13px var(--f-ui);font-variant-numeric:tabular-nums;color:var(--ink);background:var(--input-bg);border:1px solid var(--line);border-radius:6px;padding:5px 7px;text-align:right}
+.sens td.c{min-width:84px}
+.sens td.base{outline:2px solid var(--accent);outline-offset:-2px;font-weight:600}
+.badge-ex{font-family:var(--f-mono);font-size:11px;color:var(--warn);background:var(--warn-bg);padding:2px 7px;border-radius:4px}
+@media (max-width:560px){h1{font-size:19px}.kpi .v{font-size:21px}.hb{grid-template-columns:96px 1fr 64px}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<header class="top gut">
+  <div class="inner">
+    <div>
+      <h1>Модель дистрибьютора 2027</h1>
+      <div class="sub">План на 12 месяцев · рубли · <span class="badge-ex">пример данных — замените своими</span></div>
+    </div>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Сценарий">
+        <button type="button" data-scen="pess">Пессимистичный</button>
+        <button type="button" data-scen="base">Базовый</button>
+        <button type="button" data-scen="opt">Оптимистичный</button>
+      </div>
+      <span id="bal-pill" class="pill ok">Баланс сходится</span>
+      <button type="button" class="btn" id="reset">Сбросить к примеру</button>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs gut" aria-label="Разделы модели">
+  <div class="inner">
+    <a href="#summary">Сводка</a>
+    <a href="#pricelist">Прайс-лист</a>
+    <a href="#channels">Каналы</a>
+    <a href="#pnl">ОПиУ</a>
+    <a href="#cashflow">ДДС</a>
+    <a href="#balance">Баланс</a>
+    <a href="#wc">Оборотный капитал</a>
+    <a href="#valuation">Оценка</a>
+    <a href="#assumptions">Допущения</a>
+  </div>
+</nav>
+
+<main class="gut"><div class="inner">
+
+<!-- СВОДКА -->
+<section data-tab="summary">
+  <div class="kpis" id="kpis"></div>
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-head"><h3>Чистая выручка по каналам</h3><span class="unit">млн ₽ / мес</span></div>
+      <div class="legend" id="lg-rev"></div><div class="plot" id="ch-rev"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Прибыль</h3><span class="unit">млн ₽ / мес</span></div>
+      <div class="legend" id="lg-prof"></div><div class="plot" id="ch-prof"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Деньги и кредитная линия</h3><span class="unit">млн ₽, конец месяца</span></div>
+      <div class="legend" id="lg-cash"></div><div class="plot" id="ch-cash"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Маржинальный доход по каналам</h3><span class="unit">% от чистой выручки, год</span></div>
+      <div class="hbars" id="hb-sum"></div>
+      <p class="note">Маржинальный доход = чистая выручка − себестоимость − логистика − комиссии. Подробно на вкладке «Каналы».</p>
+    </div>
+  </div>
+</section>
+
+<!-- ПРАЙС-ЛИСТ -->
+<section data-tab="pricelist" hidden>
+  <div><h2>Ассортимент и прайс-лист</h2>
+  <p class="lede">Закупочная цена, наценка и плановые объёмы по товарным группам. Базовая цена прайса = закупка × (1 + наценка); цена канала = базовая цена × (1 − скидка канала).</p></div>
+  <div class="tw"><table class="inp" id="t-prod"></table></div>
+  <div class="panel-head"><h3>Цены по каналам на январь</h3><span class="unit">₽ за единицу, без НДС</span></div>
+  <div class="tw"><table id="t-price"></table></div>
+  <div class="panel-head"><h3>Маржинальность товарной группы в канале</h3><span class="unit">% маржинального дохода от чистой выручки, год</span></div>
+  <div class="tw"><table id="t-pmargin"></table></div>
+</section>
+
+<!-- КАНАЛЫ -->
+<section data-tab="channels" hidden>
+  <div><h2>Каналы сбыта</h2>
+  <p class="lede">Условия работы с каждым каналом: доля в объёме, скидка от прайса, ретро-бонус, отсрочка платежа покупателю, логистика и комиссии.</p></div>
+  <div class="tw"><table class="inp" id="t-chan"></table></div>
+  <p class="note" id="share-note"></p>
+  <div class="panel-head"><h3>Доходность по каналам за год</h3><span class="unit">тыс ₽</span></div>
+  <div class="tw"><table id="t-chprof"></table></div>
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-head"><h3>Маржинальный доход</h3><span class="unit">% от чистой выручки</span></div>
+      <div class="hbars" id="hb-cm"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Доход на рубль дебиторки</h3><span class="unit">маржинальный доход за год / средняя ДЗ</span></div>
+      <div class="hbars" id="hb-roar"></div>
+      <p class="note">Показывает, сколько маржинального дохода канал приносит на каждый рубль, замороженный в его дебиторской задолженности.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ОПиУ -->
+<section data-tab="pnl" hidden>
+  <div><h2>Отчёт о прибылях и убытках</h2><p class="lede">Помесячно, тыс ₽ без НДС.</p></div>
+  <div class="tw"><table id="t-pnl"></table></div>
+</section>
+
+<!-- ДДС -->
+<section data-tab="cashflow" hidden>
+  <div><h2>Движение денежных средств</h2><p class="lede">Косвенный метод, тыс ₽. Кредитная линия привлекается автоматически, когда остаток падает ниже минимального, и гасится из свободных денег.</p></div>
+  <div class="tw"><table id="t-cf"></table></div>
+</section>
+
+<!-- БАЛАНС -->
+<section data-tab="balance" hidden>
+  <div><h2>Баланс</h2><p class="lede">На конец месяца, тыс ₽. Начальный баланс — взнос собственников деньгами.</p></div>
+  <div class="tw"><table id="t-bs"></table></div>
+</section>
+
+<!-- ОБОРОТНЫЙ КАПИТАЛ -->
+<section data-tab="wc" hidden>
+  <div><h2>Оборотный капитал</h2><p class="lede">Для дистрибьютора это главный потребитель денег: рост продаж увеличивает дебиторку и запасы раньше, чем приносит прибыль.</p></div>
+  <div class="kpis" id="kpis-wc"></div>
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-head"><h3>Состав чистого оборотного капитала</h3><span class="unit">млн ₽, конец месяца</span></div>
+      <div class="legend" id="lg-wc"></div><div class="plot" id="ch-wc"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Оборачиваемость</h3><span class="unit">дней</span></div>
+      <div class="legend" id="lg-days"></div><div class="plot" id="ch-days"></div>
+    </div>
+  </div>
+  <div class="tw"><table id="t-wc"></table></div>
+  <div class="panel-head"><h3>Дебиторская задолженность по каналам на конец года</h3><span class="unit">тыс ₽</span></div>
+  <div class="tw"><table id="t-archan"></table></div>
+</section>
+
+<!-- ОЦЕНКА -->
+<section data-tab="valuation" hidden>
+  <div><h2>Оценка: DCF, NPV, IRR</h2>
+  <p class="lede">Свободный денежный поток фирмы (FCFF) за 12 месяцев дисконтируется по месячной ставке, эквивалентной WACC. После прогнозного года — терминальная стоимость по модели Гордона от EBIT прогнозного года с ростом g.</p></div>
+  <div class="kpis" id="kpis-val"></div>
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-head"><h3>Свободный денежный поток</h3><span class="unit">млн ₽</span></div>
+      <div class="legend" id="lg-fcf"></div><div class="plot" id="ch-fcf"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-head"><h3>Чувствительность NPV</h3><span class="unit">млн ₽; строки — WACC, столбцы — темп роста g</span></div>
+      <div class="tw" style="border:0"><table class="sens" id="t-sens"></table></div>
+    </div>
+  </div>
+  <div class="tw"><table id="t-dcf"></table></div>
+  <div class="tw"><table id="t-tv"></table></div>
+</section>
+
+<!-- ДОПУЩЕНИЯ -->
+<section data-tab="assumptions" hidden>
+  <div><h2>Общие допущения</h2><p class="lede">Ассортимент редактируется на вкладке «Прайс-лист», условия каналов — на вкладке «Каналы». Все значения сохраняются в этом браузере.</p></div>
+  <div class="fields" id="fields"></div>
+  <div class="panel-head"><h3>Сезонность объёмов</h3><span class="unit">коэффициент к базовому месяцу</span></div>
+  <div class="tw"><table class="inp" id="t-season"></table></div>
+  <div class="panel-head"><h3>Сценарии</h3><span class="unit">множители к базовым допущениям</span></div>
+  <div class="tw"><table class="inp" id="t-scen"></table></div>
+</section>
+
+</div></main>
+
+<script>
+(function(){
+const MONTHS=['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+const MONTHS_IN=['январе','феврале','марте','апреле','мае','июне','июле','августе','сентябре','октябре','ноябре','декабре'];
+const SERIES=['var(--s1)','var(--s2)','var(--s3)','var(--s4)','var(--s5)'];
+const KEY='distrib-model-2027-v1';
+
+const DEFAULTS={
+  products:[
+    {name:'Напитки',cost:55,markup:35,vol:60000,growth:2.0},
+    {name:'Снеки',cost:38,markup:40,vol:45000,growth:2.5},
+    {name:'Кондитерские изделия',cost:120,markup:38,vol:18000,growth:1.5},
+    {name:'Бакалея',cost:85,markup:28,vol:30000,growth:1.0},
+    {name:'Молочная продукция',cost:70,markup:25,vol:25000,growth:1.5},
+    {name:'Бытовая химия',cost:160,markup:45,vol:9000,growth:2.0}
+  ],
+  channels:[
+    {name:'Федеральные сети',share:30,disc:8,bonus:5,dso:45,logi:3,comm:0},
+    {name:'Региональные сети',share:20,disc:5,bonus:3,dso:35,logi:3.5,comm:0},
+    {name:'Традиционная розница',share:25,disc:0,bonus:0,dso:10,logi:5,comm:0},
+    {name:'HoReCa',share:10,disc:3,bonus:0,dso:21,logi:6,comm:0},
+    {name:'Маркетплейсы',share:15,disc:-5,bonus:0,dso:14,logi:4,comm:15}
+  ],
+  season:[0.85,0.88,0.97,1.00,1.02,1.00,0.98,1.00,1.03,1.05,1.07,1.15],
+  g:{payroll:1400000,rent:400000,other:200000,mkt:1.0,salesBonus:1.0,
+     priceIdx:6,costIdx:7,dio:25,dpo:35,capex:5000000,life:60,
+     equity:12000000,rate:18,minCash:2000000,tax:25,wacc:20,tg:4},
+  scen:{pess:{vol:0.85,price:0.98,dso:10},base:{vol:1,price:1,dso:0},opt:{vol:1.12,price:1.01,dso:-5}},
+  scenario:'base'
+};
+const clone=o=>JSON.parse(JSON.stringify(o));
+let S;
+try{const raw=localStorage.getItem(KEY);S=raw?JSON.parse(raw):clone(DEFAULTS);}catch(e){S=clone(DEFAULTS);}
+if(!S||!S.products||!S.g||!S.scen) S=clone(DEFAULTS);
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}};
+
+/* ---------- MODEL ---------- */
+function run(S){
+  const g=S.g, sc=S.scen[S.scenario]||S.scen.base;
+  const P=S.products, C=S.channels, nC=C.length;
+  const shareSum=C.reduce((a,c)=>a+Math.max(0,c.share),0)||1;
+  const z=()=>new Array(12).fill(0);
+  const R={m:[],ch:C.map(c=>({name:c.name,rev:z(),gross:z(),bonus:z(),cogs:z(),logi:z(),comm:z(),cm:z(),ar:z()})),
+           pc:P.map(()=>C.map(()=>({rev:0,cogs:0,logi:0,comm:0})))};
+  let cash=g.equity, debt=0, ar=0, inv=0, ap=0, cumDep=0, cumEBT=0, cumTax=0, cumNI=0;
+  R.open={cash,debt:0,ar:0,inv:0,ap:0,fa:0,equity:g.equity,re:0};
+  for(let m=0;m<12;m++){
+    const costF=Math.pow(1+g.costIdx/100,m/12), priceF=Math.pow(1+g.priceIdx/100,m/12);
+    let gross=0,bonus=0,cogs=0,logi=0,comm=0,units=0;
+    P.forEach((p,pi)=>{
+      const vol=p.vol*S.season[m]*Math.pow(1+p.growth/100,m)*sc.vol;
+      const list=p.cost*(1+p.markup/100)*priceF*sc.price, uc=p.cost*costF;
+      units+=vol;
+      C.forEach((c,ci)=>{
+        const v=vol*Math.max(0,c.share)/shareSum;
+        const gr=v*list*(1-c.disc/100), bo=gr*c.bonus/100, nr=gr-bo, co=v*uc;
+        const lo=nr*c.logi/100, cm=nr*c.comm/100;
+        const X=R.ch[ci]; X.gross[m]+=gr; X.bonus[m]+=bo; X.rev[m]+=nr; X.cogs[m]+=co; X.logi[m]+=lo; X.comm[m]+=cm;
+        const Y=R.pc[pi][ci]; Y.rev+=nr; Y.cogs+=co; Y.logi+=lo; Y.comm+=cm;
+        gross+=gr; bonus+=bo; cogs+=co; logi+=lo; comm+=cm;
+      });
+    });
+    const rev=gross-bonus;
+    let arNew=0;
+    R.ch.forEach((X,ci)=>{X.cm[m]=X.rev[m]-X.cogs[m]-X.logi[m]-X.comm[m];
+      X.ar[m]=X.rev[m]*Math.max(0,C[ci].dso+sc.dso)/30; arNew+=X.ar[m];});
+    const gp=rev-cogs, cmTot=gp-logi-comm;
+    const payroll=g.payroll, rent=g.rent, other=g.other, mkt=rev*g.mkt/100, sb=rev*g.salesBonus/100;
+    const opex=payroll+rent+other+mkt+sb;
+    const ebitda=cmTot-opex;
+    const dep=g.life>0?g.capex/g.life:0; cumDep+=dep;
+    const ebit=ebitda-dep;
+    const interest=debt*g.rate/100/12;
+    const ebt=ebit-interest; cumEBT+=ebt;
+    const taxCum=Math.max(0,cumEBT)*g.tax/100, tax=taxCum-cumTax; cumTax=taxCum;
+    const ni=ebt-tax; cumNI+=ni;
+    const invNew=cogs*g.dio/30;
+    const purchases=cogs+invNew-inv;
+    const apNew=purchases*g.dpo/30;
+    const dAR=arNew-ar, dInv=invNew-inv, dAP=apNew-ap;
+    const cfo=ni+dep-dAR-dInv+dAP;
+    const capex=m===0?g.capex:0;
+    const cashOpen=cash, debtOpen=debt;
+    const pre=cash+cfo-capex;
+    let draw=0,repay=0;
+    if(pre<g.minCash) draw=g.minCash-pre; else repay=Math.min(debt,pre-g.minCash);
+    debt=debt+draw-repay; cash=pre+draw-repay;
+    ar=arNew; inv=invNew; ap=apNew;
+    const fa=g.capex-cumDep, equity=g.equity+cumNI;
+    const assets=cash+ar+inv+fa, liab=ap+debt;
+    const nwc=ar+inv-ap;
+    const nopat=ebit*(1-g.tax/100);
+    R.m.push({gross,bonus,rev,cogs,gp,logi,comm,cm:cmTot,payroll,rent,other,mkt,sb,opex,ebitda,dep,ebit,interest,ebt,tax,ni,units,
+      ar,inv,ap,nwc,dAR,dInv,dAP,cfo,capex,draw,repay,cff:draw-repay,cashOpen,cash,debtOpen,debt,fa,equity,re:cumNI,assets,liab,
+      check:assets-liab-equity,purchases,
+      dso:rev?ar/rev*30:0,dio:cogs?inv/cogs*30:0,dpo:purchases?ap/purchases*30:0,
+      nopat,fcf:nopat+dep-capex-(nwc-(m?R.m[m-1].nwc:0))});
+  }
+  R.sum=k=>R.m.reduce((a,x)=>a+x[k],0);
+  R.val=valuation(R,g.wacc,g.tg,g);
+  return R;
+}
+function valuation(R,wacc,tg,g){
+  const rM=Math.pow(1+wacc/100,1/12)-1;
+  let pv=0; const pvs=[],dfs=[];
+  R.m.forEach((x,i)=>{const df=1/Math.pow(1+rM,i+1);dfs.push(df);pvs.push(x.fcf*df);pv+=x.fcf*df;});
+  const dec=R.m[11];
+  const ebitY=R.m.reduce((a,x)=>a+x.ebit,0);
+  const nopatRR=ebitY*(1-g.tax/100)*(1+tg/100);
+  const reinv=dec.nwc*tg/100;
+  const fcfTV=nopatRR-reinv;
+  const tv=wacc>tg?fcfTV/((wacc-tg)/100):NaN;
+  const pvTV=tv/(1+wacc/100);
+  const ev=pv+pvTV;
+  // IRR: ставка, при которой PV(FCFF1..12 + TV в месяце 12) = 0
+  const flows=R.m.map(x=>x.fcf); flows[11]+=tv;
+  const npvAt=r=>flows.reduce((a,f,i)=>a+f/Math.pow(1+r,i+1),0);
+  let irr=NaN, lo=-0.5, hi=1.0, flo=npvAt(lo), fhi=npvAt(hi);
+  if(isFinite(tv)&&flo*fhi<0){for(let k=0;k<200;k++){const mid=(lo+hi)/2,fm=npvAt(mid);if(flo*fm<=0){hi=mid;}else{lo=mid;flo=fm;}}irr=Math.pow(1+(lo+hi)/2,12)-1;}
+  const eqEnd=tv-dec.debt+dec.cash;
+  return {rM,pv,pvs,dfs,nopatRR,reinv,fcfTV,tv,pvTV,ev,npv:ev,irr,eqEnd,moic:eqEnd/g.equity};
+}
+
+/* ---------- FORMAT ---------- */
+const nf0=new Intl.NumberFormat('ru-RU',{maximumFractionDigits:0});
+const nf1=new Intl.NumberFormat('ru-RU',{minimumFractionDigits:1,maximumFractionDigits:1});
+const nf2=new Intl.NumberFormat('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});
+const MINUS='−';
+const sgn=(s,v)=>v<0?MINUS+s.replace('-',''):s;
+const k0=v=>Math.abs(v)<500?'0':sgn(nf0.format(v/1000),v);
+const m1=v=>isFinite(v)?sgn(nf1.format(v/1e6),v):'н/д';
+const pc1=v=>isFinite(v)?sgn(nf1.format(v*100),v)+'%':'н/д';
+const ncls=v=>v<-0.5?' class="neg"':'';
+
+/* ---------- CHARTS ---------- */
+function ticks(min,max,count){
+  if(min===max){max=min+1;}
+  const step0=(max-min)/count, mag=Math.pow(10,Math.floor(Math.log10(step0))), e=step0/mag;
+  const step=(e>=7.5?10:e>=3.5?5:e>=1.5?2:1)*mag;
+  const lo=Math.floor(min/step+1e-9)*step, hi=Math.ceil(max/step-1e-9)*step, t=[];
+  for(let v=lo;v<=hi+step/2;v+=step)t.push(Math.abs(v)<step/1e6?0:v);
+  return {lo,hi,t};
+}
+function legend(el,items){
+  el.innerHTML=items.map(s=>`<span><i class="${s.line?'ln':''}" style="background:${s.color}"></i>${s.name}</span>`).join('');
+}
+const charts=[];
+function chart(el,cfg){charts.push([el,cfg]);draw(el,cfg);}
+function draw(el,cfg){
+  const stacks=cfg.stacks||[], lines=cfg.lines||[], n=cfg.labels.length, div=cfg.div||1e6;
+  const W=Math.max(280,el.clientWidth), H=cfg.h||240, M={l:44,r:10,t:10,b:24};
+  let min=0,max=0;
+  for(let i=0;i<n;i++){let p=0,q=0;stacks.forEach(s=>{const v=s.values[i]/div;v>=0?p+=v:q+=v;});max=Math.max(max,p);min=Math.min(min,q);}
+  lines.forEach(l=>l.values.forEach(v=>{v/=div;max=Math.max(max,v);min=Math.min(min,v);}));
+  const T=ticks(min,max,4);
+  const y=v=>M.t+(T.hi-v)/(T.hi-T.lo)*(H-M.t-M.b);
+  const bw=(W-M.l-M.r)/n, cx=i=>M.l+bw*i+bw/2;
+  const fmtT=v=>cfg.axisFmt?cfg.axisFmt(v):sgn(Number.isInteger(v)?nf0.format(v):nf1.format(v),v);
+  let s=`<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${cfg.aria||''}">`;
+  T.t.forEach(v=>{s+=`<line class="${v===0?'zl':'gl'}" x1="${M.l}" x2="${W-M.r}" y1="${y(v)}" y2="${y(v)}"/><text x="${M.l-8}" y="${y(v)+4}" text-anchor="end">${fmtT(v)}</text>`;});
+  const every=bw<30?2:1;
+  cfg.labels.forEach((L,i)=>{if(i%every===0)s+=`<text x="${cx(i)}" y="${H-6}" text-anchor="middle">${L}</text>`;});
+  const barW=Math.min(30,bw*0.62);
+  for(let i=0;i<n;i++){
+    let p=0,q=0;
+    stacks.forEach((st,si)=>{
+      const v=st.values[i]/div; if(!v)return;
+      let a,b; if(v>=0){a=p;b=p+v;p=b;}else{a=q;b=q+v;q=b;}
+      const y1=y(Math.max(a,b)), y2=y(Math.min(a,b));
+      s+=`<rect class="seg" x="${cx(i)-barW/2}" y="${y1}" width="${barW}" height="${Math.max(0.5,y2-y1)}" rx="2" style="fill:${st.color}"/>`;
+    });
+  }
+  lines.forEach(l=>{
+    const pts=l.values.map((v,i)=>[cx(i),y(v/div)]);
+    s+=`<path d="M${pts.map(p=>p.join(',')).join('L')}" fill="none" style="stroke:${l.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" ${l.dash?'stroke-dasharray="4 4"':''}/>`;
+    const e=pts[pts.length-1];
+    s+=`<circle cx="${e[0]}" cy="${e[1]}" r="4" style="fill:${l.color};stroke:var(--surface)" stroke-width="2"/>`;
+  });
+  for(let i=0;i<n;i++)s+=`<rect class="hov" data-i="${i}" x="${M.l+bw*i}" y="${M.t}" width="${bw}" height="${H-M.t-M.b}"/>`;
+  s+='</svg><div class="tip" hidden></div>';
+  el.innerHTML=s;
+  const tip=el.querySelector('.tip'), svg=el.querySelector('svg');
+  const items=stacks.map(x=>({...x,bar:1})).concat(lines);
+  const show=(i,evx)=>{
+    el.querySelectorAll('.hov').forEach(r=>r.classList.toggle('on',+r.dataset.i===i));
+    tip.innerHTML=`<b>${cfg.full?cfg.full[i]:cfg.labels[i]}</b>`+items.map(it=>`<div class="r"><span><i style="background:${it.color}"></i>${it.name}</span><span>${(cfg.tipFmt||m1)(it.values[i])}</span></div>`).join('')+(cfg.tipExtra?cfg.tipExtra(i):'');
+    tip.hidden=false;
+    const tw=tip.offsetWidth, x=cx(i)*el.clientWidth/W;
+    let left=x+14; if(left+tw>el.clientWidth) left=x-tw-14; tip.style.left=Math.max(0,left)+'px'; tip.style.top='8px';
+  };
+  svg.addEventListener('pointermove',ev=>{const r=svg.getBoundingClientRect();const xx=(ev.clientX-r.left)*W/r.width;const i=Math.floor((xx-M.l)/bw);if(i>=0&&i<n)show(i);else hide();});
+  const hide=()=>{tip.hidden=true;el.querySelectorAll('.hov.on').forEach(r=>r.classList.remove('on'));};
+  svg.addEventListener('pointerleave',hide);
+}
+let rT;window.addEventListener('resize',()=>{clearTimeout(rT);rT=setTimeout(()=>charts.forEach(([e,c])=>{if(e.offsetParent)draw(e,c);}),120);});
+function hbars(el,rows,fmt){
+  const max=Math.max(0,...rows.map(r=>r.v)), min=Math.min(0,...rows.map(r=>r.v)), span=(max-min)||1, zero=-min/span*100;
+  el.innerHTML=rows.map(r=>{const w=Math.abs(r.v)/span*100, left=r.v>=0?zero:zero-w;
+    return `<div class="hb"><span>${r.name}</span><div class="track"><div class="bar${r.v<0?' n':''}" style="left:${left}%;width:${w}%;background:${r.color}"></div><div class="axis" style="left:${zero}%"></div></div><span class="val${r.v<0?' neg':''}">${fmt(r.v)}</span></div>`;}).join('');
+}
+
+/* ---------- TABLES ---------- */
+function mtable(el,rows,opt={}){
+  const open=opt.open, tot=opt.total!==false;
+  let h='<thead><tr><th>'+(opt.first||'тыс ₽')+'</th>'+(open?'<th>Начало</th>':'')+MONTHS.map(m=>`<th>${m}</th>`).join('')+(tot?`<th class="ytd">${opt.totLabel||'Год'}</th>`:'')+'</tr></thead><tbody>';
+  rows.forEach(r=>{
+    if(r.hd){h+=`<tr class="hd"><td colspan="${14+(open?1:0)}">${r.hd}</td></tr>`;return;}
+    const f=r.fmt||k0;
+    h+=`<tr class="${r.cls||''}"><td>${r.label}</td>`+(open?`<td${ncls(r.open||0)}>${r.open==null?'':f(r.open)}</td>`:'')+r.v.map(v=>`<td${r.fmt?'':ncls(v)}>${f(v)}</td>`).join('')+
+      (tot?`<td class="ytd"${r.fmt?'':ncls(r.t)}>${r.t==null?'':f(r.t)}</td>`:'')+'</tr>';
+  });
+  el.innerHTML=h+'</tbody>';
+}
+const col=(R,k)=>R.m.map(x=>x[k]);
+const row=(R,label,k,cls,mult=1)=>{const v=col(R,k).map(x=>x*mult);return {label,v,t:v.reduce((a,b)=>a+b,0),cls};};
+
+/* ---------- INPUT BUILDERS (built once) ---------- */
+function inp(path,val,step,cls){return `<input type="number" inputmode="decimal" id="in-${path.replace(/\./g,'-')}" data-path="${path}" value="${val}" step="${step||'any'}" ${cls?`class="${cls}"`:''}>`;}
+function txt(path,val){return `<input type="text" class="wide" id="in-${path.replace(/\./g,'-')}" data-path="${path}" data-text="1" value="${val.replace(/"/g,'&quot;')}">`;}
+function buildInputs(){
+  document.getElementById('t-prod').innerHTML='<thead><tr><th>Товарная группа</th><th>Закупка, ₽/ед</th><th>Наценка, %</th><th>Объём, ед/мес</th><th>Рост, % м/м</th><th>Базовая цена, ₽</th></tr></thead><tbody>'+
+    S.products.map((p,i)=>`<tr><td>${txt(`products.${i}.name`,p.name)}</td><td>${inp(`products.${i}.cost`,p.cost,'1')}</td><td>${inp(`products.${i}.markup`,p.markup,'0.5')}</td><td>${inp(`products.${i}.vol`,p.vol,'500')}</td><td>${inp(`products.${i}.growth`,p.growth,'0.1')}</td><td id="lp-${i}"></td></tr>`).join('')+'</tbody>';
+  document.getElementById('t-chan').innerHTML='<thead><tr><th>Канал</th><th>Доля объёма, %</th><th>Скидка от прайса, %</th><th>Ретро-бонус, %</th><th>Отсрочка, дней</th><th>Логистика, % выручки</th><th>Комиссия, %</th></tr></thead><tbody>'+
+    S.channels.map((c,i)=>`<tr><td>${txt(`channels.${i}.name`,c.name)}</td><td>${inp(`channels.${i}.share`,c.share,'1')}</td><td>${inp(`channels.${i}.disc`,c.disc,'0.5')}</td><td>${inp(`channels.${i}.bonus`,c.bonus,'0.5')}</td><td>${inp(`channels.${i}.dso`,c.dso,'1')}</td><td>${inp(`channels.${i}.logi`,c.logi,'0.5')}</td><td>${inp(`channels.${i}.comm`,c.comm,'0.5')}</td></tr>`).join('')+'</tbody>';
+  const F=[
+    ['Операционные расходы',[['payroll','ФОТ с налогами, ₽/мес',50000],['rent','Аренда склада и офиса, ₽/мес',10000],['other','Прочие постоянные, ₽/мес',10000],['mkt','Маркетинг, % выручки',0.1],['salesBonus','Бонусы торговой команды, % выручки',0.1]]],
+    ['Цены и инфляция',[['priceIdx','Индексация прайса, % в год',0.5],['costIdx','Рост закупочных цен, % в год',0.5]]],
+    ['Оборотный капитал',[['dio','Запас, дней себестоимости',1],['dpo','Отсрочка от поставщиков, дней',1]]],
+    ['Капвложения',[['capex','Склад, техника, ПО (январь), ₽',100000],['life','Срок амортизации, мес',6]]],
+    ['Финансирование и налог',[['equity','Взнос собственников, ₽',500000],['minCash','Минимальный остаток денег, ₽',100000],['rate','Ставка кредитной линии, % год.',0.5],['tax','Налог на прибыль, %',1]]],
+    ['Оценка',[['wacc','WACC, % год.',0.5],['tg','Долгосрочный рост g, % год.',0.5]]]
+  ];
+  document.getElementById('fields').innerHTML=F.map(([t,fs])=>`<div class="fset"><h3>${t}</h3>`+fs.map(([k,l,st])=>`<div class="f"><label for="in-g-${k}">${l}</label>${inp('g.'+k,S.g[k],st)}</div>`).join('')+'</div>').join('');
+  document.getElementById('t-season').innerHTML='<thead><tr><th></th>'+MONTHS.map(m=>`<th>${m}</th>`).join('')+'</tr></thead><tbody><tr><td>Коэффициент</td>'+S.season.map((v,i)=>`<td>${inp('season.'+i,v,'0.01')}</td>`).join('')+'</tr></tbody>';
+  const sn={pess:'Пессимистичный',base:'Базовый',opt:'Оптимистичный'};
+  document.getElementById('t-scen').innerHTML='<thead><tr><th>Сценарий</th><th>Объём, ×</th><th>Цена, ×</th><th>Сдвиг отсрочки покупателям, дней</th></tr></thead><tbody>'+
+    Object.keys(sn).map(k=>`<tr><td>${sn[k]}</td><td>${inp(`scen.${k}.vol`,S.scen[k].vol,'0.01')}</td><td>${inp(`scen.${k}.price`,S.scen[k].price,'0.01')}</td><td>${inp(`scen.${k}.dso`,S.scen[k].dso,'1')}</td></tr>`).join('')+'</tbody>';
+}
+document.addEventListener('input',e=>{
+  const t=e.target, path=t.dataset&&t.dataset.path; if(!path)return;
+  const keys=path.split('.'); let o=S; for(let i=0;i<keys.length-1;i++)o=o[keys[i]];
+  if(t.dataset.text){o[keys[keys.length-1]]=t.value;}
+  else{const v=parseFloat(String(t.value).replace(',','.')); if(!isFinite(v))return; o[keys[keys.length-1]]=v;}
+  save(); render();
+});
+
+/* ---------- RENDER ---------- */
+function kpis(el,list){el.innerHTML=list.map(k=>`<div class="kpi"><div class="k">${k[0]}</div><div class="v${k[3]?' '+k[3]:''}">${k[1]}</div><div class="d">${k[2]||''}</div></div>`).join('');}
+function render(){
+  charts.length=0;
+  const R=run(S), g=S.g, C=S.channels, V=R.val;
+  document.querySelectorAll('[data-scen]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.scen===S.scenario));
+  const maxErr=Math.max(...R.m.map(x=>Math.abs(x.check)));
+  const pill=document.getElementById('bal-pill');
+  pill.className='pill '+(maxErr<1?'ok':'bad'); pill.textContent=maxErr<1?'Баланс сходится':'Баланс не сходится: '+k0(maxErr)+' тыс ₽';
+
+  const rev=R.sum('rev'), ebitda=R.sum('ebitda'), ni=R.sum('ni'), gp=R.sum('gp');
+  const peakDebt=Math.max(...R.m.map(x=>x.debt)), pdi=R.m.findIndex(x=>x.debt===peakDebt);
+  const dec=R.m[11], ccc=dec.dso+dec.dio-dec.dpo;
+  kpis(document.getElementById('kpis'),[
+    ['Чистая выручка за год',m1(rev)+' млн ₽',`валовая маржа ${pc1(gp/rev)}`],
+    ['EBITDA',m1(ebitda)+' млн ₽',`маржа ${pc1(ebitda/rev)}`,ebitda<0?'neg':''],
+    ['Чистая прибыль',m1(ni)+' млн ₽',`рентабельность ${pc1(ni/rev)}`,ni<0?'neg':''],
+    ['Пик кредитной линии',m1(peakDebt)+' млн ₽',peakDebt>0?`в ${MONTHS_IN[pdi]}; на конец года ${m1(dec.debt)} млн`:'не понадобилась'],
+    ['Оборотный капитал, дек',m1(dec.nwc)+' млн ₽',`цикл ${nf0.format(ccc)} дн.`],
+    ['NPV / IRR',m1(V.npv)+' млн ₽',`IRR ${isFinite(V.irr)?pc1(V.irr):'н/д'} при WACC ${nf1.format(g.wacc)}%`,V.npv<0?'neg':'']
+  ]);
+  const chNames=R.ch.map((x,i)=>({name:x.name,color:SERIES[i%5]}));
+  const full=MONTHS.map(m=>m+' 2027');
+  legend(document.getElementById('lg-rev'),chNames);
+  chart(document.getElementById('ch-rev'),{labels:MONTHS,full,stacks:R.ch.map((x,i)=>({name:x.name,color:SERIES[i%5],values:x.rev})),
+    tipExtra:i=>`<div class="r" style="border-top:1px solid var(--line);margin-top:4px;padding-top:4px"><span>Итого</span><span>${m1(R.m[i].rev)}</span></div>`,aria:'Чистая выручка по каналам по месяцам'});
+  const prof=[{name:'Маржинальный доход',color:SERIES[0],values:col(R,'cm'),line:1},{name:'EBITDA',color:SERIES[1],values:col(R,'ebitda'),line:1},{name:'Чистая прибыль',color:SERIES[2],values:col(R,'ni'),line:1}];
+  legend(document.getElementById('lg-prof'),prof);
+  chart(document.getElementById('ch-prof'),{labels:MONTHS,full,lines:prof,aria:'Прибыль по месяцам'});
+  const cs=[{name:'Остаток денег',color:SERIES[0],values:col(R,'cash'),line:1},{name:'Долг по кредитной линии',color:SERIES[1],values:col(R,'debt'),line:1},{name:'Чистый оборотный капитал',color:'var(--muted)',values:col(R,'nwc'),line:1,dash:1}];
+  legend(document.getElementById('lg-cash'),cs);
+  chart(document.getElementById('ch-cash'),{labels:MONTHS,full,lines:cs,aria:'Деньги, долг и оборотный капитал'});
+  const chY=R.ch.map((x,i)=>{const r=x.rev.reduce((a,b)=>a+b,0),cm=x.cm.reduce((a,b)=>a+b,0),avgAR=x.ar.reduce((a,b)=>a+b,0)/12;
+    return {name:x.name,color:SERIES[i%5],rev:r,gross:x.gross.reduce((a,b)=>a+b,0),bonus:x.bonus.reduce((a,b)=>a+b,0),cogs:x.cogs.reduce((a,b)=>a+b,0),logi:x.logi.reduce((a,b)=>a+b,0),comm:x.comm.reduce((a,b)=>a+b,0),cm,avgAR,arEnd:x.ar[11],dso:C[i].dso+(S.scen[S.scenario]||{dso:0}).dso};});
+  hbars(document.getElementById('hb-sum'),chY.map(c=>({name:c.name,color:c.color,v:c.rev?c.cm/c.rev:0})),pc1);
+
+  // Прайс-лист
+  const sc=S.scen[S.scenario]||S.scen.base;
+  S.products.forEach((p,i)=>{const el=document.getElementById('lp-'+i); if(el) el.textContent=nf2.format(p.cost*(1+p.markup/100)*sc.price);});
+  document.getElementById('t-price').innerHTML='<thead><tr><th>Товарная группа</th><th>Закупка</th><th>Базовая цена</th>'+C.map(c=>`<th>${c.name}</th>`).join('')+'</tr></thead><tbody>'+
+    S.products.map(p=>{const lp=p.cost*(1+p.markup/100)*sc.price;return `<tr><td>${p.name}</td><td>${nf2.format(p.cost)}</td><td>${nf2.format(lp)}</td>`+C.map(c=>`<td>${nf2.format(lp*(1-c.disc/100))}</td>`).join('')+'</tr>';}).join('')+'</tbody>';
+  document.getElementById('t-pmargin').innerHTML='<thead><tr><th>Товарная группа</th>'+C.map(c=>`<th>${c.name}</th>`).join('')+'<th class="ytd">Итого</th></tr></thead><tbody>'+
+    S.products.map((p,pi)=>{let tr=0,tc=0;const cells=C.map((c,ci)=>{const Y=R.pc[pi][ci];const cm=Y.rev-Y.cogs-Y.logi-Y.comm;tr+=Y.rev;tc+=cm;const v=Y.rev?cm/Y.rev:0;return `<td${v<0?' class="neg"':''}>${pc1(v)}</td>`;}).join('');
+      const t=tr?tc/tr:0;return `<tr><td>${p.name}</td>${cells}<td class="ytd${t<0?' neg':''}">${pc1(t)}</td></tr>`;}).join('')+'</tbody>';
+
+  // Каналы
+  const shareSum=C.reduce((a,c)=>a+c.share,0);
+  const sn=document.getElementById('share-note');
+  sn.innerHTML=Math.abs(shareSum-100)<0.01?'Сумма долей каналов: 100%.':`<span class="pill wn">Сумма долей ${nf1.format(shareSum)}%</span> Модель нормирует доли до 100%.`;
+  const totRev=rev, CH=[
+    ['Валовая выручка (по ценам канала)','gross'],['Ретро-бонусы','bonus'],['Чистая выручка','rev','tot'],['Доля в выручке',null,'pct',c=>pc1(c.rev/totRev)],
+    ['Себестоимость','cogs'],['Валовая прибыль',null,'tot',c=>k0(c.rev-c.cogs)],['Валовая маржа',null,'pct',c=>pc1((c.rev-c.cogs)/c.rev)],
+    ['Логистика','logi'],['Комиссии','comm'],['Маржинальный доход','cm','tot'],['Маржа маржинального дохода',null,'pct',c=>pc1(c.cm/c.rev)],
+    ['Отсрочка покупателю, дней',null,'pct',c=>nf0.format(c.dso)],['Средняя ДЗ','avgAR'],['Маржинальный доход / средняя ДЗ',null,'pct',c=>c.avgAR?nf2.format(c.cm/c.avgAR)+' ₽':'—']
+  ];
+  const T={name:'Итого',rev:totRev,gross:chY.reduce((a,c)=>a+c.gross,0),bonus:chY.reduce((a,c)=>a+c.bonus,0),cogs:chY.reduce((a,c)=>a+c.cogs,0),logi:chY.reduce((a,c)=>a+c.logi,0),comm:chY.reduce((a,c)=>a+c.comm,0),cm:chY.reduce((a,c)=>a+c.cm,0),avgAR:chY.reduce((a,c)=>a+c.avgAR,0)};
+  T.dso=R.m.reduce((a,x)=>a+x.ar,0)/12/(totRev/12)*30;
+  document.getElementById('t-chprof').innerHTML='<thead><tr><th>тыс ₽</th>'+chY.map(c=>`<th>${c.name}</th>`).join('')+'<th class="ytd">Итого</th></tr></thead><tbody>'+
+    CH.map(([l,k,cls,f])=>`<tr class="${cls||''}"><td>${l}</td>`+chY.concat([T]).map((c,i)=>{const v=k?c[k]:null;const s=f?f(c):k0(v);return `<td class="${i===chY.length?'ytd':''}${k&&v<-0.5?' neg':''}">${s}</td>`;}).join('')+'</tr>').join('')+'</tbody>';
+  hbars(document.getElementById('hb-cm'),chY.map(c=>({name:c.name,color:c.color,v:c.rev?c.cm/c.rev:0})),pc1);
+  hbars(document.getElementById('hb-roar'),chY.map(c=>({name:c.name,color:c.color,v:c.avgAR?c.cm/c.avgAR:0})),v=>nf2.format(v)+' ₽');
+
+  // ОПиУ
+  const pct=(num,den)=>({label:num[0],v:R.m.map(x=>x[den]?x[num[1]]/x[den]:0),t:R.sum(den)?R.sum(num[1])/R.sum(den):0,cls:'pct',fmt:pc1});
+  mtable(document.getElementById('t-pnl'),[
+    row(R,'Валовая выручка','gross'),row(R,'Ретро-бонусы сетям','bonus','sub',-1),row(R,'Чистая выручка','rev','tot'),
+    row(R,'Себестоимость продаж','cogs','sub',-1),row(R,'Валовая прибыль','gp','tot'),pct(['Валовая маржа','gp'],'rev'),
+    row(R,'Логистика и доставка','logi','sub',-1),row(R,'Комиссии маркетплейсов','comm','sub',-1),row(R,'Маржинальный доход','cm','tot'),
+    row(R,'ФОТ','payroll','sub',-1),row(R,'Аренда склада и офиса','rent','sub',-1),row(R,'Маркетинг','mkt','sub',-1),row(R,'Бонусы торговой команды','sb','sub',-1),row(R,'Прочие постоянные','other','sub',-1),
+    row(R,'EBITDA','ebitda','tot'),pct(['Маржа EBITDA','ebitda'],'rev'),
+    row(R,'Амортизация','dep','sub',-1),row(R,'EBIT (операционная прибыль)','ebit','tot'),row(R,'Проценты по кредитной линии','interest','sub',-1),
+    row(R,'Прибыль до налога','ebt','tot'),row(R,'Налог на прибыль','tax','sub',-1),row(R,'Чистая прибыль','ni','tot'),pct(['Рентабельность по чистой прибыли','ni'],'rev')
+  ]);
+
+  // ДДС
+  const lastOf=(k)=>R.m[11][k];
+  mtable(document.getElementById('t-cf'),[
+    {hd:'Операционная деятельность'},
+    row(R,'Чистая прибыль','ni','sub'),row(R,'Амортизация','dep','sub'),row(R,'Изменение дебиторской задолженности','dAR','sub',-1),
+    row(R,'Изменение запасов','dInv','sub',-1),row(R,'Изменение кредиторской задолженности','dAP','sub'),row(R,'Денежный поток от операций','cfo','tot'),
+    {hd:'Инвестиционная деятельность'},row(R,'Капитальные вложения','capex','sub',-1),
+    {hd:'Финансовая деятельность'},row(R,'Привлечение кредитной линии','draw','sub'),row(R,'Погашение кредитной линии','repay','sub',-1),row(R,'Денежный поток от финансирования','cff','tot'),
+    {hd:'Остатки'},
+    {label:'Чистый денежный поток',v:R.m.map(x=>x.cash-x.cashOpen),t:dec.cash-g.equity,cls:'tot'},
+    {label:'Деньги на начало',v:col(R,'cashOpen'),t:g.equity,cls:'sub'},{label:'Деньги на конец',v:col(R,'cash'),t:dec.cash,cls:'tot'}
+  ]);
+
+  // Баланс
+  const O=R.open;
+  const brow=(l,k,cls,ok)=>({label:l,v:col(R,k),open:O[ok||k]||0,cls});
+  mtable(document.getElementById('t-bs'),[
+    {hd:'Активы'},brow('Денежные средства','cash','sub'),brow('Дебиторская задолженность','ar','sub'),brow('Запасы','inv','sub'),brow('Основные средства (остаточная)','fa','sub'),
+    {label:'Итого активы',v:col(R,'assets'),open:O.cash,cls:'tot'},
+    {hd:'Обязательства'},brow('Кредиторская задолженность поставщикам','ap','sub'),brow('Кредитная линия','debt','sub'),
+    {label:'Итого обязательства',v:col(R,'liab'),open:0,cls:'tot'},
+    {hd:'Капитал'},{label:'Уставный и добавочный капитал',v:R.m.map(()=>g.equity),open:g.equity,cls:'sub'},brow('Нераспределённая прибыль','re','sub'),
+    {label:'Итого капитал',v:col(R,'equity'),open:g.equity,cls:'tot'},
+    {label:'Пассивы всего',v:R.m.map(x=>x.liab+x.equity),open:g.equity,cls:'tot'},
+    {label:'Проверка (активы − пассивы)',v:col(R,'check'),open:0,cls:'pct'}
+  ],{open:true,total:false});
+
+  // Оборотный капитал
+  const avgNWC=R.sum('nwc')/12;
+  kpis(document.getElementById('kpis-wc'),[
+    ['ЧОК на конец года',m1(dec.nwc)+' млн ₽',`средний ${m1(avgNWC)} млн ₽`],
+    ['Оборачиваемость ДЗ (DSO)',nf0.format(dec.dso)+' дн.','декабрь'],
+    ['Оборачиваемость запасов (DIO)',nf0.format(dec.dio)+' дн.','декабрь'],
+    ['Оборачиваемость КЗ (DPO)',nf0.format(dec.dpo)+' дн.','декабрь'],
+    ['Финансовый цикл',nf0.format(ccc)+' дн.','DSO + DIO − DPO',ccc>45?'':'']
+  ]);
+  const wcS=[{name:'Дебиторская задолженность',color:SERIES[0],values:col(R,'ar')},{name:'Запасы',color:SERIES[1],values:col(R,'inv')},{name:'Кредиторская задолженность',color:SERIES[2],values:col(R,'ap').map(v=>-v)}];
+  const wcL=[{name:'Чистый оборотный капитал',color:'var(--ink)',values:col(R,'nwc'),line:1}];
+  legend(document.getElementById('lg-wc'),wcS.concat(wcL));
+  chart(document.getElementById('ch-wc'),{labels:MONTHS,full,stacks:wcS,lines:wcL,aria:'Состав оборотного капитала'});
+  const dS=[{name:'DSO',color:SERIES[0],values:col(R,'dso'),line:1},{name:'DIO',color:SERIES[1],values:col(R,'dio'),line:1},{name:'DPO',color:SERIES[2],values:col(R,'dpo'),line:1},{name:'Финансовый цикл',color:'var(--ink)',values:R.m.map(x=>x.dso+x.dio-x.dpo),line:1,dash:1}];
+  legend(document.getElementById('lg-days'),dS);
+  chart(document.getElementById('ch-days'),{labels:MONTHS,full,lines:dS,div:1,tipFmt:v=>nf0.format(v)+' дн.',aria:'Оборачиваемость в днях'});
+  const dayRow=(l,f)=>({label:l,v:R.m.map(f),t:null,cls:'pct',fmt:v=>nf0.format(v)});
+  mtable(document.getElementById('t-wc'),[
+    {label:'Дебиторская задолженность',v:col(R,'ar'),t:null},{label:'Запасы',v:col(R,'inv'),t:null},{label:'Кредиторская задолженность',v:col(R,'ap').map(v=>-v),t:null},
+    {label:'Чистый оборотный капитал',v:col(R,'nwc'),t:null,cls:'tot'},{label:'Прирост ЧОК (отток денег)',v:R.m.map((x,i)=>x.nwc-(i?R.m[i-1].nwc:0)),t:dec.nwc,cls:'sub'},
+    {label:'ЧОК, % от годовой выручки (run-rate)',v:R.m.map(x=>x.rev?x.nwc/(x.rev*12):0),t:null,cls:'pct',fmt:pc1},
+    dayRow('DSO, дней',x=>x.dso),dayRow('DIO, дней',x=>x.dio),dayRow('DPO, дней',x=>x.dpo),dayRow('Финансовый цикл, дней',x=>x.dso+x.dio-x.dpo)
+  ],{totLabel:'Год'});
+  document.getElementById('t-archan').innerHTML='<thead><tr><th>Канал</th><th>Выручка дек</th><th>Отсрочка, дн.</th><th>ДЗ на конец года</th><th>Доля ДЗ</th></tr></thead><tbody>'+
+    chY.map((c,i)=>`<tr><td>${c.name}</td><td>${k0(R.ch[i].rev[11])}</td><td>${nf0.format(c.dso)}</td><td>${k0(c.arEnd)}</td><td>${pc1(c.arEnd/dec.ar)}</td></tr>`).join('')+
+    `<tr class="tot"><td>Итого</td><td>${k0(dec.rev)}</td><td>${nf0.format(dec.dso)}</td><td>${k0(dec.ar)}</td><td>100,0%</td></tr></tbody>`;
+
+  // Оценка
+  kpis(document.getElementById('kpis-val'),[
+    ['NPV проекта (EV)',m1(V.npv)+' млн ₽','PV потоков года + PV терминальной',V.npv<0?'neg':''],
+    ['IRR',isFinite(V.irr)?pc1(V.irr):'н/д','годовая, по FCFF и терминальной стоимости'],
+    ['FCFF за год',m1(R.sum('fcf'))+' млн ₽','после вложений в ЧОК и капвложений',R.sum('fcf')<0?'neg':''],
+    ['Терминальная стоимость',m1(V.tv)+' млн ₽',`на конец года; PV ${m1(V.pvTV)} млн ₽`],
+    ['Стоимость капитала на конец года',m1(V.eqEnd)+' млн ₽','TV − долг + деньги'],
+    ['Мультипликатор на вложенный капитал',isFinite(V.moic)?nf2.format(V.moic)+'×':'н/д',`взнос ${m1(g.equity)} млн ₽`]
+  ]);
+  let cum=0; const cumPV=V.pvs.map(v=>cum+=v);
+  const fS=[{name:'FCFF',color:SERIES[0],values:col(R,'fcf')}], fL=[{name:'Накопленный дисконтированный FCFF',color:SERIES[1],values:cumPV,line:1}];
+  legend(document.getElementById('lg-fcf'),fS.concat(fL));
+  chart(document.getElementById('ch-fcf'),{labels:MONTHS,full,stacks:fS,lines:fL,aria:'Свободный денежный поток'});
+  const ws=[-4,-2,0,2,4].map(d=>g.wacc+d), gs=[-2,-1,0,1,2].map(d=>g.tg+d);
+  document.getElementById('t-sens').innerHTML='<thead><tr><th>WACC \\ g</th>'+gs.map(x=>`<th>${nf1.format(x)}%</th>`).join('')+'</tr></thead><tbody>'+
+    ws.map(w=>`<tr><td>${nf1.format(w)}%</td>`+gs.map(gg=>{const v=valuation(R,w,gg,g).npv;const base=w===g.wacc&&gg===g.tg;return `<td class="c${base?' base':''}${v<0?' neg':''}">${m1(v)}</td>`;}).join('')+'</tr>').join('')+'</tbody>';
+  mtable(document.getElementById('t-dcf'),[
+    row(R,'EBIT','ebit'),{label:'Налог на EBIT',v:R.m.map(x=>-x.ebit*g.tax/100),t:-R.sum('ebit')*g.tax/100,cls:'sub'},row(R,'NOPAT','nopat','tot'),
+    row(R,'Амортизация','dep','sub'),row(R,'Капитальные вложения','capex','sub',-1),{label:'Прирост оборотного капитала',v:R.m.map((x,i)=>-(x.nwc-(i?R.m[i-1].nwc:0))),t:-dec.nwc,cls:'sub'},
+    row(R,'Свободный денежный поток (FCFF)','fcf','tot'),
+    {label:'Коэффициент дисконтирования',v:V.dfs,t:null,cls:'pct',fmt:v=>v.toFixed(4).replace('.',',')},
+    {label:'Дисконтированный FCFF',v:V.pvs,t:V.pv,cls:'tot'}
+  ],{first:'тыс ₽'});
+  document.getElementById('t-tv').innerHTML='<thead><tr><th>Терминальная стоимость (Гордон)</th><th>Значение</th></tr></thead><tbody>'+[
+    ['Месячная ставка дисконтирования',(V.rM*100).toFixed(3).replace('.',',')+'%'],
+    ['NOPAT года 2 (EBIT года × (1 − t) × (1 + g))',k0(V.nopatRR)+' тыс ₽'],
+    ['Реинвестиции в ЧОК (ЧОК дек × g)',k0(-V.reinv)+' тыс ₽'],
+    ['FCFF года 2 (капвложения = амортизация)',k0(V.fcfTV)+' тыс ₽'],
+    ['Терминальная стоимость = FCFF / (WACC − g)',k0(V.tv)+' тыс ₽'],
+    ['PV терминальной стоимости',k0(V.pvTV)+' тыс ₽'],
+    ['PV FCFF прогнозного года',k0(V.pv)+' тыс ₽'],
+    ['Стоимость бизнеса (EV) = NPV',k0(V.ev)+' тыс ₽']
+  ].map((r,i,a)=>`<tr class="${i===a.length-1?'tot':''}"><td>${r[0]}</td><td>${r[1]}</td></tr>`).join('')+'</tbody>';
+}
+
+/* ---------- ROUTING & CONTROLS ---------- */
+const TABS=['summary','pricelist','channels','pnl','cashflow','balance','wc','valuation','assumptions'];
+function route(){
+  const h=(location.hash||'').slice(1), t=TABS.includes(h)?h:'summary';
+  document.querySelectorAll('section[data-tab]').forEach(s=>s.hidden=s.dataset.tab!==t);
+  document.querySelectorAll('nav.tabs a').forEach(a=>a.getAttribute('href')==='#'+t?a.setAttribute('aria-current','page'):a.removeAttribute('aria-current'));
+  charts.forEach(([e,c])=>{if(e.offsetParent)draw(e,c);});
+}
+window.addEventListener('hashchange',route);
+document.querySelectorAll('[data-scen]').forEach(b=>b.addEventListener('click',()=>{S.scenario=b.dataset.scen;save();render();}));
+let armed=false;
+document.getElementById('reset').addEventListener('click',e=>{
+  const b=e.currentTarget;
+  if(!armed){armed=true;b.textContent='Точно сбросить?';setTimeout(()=>{armed=false;b.textContent='Сбросить к примеру';},3000);return;}
+  armed=false;b.textContent='Сбросить к примеру';S=clone(DEFAULTS);save();buildInputs();render();
+});
+buildInputs(); render(); route();
+})();
+</script>
