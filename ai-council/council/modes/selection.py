@@ -399,6 +399,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     c._emit("labels", labels={FACT_CHECKER: search_label(c)})  # на экране — «поиск · Sonar Pro», а не «факт-чек»
     for st in ("discover", "screen", "sources", "lists"):  # свой предел поиска: найденное идёт модели на вход
         c.stage_search_limits[st] = (sc.search_uses, sc.search_results)
+    c.stage_search_limits["sites"] = (SITES_BATCH, 3)  # поиск сайтов: по поиску на компанию, нужна первая ссылка
     c._emit("stage", stage="framing", title="Рамка отбора: кто кандидат, признаки и веса, где искать")
     start0 = sc.start
     try:
@@ -1211,16 +1212,33 @@ def own_site(e: dict[str, Any]) -> bool:
     return bool(S.site_of(w)) and not S.weak_source(w)
 
 
+def site_finder(c: Council) -> MemberConfig:
+    """Кто ищет официальные сайты: Perplexity Sonar (поиск встроен, найденное не идёт во вход — в разы дешевле
+    Haiku и GPT mini, у которых каждая найденная страница оплачивается как вход); нет его — модель поиска.
+    17.11 Sonar Pro пачками по 10 и с запретом «если не уверен» нашёл сайт у 42 из 200 — теперь пачки по 5 и
+    поиск по каждой компании отдельно."""
+    try:
+        hunters = discover_hunters(c)
+    except Exception:  # noqa: BLE001 — без каталога моделей разведчиков нет
+        hunters = []
+    for m in hunters:
+        if m.model == "perplexity/sonar":
+            return m
+    return searcher(c)
+
+
 async def find_sites(c: Council, ents: list[dict[str, Any]]) -> int:
-    """Официальные сайты кандидатов — пачками по 10 через модель поиска. Возвращает, у скольких нашёлся."""
+    """Официальные сайты кандидатов — пачками по SITES_BATCH через разведчика со своим поиском. Возвращает, у
+    скольких нашёлся."""
     if not ents:
         return 0
     found = 0
+    who = site_finder(c)
 
     async def one(b: list[dict[str, Any]]) -> int:
         try:
-            r = await c._ask(searcher(c), "sites", S.sites_prompt(b), S.Candidates,
-                             meta={**META, "objects": [e["id"] for e in b]}, web_search=True)
+            r = await c._ask(who, "sites", S.sites_prompt(b), S.Candidates,
+                             meta={**META, "objects": [e["id"] for e in b]}, web_search=True, max_tokens=4000)
         except (BudgetExceeded, OutOfCredits):
             raise
         except (ProviderError, InvalidResponse) as err:
@@ -1236,12 +1254,13 @@ async def find_sites(c: Council, ents: list[dict[str, Any]]) -> int:
                 n += 1
         return n
 
-    batches = [ents[k:k + 10] for k in range(0, len(ents), 10)]
+    batches = [ents[k:k + SITES_BATCH] for k in range(0, len(ents), SITES_BATCH)]
     for r in await asyncio.gather(*(one(b) for b in batches), return_exceptions=True):
         if isinstance(r, BaseException):
             raise r
         found += r
-    log.info("%sотсев: официальные сайты найдены у %d из %d кандидатов без своего сайта", c._tag, found, len(ents))
+    log.info("%sотсев: официальные сайты (%s) найдены у %d из %d кандидатов без своего сайта", c._tag, who.name,
+             found, len(ents))
     c._emit("warning", stage="screen", member="",
             text=f"отсев: найдены официальные сайты у {found} из {len(ents)} кандидатов без своего сайта — читаем их")
     return found
@@ -1252,7 +1271,8 @@ def _passes(r: dict[str, Any]) -> int:
 
 
 SCREEN_BROWSER = 60        # сколько не открывшихся без браузера кандидатов открыть браузером при отсеве
-SCREEN_SITES = 200         # скольким «не выяснено» без своего сайта искать официальный сайт (пачками по 10)
+SCREEN_SITES = 200         # скольким «не выяснено» без своего сайта искать официальный сайт
+SITES_BATCH = 5            # компаний в одном поиске сайтов (10 — один короткий поиск на всех, сайтов мало)
 SCREEN_CHUNK = 25          # кандидатов в одной части отсева (скачать страницы → прочитать)
 SCREEN_CHUNKS_AT_ONCE = 3  # частей, которые качаются одновременно (по 5 страниц каждая — 15 загрузок сразу)
 

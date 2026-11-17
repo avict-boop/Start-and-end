@@ -691,7 +691,7 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
             "website": next((c.website for c in cs if site_of(c.website)
                              and site_brand(site_of(c.website)) not in foreign), ""),
             "location": next((c.location for c in cs if c.location), ""),
-            "group": next((c.group for c in cs if c.group), ""),
+            "group": re.sub(r"\s*[（(][^)）]*[)）]", "", next((c.group for c in cs if c.group), "")).strip(),
             "angles": angles, "seed": bool(seed),
             "url": ev.url if ev else next((c.url for c in cs if c.url), ""),
             "urls": list(dict.fromkeys(c.url for c in cs if c.url.startswith(("http://", "https://"))))[:6],
@@ -1516,8 +1516,9 @@ def sites_prompt(objs: list[dict[str, Any]]) -> str:
                       + (f" — {o['location']}" if o.get("location") else "") for o in objs)
     return f"""Find the OFFICIAL website of each company below by searching the web: the company's own domain (its home
 page), not a marketplace listing (Alibaba, Made-in-China, 1688), a news site, a press release, an association or an
-exhibition page. A listed company may have an investor-relations page — the official site is still its own domain.
-Not sure it is the same company (name, city) → leave "website" empty. Do not guess domains.
+exhibition page. Search separately for each company — by its Chinese name and by its English name (add 官网 / official
+website). If the site shows the same company name (Chinese or English) and, when given, the same city — give it. If
+the search found no such site — leave "website" empty. Do not make up domains.
 
 Companies:
 {lines}

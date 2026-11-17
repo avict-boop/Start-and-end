@@ -296,6 +296,15 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
             add(m, max(1, round(per)), 3000 + min(q, 3000) + found_tokens,
                 2500 + (4000 if sc.search_reasoning in ("medium", "high", "default") else 1500))
     add(chair, 1, 4000 + deep * 350, 1500)              # вывод
+    sites_row = None
+    if start != "check" and sc.screen and sc.screen_by == "pages" and sc.discover_by == "scouts":
+        # поиск официальных сайтов у «не выяснено» без своего сайта: Perplexity Sonar, пачки по 5 (найденное во
+        # вход не идёт — платится короткий запрос и плата за поиск)
+        p2 = price_of("perplexity/sonar") or price_of(sc.search_model or cfg.fact_check.model)
+        calls2 = -(-min(200, int(cands * 0.4)) // 5)
+        inp2, out2 = 900, 500
+        sites_row = MemberEstimate("поиск сайтов", "perplexity/sonar", calls2, calls2 * inp2, calls2 * out2,
+                                   (calls2 * (inp2 * p2.prompt + out2 * p2.completion + p2.request)) if p2 else None)
     if start != "check" and sc.screen and sc.screen_by == "pages" and fillers:  # отсев по скачанным страницам
         add(fillers[0], -(-cands // sc.screen_batch), 1500 + sc.screen_batch * sc.screen_chars // 3, 400 * sc.screen_batch)
     page_in = int(sc.object_chars // 3 * 0.8) + 1800     # страницы без повторов (меню, подвалы) — примерно −20%
@@ -304,7 +313,7 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
     need = len(judges) // 2 + 1 if sc.judges_on_demand and len(judges) > 2 else len(judges)
     for i, m in enumerate(judges):                     # спорное: остальные судьи — только где первые разошлись (~40%)
         add(m, disputes if i < need else max(1, round(disputes * 0.4)), 3500, 600)
-    out = []
+    out = [sites_row] if sites_row else []
     for m in members:
         if m.name not in tokens:
             continue
@@ -335,7 +344,7 @@ def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, questio
     screen_search = sc.screen and sc.screen_by == "search"
     s_calls = (0 if start == "check" else sc.angles + (2 if sc.rounds > 1 else 0)
                + (-(-cands // sc.screen_batch) if screen_search else 0)
-               + (-(-int(cands * 0.5) // 10) if sc.screen and not screen_search else 0)) + deep  # поиск сайтов
+               ) + deep
     s_in = s_calls * (2000 + min(q, 3000))  # у модели поиска (Perplexity) найденное не идёт во вход — поиск встроен
     s_out = s_calls * 2200
     p = price_of(search_model)
