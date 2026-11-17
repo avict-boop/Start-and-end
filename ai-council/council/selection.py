@@ -1400,7 +1400,8 @@ A candidate is: {frame.object_kind}. Inclusion rules: {'; '.join(frame.inclusion
 Write out EVERY company in this text that may be a candidate (when unsure — include it, a later check will decide;
 skip only those clearly excluded or clearly of another kind). For each: "name" (as written; English if given),
 "local_name" (name in the local language if given), "website" (if the text shows it), "quote" (the list line or
-fragment with this company, copied VERBATIM, up to 30 words), "location" (if shown), "why" (a few words).
+fragment with this company, copied VERBATIM, up to 15 words), "location" (if shown), "why" (2–4 words). Keep each
+item short: the whole part must fit in one answer.
 Use ONLY this text — do not add companies from memory.
 
 {text}

@@ -70,7 +70,10 @@ def search_label(c: Council) -> str:
     return f"поиск · {model_title(c.cfg.selection.search_model or c.cfg.fact_check.model)}"
 
 
-LIST_CHUNK = 30_000  # знаков списка в одном запросе чтения
+# знаков списка в одном запросе чтения: 30 000 знаков выставочного списка — до 150 компаний, и ответ упирался в
+# предел (16.11 у 6 из 13 частей хвосты терялись). Части меньше, предел ответа больше — список выписывается целиком
+LIST_CHUNK = 12_000
+LIST_MAX_OUT = 32_000  # предел ответа при чтении списка (Haiku, Flash, mini отдают 64 тыс.)
 
 
 def list_reader(c: Council, hunters: list[MemberConfig]) -> MemberConfig:
@@ -78,7 +81,7 @@ def list_reader(c: Council, hunters: list[MemberConfig]) -> MemberConfig:
     здесь текст уже скачан); иначе самый дешёвый участник."""
     sc = c.cfg.selection
     if sc.list_reader:
-        return MemberConfig(name="чтение списков", model=sc.list_reader, max_tokens=12000, temperature=0.1,
+        return MemberConfig(name="чтение списков", model=sc.list_reader, max_tokens=LIST_MAX_OUT, temperature=0.1,
                             reasoning_effort="low")
     price = getattr(c, "pricing", None) or {}
 
@@ -89,7 +92,7 @@ def list_reader(c: Council, hunters: list[MemberConfig]) -> MemberConfig:
     pool = [m for m in hunters if m.name.startswith("поиск ") and not m.model.startswith("perplexity/")]
     pool = sorted(pool, key=cost) or pick_fillers(c)
     m = pool[0]
-    return m.model_copy(update={"max_tokens": max(m.max_tokens or 0, 12000), "reasoning_effort": "low"})
+    return m.model_copy(update={"max_tokens": max(m.max_tokens or 0, LIST_MAX_OUT), "reasoning_effort": "low"})
 
 
 async def harvest_lists(c: Council, frame: S.SelectionFrame, hunters: list[MemberConfig]
@@ -130,7 +133,8 @@ async def harvest_lists(c: Council, frame: S.SelectionFrame, hunters: list[Membe
 
     async def read(label: str, prompt: str) -> Any:
         try:
-            return await c._ask(reader, "list_read", prompt, S.Candidates, meta={**META, "angle": label})
+            return await c._ask(reader, "list_read", prompt, S.Candidates, meta={**META, "angle": label},
+                                max_tokens=LIST_MAX_OUT)
         finally:
             prog["done"] += 1
             c._emit("progress", stage="discover", unit="частей списков", **prog)
