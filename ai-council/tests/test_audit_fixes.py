@@ -491,3 +491,25 @@ def test_one_wrong_find_does_not_bridge_two_companies():
     baihe = next(e for e in ents if "baiheshengwu" in e["website"])
     assert bio is not baihe and "Weihai Baihe Biology Technological Co., Ltd. (Biohigh)" in baihe["names"]
     assert sum(1 for e in ents if "泽朗" in e["name"]) == 1
+
+
+def test_prior_sessions_same_task(tmp_path):
+    """Кандидаты прежних заседаний с тем же заданием (тот же текст или заголовок) — в новое заседание, бесплатно;
+    другое задание — нет; само заседание — не источник."""
+    import types
+    from council.config import CouncilConfig
+    from council.modes import selection as SM
+    q = "# ТЗ 1 из 3. Широкий список китайских заводов БАД под СТМ\n\nНайди заводы..."
+    def write(stem, question, items, mode="selection"):
+        with open(tmp_path / f"{stem}.events.jsonl", "w", encoding="utf-8") as f:
+            f.write(json.dumps({"type": "start", "question": question, "mode": mode}, ensure_ascii=False) + "\n")
+            f.write(json.dumps({"type": "review", "gate": "candidates", "items": items}, ensure_ascii=False) + "\n")
+    write("20261117-1-old", q + " (правка в конце)", [{"id": "O1", "name": "Wecare Probiotics / 微康益生菌（苏州）股份有限公司",
+                                                      "names": ["Wecare", "чужое склеенное"], "website": "https://www.wecare-bio.com"}])
+    write("20261118-1-other", "Совсем другое задание про упаковку", [{"id": "O1", "name": "Pack Co"}])
+    write("cur", q, [{"id": "O1", "name": "Self Co"}])
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "members": [{"name": n, "model": f"m/{n}"} for n in "ab"]})
+    c = types.SimpleNamespace(cfg=cfg, session_id="cur", _tag="")
+    got = SM.prior_sessions(c, q)
+    assert [cd.name for _, cd in got] == ["Wecare Probiotics"] and got[0][1].local_name.startswith("微康")
+    assert got[0][1].aliases == [] and got[0][0].startswith("прежнее заседание")

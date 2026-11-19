@@ -257,6 +257,10 @@ class SelectionConfig(BaseModel):
     # в таблицу (подробная проверка — самый дорогой этап) — только подтверждённые отсевом; «не выяснено» — вручную
     # на остановке или для охвата категорий, где подтверждённых мало
     shortlist_only_pass: bool = True
+    # кандидаты прежних заседаний с тем же заданием (тот же текст или тот же заголовок) — в список, бесплатно: поиск
+    # каждый раз находит разное (19.11 — 361 кандидат против 637 у прошлого запуска того же ТЗ; Wecare, Scitop,
+    # Angel, Huayan были только в прошлом), а однажды найденная компания не должна теряться
+    reuse_sessions: bool = True
     # «эксперт»: большая модель по своей памяти (без поиска) говорит о каждом кандидате «подходит / нет / не знаю».
     # Кандидат идёт в таблицу, если «да» сказал хоть кто-то — эксперт или проверка по страницам; в отчёте видно, кто
     # именно. Крупные заводы, о которых главная страница молчит, отсев иначе оставлял «не выяснено»
@@ -482,7 +486,7 @@ RESEARCH_TUNABLE = ("lenses", "arbitration", "missions", "arbitration_claims", "
 
 SELECTION_TUNABLE = ("start", "max_attributes", "angles", "per_angle", "rounds", "saturation", "max_candidates",
                      "scouts_skip", "screen_by", "screen_chars", "scouts_required_only", "discover_search_model",
-                     "shortlist_only_pass", "expert", "expert_model", "experts", "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
+                     "shortlist_only_pass", "expert", "expert_model", "experts", "reuse_sessions", "discover_by", "discover_engine", "discover_engines", "discover_models", "scouts", "search_uses",
                      "search_results", "search_reasoning", "discover_waves", "lists", "list_chars", "list_reader", "second_read", "judges_on_demand", "skip_neutral_disputes",
                      "screen", "screen_batch", "shortlist", "max_deep", "top_n", "fillers", "judges",
                      "pages_per_object", "page_chars", "object_chars", "parallel", "search_model", "review",

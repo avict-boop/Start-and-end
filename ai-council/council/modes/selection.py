@@ -184,6 +184,98 @@ def prior_finds(c: Council) -> list[tuple[str, S.Candidate]]:
     return out
 
 
+def _task_keys(question: str) -> set[str]:
+    """Чем задание узнаётся в других заседаниях: весь текст без пробелов и первая содержательная строка (заголовок
+    «# ТЗ 1 из 3. …», если он не короче 20 знаков)."""
+    body = re.sub(r"\s+", " ", question or "").strip()
+    keys = {"q:" + body[:6000]} if body else set()
+    first = next((ln.strip(" #\t") for ln in (question or "").splitlines() if ln.strip(" #\t")), "")
+    if len(first) >= 20:
+        keys.add("t:" + first[:300])
+    return keys
+
+
+def prior_sessions(c: Council, question: str, limit: int = 30) -> list[tuple[str, S.Candidate]]:
+    """Кандидаты прежних заседаний «Отбора» с тем же заданием: сырые находки из их журнала (если заседание ещё на
+    паузе), иначе — список последней остановки (название и сайт; без склеенных псевдонимов — склейка там могла быть
+    ошибочной). Метка — «прежнее заседание»; для полноты не считается. Бесплатно: моделей не спрашиваем."""
+    rd = Path(c.cfg.runs_dir)
+    want = _task_keys(question)
+    me = getattr(c, "session_id", "") or ""
+    if not want or not rd.is_dir():
+        return []
+    stems: list[str] = []
+    for f in sorted(rd.glob("*.events.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
+        stem = f.name[:-len(".events.jsonl")]
+        if stem == me or len(stems) >= limit:
+            continue
+        try:
+            with open(f, encoding="utf-8") as fh:
+                first = json.loads(fh.readline() or "{}")
+        except (OSError, ValueError):
+            continue
+        if first.get("mode") == "selection" and _task_keys(str(first.get("question") or "")) & want:
+            stems.append(stem)
+    out: list[tuple[str, S.Candidate]] = []
+    for stem in stems:
+        label = f"прежнее заседание{S.BY}{stem[:15]}"
+        jr = rd / "paused" / stem / "journal.jsonl"
+        got = 0
+        if jr.is_file():
+            try:
+                for line in open(jr, encoding="utf-8"):
+                    if '"discover"' not in line and '"list_read"' not in line:
+                        continue
+                    try:
+                        e = json.loads(line)
+                    except ValueError:
+                        continue
+                    e = e.get("entry", e)
+                    if e.get("stage") not in ("discover", "list_read"):
+                        continue
+                    for it in (e.get("parsed") or {}).get("items") or []:
+                        try:
+                            cand = S.Candidate.model_validate(it)
+                        except ValueError:
+                            continue
+                        if cand.name.strip():
+                            out.append((label, cand))
+                            got += 1
+            except OSError:
+                pass
+        if got:
+            continue
+        last = None
+        for f in sorted(rd.glob(f"{stem}.events*.jsonl"), key=lambda p: p.name):
+            try:
+                for line in open(f, encoding="utf-8"):
+                    if '"type": "review"' in line or '"type":"review"' in line:
+                        try:
+                            ev = json.loads(line)
+                        except ValueError:
+                            continue
+                        if ev.get("items"):
+                            last = ev
+            except OSError:
+                continue
+        for x in (last or {}).get("items") or []:
+            if x.get("seed"):
+                continue
+            parts = [p.strip() for p in str(x.get("name") or "").split(" / ") if p.strip()]
+            if not parts:
+                continue
+            lat = next((p for p in parts if not S.CJK.search(p)), "")
+            loc = next((p for p in parts if S.CJK.search(p)), "")
+            try:
+                out.append((label, S.Candidate(name=lat or loc, local_name=loc if lat else "", website=x.get("website") or "",
+                                               url=x.get("url") or "", location=x.get("location") or "")))
+            except ValueError:
+                continue
+    if stems:
+        log.info("%sпоиск кандидатов: прежних заседаний с тем же заданием %d, находок из них %d", c._tag, len(stems), len(out))
+    return out
+
+
 def discover_hunters(c: Council) -> list[MemberConfig]:
     """Кто ищет кандидатов. scouts — модель поиска, вторая модель Perplexity и младшие модели Google, OpenAI,
     Anthropic, xAI со своими поисковиками (каждый — по всем направлениям); all — модель поиска и участники совета;
@@ -576,6 +668,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
               started: str, t0: float) -> SessionResult:
     sc = c.cfg.selection
     chair = c.cfg.member(c.cfg.chair)
+    c._question = question  # чтобы узнать прежние заседания с тем же заданием
     docs = "\n".join(a.text for a in c.attachments if getattr(a, "kind", "") == "document")
     from ..splitter import heuristic_objects
     hint = list(c.fixed_objects) or heuristic_objects("\n".join([question, context or "", docs]))
@@ -1091,6 +1184,8 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
         return {S.norm_name(x) for x in [cd.name, cd.local_name, *cd.aliases] if x and S._name_key_ok(S.norm_name(x))}
     have = {k for _, cd in found for k in keys(cd)}
     old = prior_finds(c)
+    if sc.reuse_sessions:
+        old += prior_sessions(c, getattr(c, "_question", "") or frame.refined_question)
     prior = [(a, cd) for a, cd in old if not (keys(cd) & have)]
     # найдена снова — к нынешней находке добавляем прежние названия и источник (ссылку с цитатой)
     old_by: dict[str, S.Candidate] = {}
@@ -1129,7 +1224,8 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
         found.extend(prior)
         log.info("%sпоиск кандидатов: из прежних запусков возвращено %d находок", c._tag, len(prior))
         c._emit("warning", stage="discover", member="",
-                text=f"поиск: {len(S.merge_candidates(prior))} компаний, найденных в прежних запусках, возвращены в список")
+                text=f"поиск: {len(S.merge_candidates(prior))} компаний, найденных в прежних запусках и прежних заседаниях "
+                     "с этим заданием, возвращены в список")
     entities = S.merge_candidates(found, seeds)
     bench = {S.norm_name(b) for b in frame.benchmarks if S.norm_name(b)}
     if bench:  # конкуренты и исключённые, названные в задании, — не кандидаты, даже если поиск их принёс

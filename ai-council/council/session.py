@@ -209,6 +209,7 @@ class Council:
         # в одну секунду (части серии) — название тут не годится: оно само может кончаться цифрой («…из-3»)
         import zlib
         self._tag = (f"[{session_id[:15]}·{zlib.crc32(session_id.encode()) & 0xFFFF:04x}] " if session_id else "")
+        self.session_id = session_id
         self._key_left: float | None = None
         self._key_at = 0.0
         self._key_spent = 0.0
