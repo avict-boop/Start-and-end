@@ -472,3 +472,22 @@ def test_prior_generic_alias_and_waves_without_share():
     b = S.Candidate(name="Ocean Aurora", aliases=["Biotech"])
     k = lambda cd: {S.norm_name(x) for x in [cd.name, *cd.aliases] if S._name_key_ok(S.norm_name(x))}
     assert not (k(a) & k(b))
+
+
+def test_one_wrong_find_does_not_bridge_two_companies():
+    """19.11: Perplexity выдал «BioGrowing / 百合生物科技股份有限公司» — BioGrowing склеился с Weihai Baihe. Две группы
+    с разными своими сайтами по имени не склеиваются; полное китайское юрназвание до знака — склеивает и при двух
+    сайтах; «A / B» и «… (Biohigh)» — те же названия."""
+    f = [("a", S.Candidate(name="BioGrowing Co., Ltd.", local_name="均瑶润盈生物科技（上海）有限公司", website="https://www.biogrowing.cn/")),
+         ("b", S.Candidate(name="Weihai Baihe Biotechnology Co., Ltd.", local_name="百合生物科技股份有限公司", website="http://www.baiheshengwu.com")),
+         ("c", S.Candidate(name="BioGrowing Co., Ltd.", local_name="百合生物科技股份有限公司", website="https://www.made-in-china.com/x")),
+         ("d", S.Candidate(name="Weihai Baihe Biology Technological Co., Ltd. (Biohigh)")),
+         ("e", S.Candidate(name="威海百合生物技术股份有限公司 / Weihai Baihe Biology Technological Co., Ltd.", website="http://www.baiheshengwu.com")),
+         ("f", S.Candidate(name="南京泽朗生物科技有限公司", website="https://zlagr.com")),
+         ("g", S.Candidate(name="南京泽朗生物科技有限公司", website="https://zelangjt.com.cn"))]
+    ents = S.merge_candidates(f)
+    by = {e["name"]: e for e in ents}
+    bio = next(e for e in ents if "biogrowing.cn" in e["website"])
+    baihe = next(e for e in ents if "baiheshengwu" in e["website"])
+    assert bio is not baihe and "Weihai Baihe Biology Technological Co., Ltd. (Biohigh)" in baihe["names"]
+    assert sum(1 for e in ents if "泽朗" in e["name"]) == 1

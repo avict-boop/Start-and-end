@@ -778,21 +778,63 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
     # сначала склейка по именам; затем по официальному сайту — один сайт у двух названий (английское и китайское)
     # — одна компания. Но сайт, указанный у трёх и более РАЗНЫХ компаний, — чужой (отраслевые СМИ, выставка,
     # ассоциация, реестр: модель вписала его как «сайт»), по нему не склеиваем и в карточку не берём
-    by_key: dict[str, int] = {}
+    # у кого какой СВОЙ сайт (не площадка, не новость; не «сайт», указанный у трёх и более разных названий): две
+    # группы с разными своими сайтами по имени не склеиваются — одна находка с перепутанным названием иначе сшивала
+    # две компании (19.11 Perplexity выдал «BioGrowing / 百合生物科技», и BioGrowing склеился с Weihai Baihe)
+    brand_names: dict[str, set[str]] = {}
+    for it in items:
+        b = site_brand(site_of(it["c"].website) or "")
+        if b and not weak_source(it["c"].website):
+            brand_names.setdefault(b, set()).add(norm_name(it["c"].name))
+    root_sites: dict[int, set[str]] = {}
+    for i, it in enumerate(items):
+        b = site_brand(site_of(it["c"].website) or "")
+        root_sites[i] = {b} if b and not weak_source(it["c"].website) and len(brand_names.get(b, ())) < 3 else set()
+
+    def join(a: int, b: int) -> bool:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return True
+        sa, sb = root_sites.get(ra, set()), root_sites.get(rb, set())
+        if sa and sb and not (sa & sb):
+            return False
+        lo, hi = min(ra, rb), max(ra, rb)
+        parent[hi] = lo
+        root_sites[lo] = sa | sb
+        return True
+
+    def variants(x: str) -> list[str]:
+        """Название и его части: «威海百合… / Weihai Baihe …» — оба; «Weihai Baihe … (Biohigh)» — и без скобок."""
+        out = [x, *[p.strip() for p in x.split(" / ")]]
+        out += [re.sub(r"\s*[（(][^)）]*[)）]\s*", " ", v).strip() for v in list(out)]
+        return list(dict.fromkeys(v for v in out if v))
+
+    by_key: dict[str, list[int]] = {}
     for i, it in enumerate(items):
         c = it["c"]
-        keys = {f"n:{norm_name(x)}" for x in [c.name, c.local_name, *c.aliases] if _sure(x) and _name_key_ok(norm_name(x))}
+        keys = {f"n:{norm_name(v)}" for x in [c.name, c.local_name, *c.aliases] if _sure(x)
+                for v in variants(x) if _name_key_ok(norm_name(v))}
         for x in [c.name, c.local_name, *c.aliases]:  # одно ядро названия в одном городе — одна компания
             if not _sure(x):
                 continue
             core, city = cn_core_city(x, c.location)
             if city and len(core) >= 2:
                 keys.add(f"c:{core}@{city}")
-        for k in keys:
+        # полное китайское юридическое название, совпавшее до знака («南京泽朗生物科技有限公司» с двумя сайтами), —
+        # одна компания и при разных сайтах: в Китае оно уникально
+        legal = {f"L:{re.sub(r'[\s（）()]', '', v.translate(_T2S))}" for x in [c.name, c.local_name, *c.aliases] if _sure(x)
+                 for v in variants(x) if CJK.search(v) and "公司" in v and len(v) >= 8 and not re.search(r"[A-Za-z]", v)}
+        for k in sorted(legal):
             if k in by_key:
-                union(i, by_key[k])
+                union(i, by_key[k][0])
+                ra = find(i)
+                root_sites[ra] = root_sites.get(ra, set()) | root_sites.get(i, set()) | root_sites.get(by_key[k][0], set())
             else:
-                by_key[k] = i
+                by_key[k] = [i]
+        for k in sorted(keys):
+            holders = by_key.setdefault(k, [])
+            if not any([join(i, h) for h in holders]):
+                holders.append(i)
     site_groups: dict[str, set[int]] = {}
     for i, it in enumerate(items):
         site = site_brand(site_of(it["c"].website) or "")
@@ -804,7 +846,7 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
         site = site_brand(site_of(it["c"].website) or "")
         if site and site not in foreign:
             if site in by_site:
-                union(i, by_site[site])
+                join(i, by_site[site])
             else:
                 by_site[site] = i
     groups: dict[int, list[int]] = {}
