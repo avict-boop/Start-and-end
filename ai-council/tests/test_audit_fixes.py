@@ -364,7 +364,7 @@ def test_expert_opinion_any_yes_keeps():
     assert S.ExpertItem.model_validate({"n": 1, "verdict": "Да"}).verdict == "yes"
     assert S.ExpertItem.model_validate({"n": 1, "verdict": "maybe"}).verdict == "unknown"
     p = S.expert_prompt(S.SelectionFrame(refined_question="q"), [], [{"name": "Sirio", "names": ["Sirio", "仙乐"]}])
-    assert "1. Sirio (仙乐)" in p and "unknown" in p
+    assert "1. Sirio (also: 仙乐)" in p and "unknown" in p
 
 
 def test_expert_in_run_mock(tmp_path):
@@ -432,3 +432,43 @@ def test_order_tiers_survive_diverse_order():
     out = SM.diverse_order(sorted(ents, key=SM._order))
     ids = [x["id"] for x in out]
     assert ids[:2] == ["B1", "P1"] and set(ids[2:4]) == {"X1", "X2"} and set(ids[4:]) == {"U1", "U2"}
+
+
+def test_biogrowing_group_and_subsidiary_one_object():
+    """19.11: BioGrowing склеился с материнской 湖北均瑶大健康饮品 и назывался ею; отсев счёл страницу дочерней
+    «не про объект». Теперь имя — не группа «через дочернюю», а все названия — один объект для отсева и экспертов."""
+    cs = [S.Candidate(name="Hubei Junyao Healthy Beverage Co., Ltd. (через 均瑶润盈 / Junyao Runying)",
+                      local_name="湖北均瑶大健康饮品股份有限公司", website="https://www.biogrowing.cn/"),
+          S.Candidate(name="均瑶润盈生物科技（上海）有限公司", website="https://www.biogrowing.cn/", group="湖北均瑶大健康饮品股份有限公司"),
+          S.Candidate(name="均瑶润盈生物科技（上海）有限公司")]
+    ents = S.merge_candidates([("a", cs[0]), ("b", cs[1]), ("c", cs[2])])
+    assert len(ents) == 1 and ents[0]["name"].startswith("均瑶润盈")
+    p = S.screen_read_prompt(S.SelectionFrame(refined_question="q"), [], ents, {})
+    assert "ONE OBJECT = ALL ITS NAMES" in p and "湖北均瑶大健康饮品股份有限公司" in p
+    assert "SAME company" in S.expert_prompt(S.SelectionFrame(refined_question="q"), [], ents)
+
+
+def test_review_choice_survives_and_accepted_checks():
+    """Разбор 18.11: отметки на неизменном списке сохраняются по номерам; тот же номер с его названием — он же;
+    принятая программой оценка признака (площадка → «не выяснено») хранится и идёт в карточку."""
+    from council.modes import selection as SM
+    ents = [{"id": "O239", "name": "Henan Runling Pharmaceutical Co., Ltd. / Runling Technology Group",
+             "names": ["Henan Runling Pharmaceutical Co., Ltd."]},
+            {"id": "O19", "name": "威海百合生物技术股份有限公司", "names": ["威海百合生物技术股份有限公司"]},
+            {"id": "O63", "name": "威海百合生物技術股份有限公司", "names": ["威海百合生物技術股份有限公司"]}]
+    dec = {"keep": ["O239", "O19", "O63"], "_names": {e["id"]: e["name"] for e in ents}, "_snap": SM.snapshot_key(ents)}
+    assert SM.remap_decision(dec, ents)["keep"] == ["O239", "O19", "O63"]
+    dec2 = {**dec, "_snap": "other"}
+    assert SM.remap_decision(dec2, ents)["keep"] == ["O239", "O19", "O63"]   # номер и название — его
+    moved = [{**ents[0], "id": "O240"}, ents[1], ents[2]]
+    assert SM.remap_decision({"keep": ["O239"], "_names": {"O239": ents[0]["name"]}}, moved)["keep"] == ["O240"]
+    weak = S.ScreenCheck(attr="A1", verdict="pass", url="https://www.made-in-china.com/x", quote="oem")
+    assert S.accepted_checks([weak])[0].verdict == "unclear"
+
+
+def test_prior_generic_alias_and_waves_without_share():
+    """Прежняя находка с общим алиасом «Biotech» не пропадает; пустая первая волна не останавливает поиск."""
+    a = S.Candidate(name="Delta Sunrise", aliases=["Biotech"])
+    b = S.Candidate(name="Ocean Aurora", aliases=["Biotech"])
+    k = lambda cd: {S.norm_name(x) for x in [cd.name, *cd.aliases] if S._name_key_ok(S.norm_name(x))}
+    assert not (k(a) & k(b))

@@ -345,7 +345,7 @@ EXPERT_BATCH = 80  # кандидатов в одном обращении к э
 def expert_prompt(frame: "SelectionFrame", attrs: list["Attribute"], objs: list[dict[str, Any]]) -> str:
     conds = "\n".join(f"- {a.name}" + (f" (excluded if: {a.knockout})" if a.knockout else "") for a in attrs)
     lines = "\n".join(
-        f"{i}. {o['name']}" + (f" ({', '.join(n for n in (o.get('names') or [])[:3] if n != o['name'])})"
+        f"{i}. {o['name']}" + (f" (also: {'; '.join([n for n in (o.get('names') or []) if n != o['name']][:5])})"
                                if len(o.get("names") or []) > 1 else "")
         + (f" — {o['location']}" if o.get("location") else "") + (f" — {site_of(o['website'])}" if o.get("website") else "")
         for i, o in enumerate(objs, 1))
@@ -365,6 +365,9 @@ Conditions:
   enough. Do NOT guess: "unknown" is a normal answer.
 "knows": for yes/no — what exactly you know, up to 25 words in Russian (forms, city, contract manufacturing, group);
 company and brand names stay as in the original, not translated. Empty for unknown.
+
+All names given for one number are the SAME company (group, its production subsidiary, brand, Chinese and English
+names): judge the company by whichever of these names you know.
 
 Companies:
 {lines}
@@ -676,14 +679,29 @@ def _sure(x: str) -> str:
     return "" if "?" in (x or "") or "？" in (x or "") else x
 
 
+# «Hubei Junyao Healthy Beverage (через 均瑶润盈)», «… via its subsidiary …» — это группа, а кандидат — дочерняя
+VIA = re.compile(r"\bчерез\b|\bvia\b|\bthrough\b|по линии|дочерн|subsidiar|通过|旗下", re.I)
+
+
 def display_name(cs: list["Candidate"]) -> str:
     """Имя объекта на экране: самое частое латинское (по нему вы ищете) и китайское рядом — «BioGrowing Co., Ltd. /
     均瑶润盈生物科技（上海）有限公司». Раньше бралось самое частое короткое, и выходило только китайское — нужный завод
-    в списке было не узнать."""
+    в списке было не узнать. Название группы «через дочернюю» и название, указанное у других как их группа, — не имя
+    кандидата, если есть другие (19.11 BioGrowing назывался «湖北均瑶大健康饮品» — материнской компанией напитков,
+    и отсев с экспертами его не узнали)."""
+    groups = {norm_name(c.group) for c in cs if c.group} | {norm_name(VIA.split(c.name)[0]) for c in cs if VIA.search(c.name)}
+    plain = [c for c in cs if not VIA.search(c.name) and norm_name(c.name) not in groups]
+    if plain and len(plain) < len(cs):
+        cs = plain + [c.model_copy(update={"name": ""}) for c in cs if c not in plain]
+
     def best(xs: list[str]) -> str:
         return max(xs, key=lambda x: (sum(1 for y in xs if y == x), -len(x))) if xs else ""
-    lat = best([x.split(" / ")[0].strip() for c in cs for x in [_sure(c.name)] if x.strip() and not CJK.search(x.split(" / ")[0])])
-    loc = best([x.strip() for c in cs for x in [_sure(c.local_name), _sure(c.name)] if x.strip() and CJK.search(x) and " / " not in x])
+    def pick(xs: list[str]) -> str:
+        # «через дочернюю» — никогда; название группы — только если других нет (Prinova: бренд и есть группа)
+        xs = [x for x in xs if not VIA.search(x)]
+        return best([x for x in xs if norm_name(x) not in groups]) or best(xs)
+    lat = pick([x.split(" / ")[0].strip() for c in cs for x in [_sure(c.name)] if x.strip() and not CJK.search(x.split(" / ")[0])])
+    loc = pick([x.strip() for c in cs for x in [_sure(c.local_name), _sure(c.name)] if x.strip() and CJK.search(x) and " / " not in x])
     if lat and loc and norm_name(loc) not in norm_name(lat):
         return f"{lat} / {loc}"
     return lat or loc or best([c.name for c in cs])
@@ -843,6 +861,19 @@ def _screen_rule(a: Attribute) -> str:
     if is_knockout(a):
         return f"excluded if: {a.knockout}"
     return "a PREFERENCE, not a requirement — never \"fail\": \"pass\" if the page confirms it, else \"unclear\""
+
+
+def accepted_checks(checks: list[ScreenCheck]) -> list[ScreenCheck]:
+    """Оценки признаков, как их принимает программа: «подходит» по карточке площадки, пресс-релизу или новости и
+    «подходит» по проекту («планирует», «строится») — «не выяснено». По ним и строится всё дальше: карточка,
+    «требуют проверки», «почти подтверждённые» (раньше там стояли исходные «подходит», а итог был «не выяснено»)."""
+    out = []
+    for c in checks:
+        if c.verdict == "pass" and ((c.url and weak_source(c.url)) or PLANNED.search(f"{c.value} {c.quote}")):
+            out.append(c.model_copy(update={"verdict": "unclear"}))
+        else:
+            out.append(c)
+    return out
 
 
 def screen_decide(checks: list[ScreenCheck], attrs: list[Attribute]) -> tuple[str, str]:
@@ -1593,8 +1624,9 @@ Study: {frame.refined_question}
 A candidate is: {frame.object_kind}. Inclusion rules: {'; '.join(frame.inclusion) or '—'}. Exclude: {'; '.join(frame.exclusion) or '—'}.
 
 Write out EVERY company in this text that may be a candidate (when unsure — include it, a later check will decide;
-skip only those clearly excluded or clearly of another kind). Skip trading and import-export companies, distributors,
-agents, packaging, empty-capsule and equipment suppliers, media and service firms — they are not manufacturers. For each: "name" (as written; English if given),
+skip only those clearly excluded or clearly of another kind). Keep trading and import-export arms (a manufacturer's
+group often exports through one — the program checks the link to a plant); skip packaging, empty-capsule and
+equipment suppliers, media and service firms — they are not candidates. For each: "name" (as written; English if given),
 "local_name" (name in the local language if given), "website" (if the text shows it), "quote" (the list line or
 fragment with this company, copied VERBATIM, up to 15 words), "location" (if shown), "why" (2–4 words). Keep each
 item short: the whole part must fit in one answer.
@@ -1658,7 +1690,10 @@ Return JSON: {{"items": [{{"name": "<name as given>", "website": "https://..."}}
 
 def screen_read_prompt(frame: SelectionFrame, attrs: list[Attribute], objs: list[dict[str, Any]],
                        texts: dict[str, list[tuple[str, str]]]) -> str:
-    lines = "\n".join(f"- {o['name']}" + (f" ({', '.join(o['names'][1:4])})" if len(o.get("names") or []) > 1 else "")
+    def also(o: dict[str, Any]) -> str:
+        xs = [n for n in (o.get("names") or []) if n != o["name"]][:6]
+        return f" (also: {'; '.join(xs)})" if xs else ""
+    lines = "\n".join(f"- {o['name']}{also(o)}" + (f" — site {site_of(o['website'])}" if o.get("website") else "")
                       for o in objs)
     pages = "\n\n".join(f"### {o['name']}\n" + "\n".join(f"PAGE {u}\n{t}" for u, t in texts.get(o["id"]) or [])
                          for o in objs)
@@ -1675,9 +1710,12 @@ Objects:
 For each object and attribute: "verdict" pass | fail | unclear. "fail" ONLY when a page clearly proves the exclusion
 rule (a company that ALSO makes raw materials is not excluded for that if it makes finished products too); not on the
 pages → unclear. Planned, under construction or "will be put into production" is not production → unclear, quote it.
-"pass" ONLY when the page states it for THIS company and its own site: a statement about the parent
-group or another subsidiary, a province or "place of origin" without the city/address when the attribute asks for a
-location, a B2B listing card, a press release or a news item → unclear. Signs of an intermediary ("production in our
+ONE OBJECT = ALL ITS NAMES: the names in brackets are the same object (group, its production subsidiary, plant,
+brand, Chinese and English names) — a statement about ANY of them is about THIS object (e.g. the page of the
+subsidiary named there counts in full). "pass" ONLY when the page states it for this object and its own site: a
+statement about a company that is NOT among its names (another group member, a customer, a partner), a province or
+"place of origin" without the city/address when the attribute asks for a location, a B2B listing card, a press
+release or a news item → unclear. Signs of an intermediary ("production in our
 partner facility", "import & export", "trading company", "sourcing agent") → the company does not manufacture: if a
 rule excludes traders or intermediaries, "fail" with that quote. "value" (short), "url" (the page) and a short VERBATIM "quote" copied from that page. Return JSON:
 {{"rows": [{{"object": "<name as given>", "website": "", "checks": [{{"attr": "A1", "verdict": "pass", "value": "",

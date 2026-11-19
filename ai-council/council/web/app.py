@@ -1193,10 +1193,40 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
             nm = {str(x.get("id")): str(x.get("name") or "") for x in items if isinstance(x, dict) and x.get("id")}
             dec["_names"] = {i: nm[i] for k in ("drop", "keep") for i in dec.get(k) or [] if i in nm}
             dec["_names"].update({i: nm[i] for ids in dec.get("merge") or [] for i in ids if i in nm})
+            from ..modes.selection import snapshot_key
+            dec["_snap"] = snapshot_key([x for x in items if isinstance(x, dict)])
         decisions = {**(cp.spec.get("review_decisions") or {}), body.gate: dec}
         cp.update(review_decisions=decisions, review=None)
         log.info("заседание %s: проверка «%s» — решение принято", sid, body.gate)
         return await resume_session(sid)
+
+    def _pending_from_events(sid: str, sel: dict[str, Any]) -> list[dict[str, Any]]:
+        """Старый отчёт без «требуют проверки»: кандидаты последней остановки со списком, не вошедшие в таблицу и не
+        исключённые (что они прошли — по их пометкам отсева; список — как на остановке)."""
+        from .. import selection as S
+        from ..modes.selection import pending_list
+        rd = runs_dir(base_config())
+        # и прежние запуски (после продолжения журнал запуска откладывается рядом): остановка могла быть в них
+        paths = sorted(rd.glob(f"{sid}.events.*.jsonl"), key=lambda q: q.name) + [rd / f"{sid}.events.jsonl"]
+        last = None
+        for path in paths:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    for line in f:
+                        if '"type": "review"' in line or '"type":"review"' in line:
+                            try:
+                                ev = json.loads(line)
+                            except ValueError:
+                                continue
+                            if ev.get("items"):
+                                last = ev
+            except OSError:
+                continue
+        if not last:
+            return []
+        attrs = [S.Attribute.model_validate(a) for a in sel.get("attributes") or [] if a.get("screen")]
+        keep = {o["id"] for o in sel.get("objects") or []} | {x["id"] for x in sel.get("unchecked") or []}
+        return pending_list(last["items"], keep, {x["id"] for x in sel.get("excluded") or []}, attrs)
 
     @app.post("/api/sessions/{sid}/selection/rank")
     async def selection_rank(sid: str, body: RankRequest) -> dict[str, Any]:
@@ -1223,12 +1253,16 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
         out["use_trust"] = sel.get("settings", {}).get("use_trust", True) if body.use_trust is None else body.use_trust
         # все кандидаты для поиска по названию и сайту: в таблице, требуют проверки, исключены
         place = {r["object"]: r["rank"] for r in out.get("ranking") or []}
+        if "pending" not in sel:  # заседание до раздела «требуют проверки» — список из последней остановки
+            sel = {**sel, "pending": await asyncio.to_thread(_pending_from_events, sid, sel)}
         out["directory"] = (
             [{"name": o["name"], "names": (o.get("names") or [])[:4], "website": o.get("website") or "",
               "status": f"в таблице, место {place[o['id']]}" if o["id"] in place else "в таблице", "reason": ""}
              for o in sel.get("objects") or []]
             + [{"name": x["name"], "names": x.get("names") or [], "website": x.get("website") or "",
-                "status": "подтверждена, не вошла в таблицу" if x.get("passed") else "требует проверки",
+                "status": ("подтверждена отсевом, не вошла в таблицу" if x.get("page_pass", x.get("passed"))
+                           else "подходит по мнению экспертов — требует проверки" if x.get("passed")
+                           else "требует проверки"),
                 "reason": x.get("reason") or ""} for x in sel.get("pending") or []]
             + [{"name": x["name"], "names": [], "website": "", "status": "исключена при отсеве",
                 "reason": x.get("reason") or ""} for x in sel.get("excluded") or []]

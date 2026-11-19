@@ -793,6 +793,17 @@ def test_selection_mode_on_site_with_review_stops(client):
     assert {"resumed", "review_applied", "object_filled", "ranked"} <= types
     rank = client.post(f"/api/sessions/{sid}/selection/rank", json={"weights": {"A2": 0}}).json()
     assert len(rank["ranking"]) == 3 and rank["weights"]["A2"] == 0 and rank["attributes"]
+    # справочник: все кандидаты остановки — в таблице, «требуют проверки» или исключены
+    ndir = len(rank["directory"])
+    assert ndir == len(items)
+    # старый отчёт без «требуют проверки» — справочник восстанавливается из последней остановки
+    from pathlib import Path as _P
+    jf = next(_P(client.app_state_runs).rglob(f"{sid}.json"))
+    d = json.loads(jf.read_text(encoding="utf-8"))
+    d["selection"].pop("pending", None)
+    jf.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    old = client.post(f"/api/sessions/{sid}/selection/rank", json={}).json()
+    assert len(old["directory"]) == ndir
     cells = rank["cells"]
     some = next(c for row in cells.values() for c in row.values() if c.get("copy"))
     copy = client.get(f"/api/sources/{some['copy']}").json()

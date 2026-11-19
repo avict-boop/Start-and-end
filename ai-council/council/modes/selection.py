@@ -415,7 +415,7 @@ def pending_list(entities: list[dict[str, Any]], keep_ids: set[str], excluded_id
                     "website": e.get("website") or "", "location": e.get("location") or "",
                     "found_by": [str(a) for a in (e.get("angles") or [])][:4], "angles": len(e.get("angles") or []),
                     "confirmed": [names[a] for a in ok if a in names], "open": open_, "reason": reason,
-                    "passed": S.suits(e)})
+                    "passed": S.suits(e), "page_pass": sc.get("result") == "pass"})
     out.sort(key=lambda x: (not x["passed"], -len(x["confirmed"]), -x["angles"]))
     return out
 
@@ -431,27 +431,46 @@ def remap_decision(dec: dict[str, Any] | None, entities: list[dict[str, Any]]) -
     names = (dec or {}).get("_names") or {}
     if not dec or not names:
         return dec
-    by_name: dict[str, str] = {}
+    # тот же список, что был на остановке (те же номера и названия), — решение как есть, по номерам: раньше даже
+    # на неизменном списке «Henan Runling … / Runling Technology Group» не находилась по имени и выпадала, а выбор
+    # 778 из 778 давал 764 разных номера
+    if dec.get("_snap") and dec["_snap"] == snapshot_key(entities):
+        return dec
+    by_id = {e["id"]: e for e in entities}
+    by_name: dict[str, set[str]] = {}
     for e in entities:
-        for x in e.get("names") or [e["name"]]:
-            by_name.setdefault(S.norm_name(x), e["id"])
+        for x in [e["name"], *(e.get("names") or [])]:
+            for part in [x, *x.split(" / ")]:
+                n = S.norm_name(part)
+                if S._name_key_ok(n):
+                    by_name.setdefault(n, set()).add(e["id"])
+
+    def own(e: dict[str, Any], n: str) -> bool:
+        mine = {S.norm_name(p) for x in [e["name"], *(e.get("names") or [])] for p in [x, *x.split(" / ")]}
+        return any(S.norm_name(p) in mine for p in [n, *n.split(" / ")])
+
     def fix(i: str) -> str | None:
         n = names.get(i)
         if not n:
             return i
-        # имя на экране — «латинское / китайское»: ищем по целому и по каждой части
-        for x in [n, *n.split(" / ")]:
-            hit = by_name.get(S.norm_name(x))
-            if hit:
-                return hit
-        return None
+        if i in by_id and own(by_id[i], n):  # номер тот же и название его — тот же кандидат
+            return i
+        # имя на экране — «латинское / китайское»: ищем по целому и по каждой части; неоднозначно — не угадываем
+        hits = {h for p in [n, *n.split(" / ")] for h in by_name.get(S.norm_name(p), set())}
+        return next(iter(hits)) if len(hits) == 1 else None
     out = dict(dec)
     for k in ("drop", "keep"):
         if dec.get(k) is not None:
-            out[k] = [j for j in (fix(i) for i in dec[k]) if j]
+            out[k] = list(dict.fromkeys(j for j in (fix(i) for i in dec[k]) if j))
     if dec.get("merge"):
         out["merge"] = [[j for j in (fix(i) for i in ids) if j] for ids in dec["merge"]]
     return out
+
+
+def snapshot_key(items: list[dict[str, Any]]) -> str:
+    """Отпечаток списка на остановке: номера и названия по порядку."""
+    import hashlib
+    return hashlib.sha1("\n".join(f"{x.get('id')}\t{x.get('name')}" for x in items).encode("utf-8")).hexdigest()[:16]
 
 
 def gate(c: Council, name: str, payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -617,8 +636,10 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     # предел не меньше двойного размера таблицы из задания: часть кандидатов отсеется, а таблица должна набраться
     cap_c = max(sc.max_candidates, 2 * max(sc.shortlist, frame.shortlist, frame.top_n)) if sc.max_candidates else 0
     cut = max(0, len(entities) - cap_c) if cap_c else 0  # 0 — без предела
+    over: list[dict[str, Any]] = []  # не вошедшие в предел — в «требуют проверки» с причиной, а не бесследно
     if cut:
-        entities = diverse_order(entities)[:cap_c]
+        ordered = diverse_order(entities)
+        entities, over = ordered[:cap_c], ordered[cap_c:]
         log.info("%sотбор: кандидатов %d, предел %d — %d не вошли", c._tag, cap_c + cut, cap_c, cut)
         c._emit("candidates_cut", shown=len(entities), cut=cut, limit=cap_c)
     if start in ("find", "extend"):
@@ -725,6 +746,11 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     keep_ids = {e["id"] for e in shortlist}
     excluded = [x for x in excluded if x["id"] not in keep_ids]  # возвращённые вами на остановке — не «исключены»
     pending = pending_list(entities, keep_ids, {x["id"] for x in excluded}, screen_attrs)
+    pending += [{"id": e["id"], "name": e["name"], "names": (e.get("names") or [])[:4], "website": e.get("website") or "",
+                 "location": e.get("location") or "", "found_by": [str(a) for a in (e.get("angles") or [])][:4],
+                 "angles": len(e.get("angles") or []), "confirmed": [], "open": [], "passed": False, "page_pass": False,
+                 "reason": f"не проверялся: за пределом «Кандидатов всего» ({cap_c}) — поднимите предел или включите "
+                           "«Без предела кандидатов»"} for e in over]
     c._emit("shortlist", count=len(shortlist), excluded=len(excluded), total=len(entities),
             objects=[{"id": e["id"], "name": e["name"]} for e in shortlist])
 
@@ -914,8 +940,10 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     c.stage_search_engine["discover"] = "native" if scouting else sc.discover_engine
     if scouting or sc.discover_engine == "native":
         pool = list(sc.discover_engines) or ["exa"]
-        others = [m for m in hunters if m.name != FACT_CHECKER and not has_native_search(m.model)]
-        for i, m in enumerate(others):
+        # (своё имя: «others» — это направления; раньше здесь его перезаписывали списком моделей, и размер первой
+        # волны зависел от числа моделей)
+        no_native = [m for m in hunters if m.name != FACT_CHECKER and not has_native_search(m.model)]
+        for i, m in enumerate(no_native):
             c.stage_search_engine[f"discover:{m.name}"] = pool[i % len(pool)]
         engines = {m.name: c.stage_search_engine.get(f"discover:{m.name}", "свой") for m in hunters
                    if m.name != FACT_CHECKER}
@@ -948,7 +976,8 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
             comp = S.completeness(S.merge_candidates(found), pairs)
             # остальные направления рамки пропускаем, только если список почти полон (≥ 90%): глубина важнее
             enough = max(sc.saturation, 0.9) if wave_i < len(waves) else sc.saturation
-            if comp["share"] is None or comp["share"] >= enough:
+            # полноту не посчитать (первая волна пустая) — идём к следующей запланированной волне, а не останавливаемся
+            if (comp["share"] is None and wave_i >= len(waves)) or (comp["share"] is not None and comp["share"] >= enough):
                 if wave_i < len(waves):
                     log.info("%sпоиск кандидатов: полнота %s после %d направлений — остальные %d не нужны",
                              c._tag, comp["share"], len(used), sum(len(w) for w in waves[wave_i:]))
@@ -1056,10 +1085,27 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     comp = S.completeness(S.merge_candidates(first), first_pairs)
     # находки прежних запусков (поиск заново, обновление программы), которых нет среди нынешних, — добавляем:
     # однажды найденная компания не теряется
-    have = {S.norm_name(x) for _, cd in found for x in [cd.name, cd.local_name, *cd.aliases] if x}
+    # совпадение — по тем же правилам, что и склейка: общее слово («Biotech») или пустая строка после очистки — не
+    # совпадение (иначе Ocean Aurora с алиасом «Biotech» пропадала, если сейчас нашлась Delta Sunrise с тем же)
+    def keys(cd: S.Candidate) -> set[str]:
+        return {S.norm_name(x) for x in [cd.name, cd.local_name, *cd.aliases] if x and S._name_key_ok(S.norm_name(x))}
+    have = {k for _, cd in found for k in keys(cd)}
     old = prior_finds(c)
-    prior = [(a, cd) for a, cd in old
-             if not any(S.norm_name(x) in have for x in [cd.name, cd.local_name, *cd.aliases] if x)]
+    prior = [(a, cd) for a, cd in old if not (keys(cd) & have)]
+    # найдена снова — к нынешней находке добавляем прежние названия и источник (ссылку с цитатой)
+    old_by: dict[str, S.Candidate] = {}
+    for _, cd in old:
+        for k in keys(cd):
+            old_by.setdefault(k, cd)
+    for i, (a, cd) in enumerate(found):
+        was = next((old_by[k] for k in keys(cd) if k in old_by), None)
+        if was is None:
+            continue
+        upd: dict[str, Any] = {"aliases": list(dict.fromkeys([*cd.aliases, *[x for x in [was.name, was.local_name, *was.aliases]
+                                                                          if x and x not in (cd.name, cd.local_name)]]))[:12]}
+        if not cd.url and was.url:
+            upd.update(url=was.url, quote=cd.quote or was.quote)
+        found[i] = (a, cd.model_copy(update=upd))
     # найдена снова, но без сайта, а прежде сайт был — берём прежний (17.11 у IVC/艾兰得 сайт пропал после
     # повторного поиска, и отсев читал только список выставки)
     old_site: dict[str, str] = {}
@@ -1140,7 +1186,8 @@ async def screen(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], 
                                             or ch.attr}) for ch in row.checks]
             result, reason = S.screen_decide(checks, attrs)
             out[e["id"]] = {"result": result, "reason": reason, "name": e["name"],
-                            "checks": [x.model_dump() for x in checks]}
+                            "checks": [x.model_dump() for x in S.accepted_checks(checks)],
+                            "raw": [x.model_dump() for x in checks]}
             # адреса из отсева — уже найденные страницы объекта: при заполнении их не ищут заново
             e["urls"] = list(dict.fromkeys([*(e.get("urls") or []),
                                             *(x.url for x in checks if x.url.startswith(("http://", "https://")))]))[:10]
@@ -1323,7 +1370,8 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
                                             or ch.attr}) for ch in row.checks]
             result, reason = S.screen_decide(checks, attrs)
             out[e["id"]] = {"result": result, "reason": reason, "name": e["name"],
-                            "checks": [x.model_dump() for x in checks]}
+                            "checks": [x.model_dump() for x in S.accepted_checks(checks)],
+                            "raw": [x.model_dump() for x in checks]}
             if row.website and not e.get("website"):
                 e["website"] = row.website
         # кандидат, по которому модель не вернула строки (пропустила или назвала иначе), — с причиной в журнале
