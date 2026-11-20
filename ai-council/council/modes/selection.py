@@ -790,6 +790,16 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
                               if ch.get("attr") in hard and ch.get("verdict") == "pass") >= len(hard) - 1)
                 or len(e.get("angles") or []) >= 3)]
             keep = _uniq(passed + by_expert + near + seeds_failed + [e for e in unclear if e.get("seed")])
+            # не подтверждено только «где площадка» (город, адрес) — на главной его почти никогда нет, а подробная
+            # проверка находит его по годовым отчётам и «Контактам»: такие тоже не отсекаются пределом (20.11 так за
+            # бортом были 汤臣倍健, Aland Taizhou, Tingchuang, Biodep — 23 кандидата)
+            loc = {a.id for a in screen_attrs if re.search(r"город|площадк|адрес|провинц|местонахожд|\bcity\b|location|address",
+                                                           a.name, re.I)}
+            for e in near:
+                miss = {a for a in hard if not any(ch.get("attr") == a and ch.get("verdict") == "pass"
+                                                   for ch in e["screen"].get("checks") or [])}
+                if miss and miss <= loc:
+                    e["near_loc"] = True
     else:
         keep = list(entities)
         keep_all = list(keep)
@@ -806,6 +816,17 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     # число на экране вопроса («Проверять подробно: 30») — ваше прямое указание: оно сильнее и «проверять подробно
     # всех» из настроек (раньше при max_deep 0 оно молча не действовало)
     shortlist = keep[:sc.shortlist] if sc.shortlist else keep if not sc.max_deep else keep[:min(limit, cap)]
+    # подходящие (подтверждённые страницей или хоть одним экспертом; и те, у кого не найден только город площадки)
+    # не отсекаются числом из задания («60–80») и
+    # пределом «Проверять подробно» — в предложенный список идут все, урезать можно на остановке. 20.11 из 134
+    # подходящих в список вошли 80, а подтверждённые только экспертом (BioGrowing, Sirio) — нет. Только число,
+    # заданное на экране вопроса, — ваше прямое указание — сильнее
+    if sc.shortlist_only_pass and not sc.shortlist:
+        extra = [e for e in keep if (S.suits(e) or e.get("near_loc")) and e not in shortlist]
+        if extra:
+            shortlist = shortlist + extra[:max(0, 200 - len(shortlist))]
+            log.info("%sотбор: подходящих больше предела %d — в список добавлены все подходящие (+%d)", c._tag,
+                     min(limit, cap), len(extra))
     keep_all.sort(key=_order)
     coverage = required_coverage(frame, keep_all, shortlist)  # для охвата категорий — и «не выяснено»
     added = [e for x in coverage for e in x.pop("_add")]
@@ -816,7 +837,8 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         c._emit("coverage", items=coverage)
     if start != "check":
         dec = gate(c, "shortlist", {"items": entities, "shortlist": [e["id"] for e in shortlist],
-                                    "excluded": excluded, "coverage": coverage, "groups": S.group_hints(entities)})
+                                    "excluded": excluded, "coverage": coverage, "groups": S.group_hints(entities),
+                                    "limit": min(limit, cap) if sc.max_deep else 0})
         if dec is not None:
             dec = remap_decision(dec, entities)
             if dec.get("merge"):

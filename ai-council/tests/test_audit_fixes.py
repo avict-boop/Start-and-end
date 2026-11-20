@@ -513,3 +513,12 @@ def test_prior_sessions_same_task(tmp_path):
     got = SM.prior_sessions(c, q)
     assert [cd.name for _, cd in got] == ["Wecare Probiotics"] and got[0][1].local_name.startswith("微康")
     assert got[0][1].aliases == [] and got[0][0].startswith("прежнее заседание")
+
+
+def test_all_suitable_go_to_shortlist(tmp_path):
+    """20.11: из 134 подходящих в список вошли 80 (число из задания), подтверждённые только экспертом (BioGrowing,
+    Sirio) — нет. Теперь в предложенный список — все подходящие; урезать можно на остановке."""
+    import inspect
+    from council.modes import selection as SM
+    src = inspect.getsource(SM.run)
+    assert "S.suits(e) or e.get(\"near_loc\")" in src and '"limit":' in src

@@ -282,6 +282,12 @@ function renderReview(s) {
   if ($("rvPass")) $("rvPass").addEventListener("click", passAll);
   if ($("rvPass2")) $("rvPass2").addEventListener("click", passAll);
   if ($("rvSug2")) $("rvSug2").addEventListener("click", () => $("rvSug").click());
+  if ($("rvTrim")) $("rvTrim").addEventListener("click", () => {
+    const pl = rv.payload || {};
+    const on = new Set((pl.shortlist || []).slice(0, Number(pl.limit || 0)));
+    box.querySelectorAll("input[data-id]").forEach((i) => { i.checked = on.has(i.dataset.id); });
+    cnt();
+  });
   $("rvGo").addEventListener("click", () => sendReview(s, rv));
   box.querySelectorAll("input[data-id]").forEach((i) => i.addEventListener("change", cnt));
   cnt();
@@ -339,6 +345,13 @@ function selPassedNote(rv, items, short) {
   if (rv.gate !== "shortlist") return "";
   const passed = selPassed(items);
   const out = passed.filter((id) => !short.has(id));
+  const lim = Number((rv.payload || {}).limit || 0);
+  if (!out.length && lim && short.size > lim) {
+    return `<div class="set-notice small"><b>Подходят ${passed.length} — в список предложены все подходящие (${short.size}), хотя по заданию и настройкам — до ${lim}.</b>
+      Подходящие не отсекаются сами: подтверждённые страницей или хоть одним экспертом. Можно
+      <button type="button" class="link small" id="rvTrim">урезать до ${lim}</button> (первые ${lim} по порядку: подтверждённые и страницей, и экспертами → страницей → только экспертами).
+      Подробная проверка — около $0,05–0,25 за кандидата.</div>`;
+  }
   if (!out.length) return "";
   return `<div class="set-notice warn small"><b>Подходят ${passed.length}, а в предложенный список (${short.size}) вошли не все — ${out.length} подходящих за его пределами.</b>
     Выберите: <button type="button" class="link small" id="rvSug2">урезать до ${short.size}, как предложено</button> или
