@@ -1,0 +1,52 @@
+{
+  "name": "Совет нейросетей",
+  "color_space": "sRGB",
+  "colors": {
+    "indigo": "#4F46E5",
+    "light_indigo": "#818CF8",
+    "turquoise": "#00C7B5",
+    "navy": "#18233D",
+    "paper": "#F7F8FB",
+    "white": "#FFFFFF"
+  },
+  "font": {
+    "family": "Avenir Next",
+    "weight": 700
+  },
+  "symbol": {
+    "viewBox": [
+      0,
+      0,
+      512,
+      512
+    ],
+    "center": [
+      256,
+      256
+    ],
+    "outer_radius": 224,
+    "inner_radius": 140,
+    "segment_angles": [
+      [
+        33,
+        87
+      ],
+      [
+        93,
+        147
+      ],
+      [
+        153,
+        207
+      ],
+      [
+        213,
+        267
+      ],
+      [
+        273,
+        327
+      ]
+    ]
+  }
+}

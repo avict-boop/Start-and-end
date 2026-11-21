@@ -1,0 +1,19 @@
+# HTTPS для веб-интерфейса: Caddy сам получает и продлевает сертификат Let's Encrypt.
+# Адрес берётся из переменной DOMAIN в .env (свой домен или бесплатный вида 1-2-3-4.sslip.io).
+{$DOMAIN} {
+	encode gzip
+	reverse_proxy web:8000
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+}
+
+# www.домен — перенаправление на домен без www (нужна DNS-запись www → IP сервера; без неё Caddy лишь пишет
+# в журнал, что сертификат для www не получен, — основной адрес работает)
+www.{$DOMAIN} {
+	redir https://{$DOMAIN}{uri} permanent
+}

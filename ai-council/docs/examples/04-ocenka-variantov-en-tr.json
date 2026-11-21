@@ -1,0 +1,358 @@
+{
+ "question": "Which database should we use for product analytics: PostgreSQL, ClickHouse or BigQuery?",
+ "refined_question": "",
+ "criteria": [
+  "Performance",
+  "Operations",
+  "Cost"
+ ],
+ "mode": "evaluate",
+ "authors": {
+  "A": null,
+  "B": null,
+  "C": null
+ },
+ "proposals": {
+  "A": {
+   "title": "PostgreSQL + TimescaleDB",
+   "summary": "PostgreSQL with the TimescaleDB extension.",
+   "reasoning": "",
+   "pros": [],
+   "risks": [],
+   "confidence": null
+  },
+  "B": {
+   "title": "ClickHouse",
+   "summary": "ClickHouse cluster of three nodes.",
+   "reasoning": "",
+   "pros": [],
+   "risks": [],
+   "confidence": null
+  },
+  "C": {
+   "title": "BigQuery",
+   "summary": "Google BigQuery with scheduled loads.",
+   "reasoning": "",
+   "pros": [],
+   "risks": [],
+   "confidence": null
+  }
+ },
+ "critiques": {
+  "claude": {
+   "reviews": [
+    {
+     "label": "A",
+     "scores": {
+      "Performance": 8.0,
+      "Operations": 8.0,
+      "Cost": 8.0
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    },
+    {
+     "label": "B",
+     "scores": {
+      "Performance": 7.4,
+      "Operations": 7.4,
+      "Cost": 7.4
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    },
+    {
+     "label": "C",
+     "scores": {
+      "Performance": 5.1,
+      "Operations": 5.1,
+      "Cost": 5.1
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    }
+   ]
+  },
+  "chatgpt": {
+   "reviews": [
+    {
+     "label": "A",
+     "scores": {
+      "Performance": 9.0,
+      "Operations": 9.0,
+      "Cost": 9.0
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    },
+    {
+     "label": "B",
+     "scores": {
+      "Performance": 8.4,
+      "Operations": 8.4,
+      "Cost": 8.4
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    },
+    {
+     "label": "C",
+     "scores": {
+      "Performance": 6.1,
+      "Operations": 6.1,
+      "Cost": 6.1
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    }
+   ]
+  },
+  "gemini": {
+   "reviews": [
+    {
+     "label": "A",
+     "scores": {
+      "Performance": 8.0,
+      "Operations": 8.0,
+      "Cost": 8.0
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    },
+    {
+     "label": "B",
+     "scores": {
+      "Performance": 7.4,
+      "Operations": 7.4,
+      "Cost": 7.4
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    },
+    {
+     "label": "C",
+     "scores": {
+      "Performance": 5.1,
+      "Operations": 5.1,
+      "Cost": 5.1
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    }
+   ]
+  },
+  "kimi": {
+   "reviews": [
+    {
+     "label": "A",
+     "scores": {
+      "Performance": 9.0,
+      "Operations": 9.0,
+      "Cost": 9.0
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    },
+    {
+     "label": "B",
+     "scores": {
+      "Performance": 8.4,
+      "Operations": 8.4,
+      "Cost": 8.4
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    },
+    {
+     "label": "C",
+     "scores": {
+      "Performance": 6.1,
+      "Operations": 6.1,
+      "Cost": 6.1
+     },
+     "strengths": [
+      "Clear trade-offs"
+     ],
+     "weaknesses": [
+      "Needs a load test"
+     ]
+    }
+   ]
+  }
+ },
+ "ballots": {
+  "claude": {
+   "ranking": [
+    "B",
+    "A",
+    "C"
+   ],
+   "rationale": "Simplest operations for a small team."
+  },
+  "chatgpt": {
+   "ranking": [
+    "A",
+    "B",
+    "C"
+   ],
+   "rationale": "Simplest operations for a small team."
+  },
+  "gemini": {
+   "ranking": [
+    "A",
+    "B",
+    "C"
+   ],
+   "rationale": "Simplest operations for a small team."
+  },
+  "kimi": {
+   "ranking": [
+    "B",
+    "A",
+    "C"
+   ],
+   "rationale": "Simplest operations for a small team."
+  }
+ },
+ "tally": [
+  {
+   "label": "A",
+   "borda": 0.88,
+   "avg_score": 8.5,
+   "first_places": 3,
+   "ballots": 4,
+   "pairwise": 2.0,
+   "tie_break": "",
+   "schulze": 2
+  },
+  {
+   "label": "B",
+   "borda": 0.62,
+   "avg_score": 7.9,
+   "first_places": 1,
+   "ballots": 4,
+   "pairwise": 0.0,
+   "tie_break": "",
+   "schulze": 1
+  },
+  {
+   "label": "C",
+   "borda": 0.0,
+   "avg_score": 5.6,
+   "first_places": 0,
+   "ballots": 4,
+   "pairwise": -2.0,
+   "tie_break": "",
+   "schulze": 0
+  }
+ ],
+ "verdict": {
+  "winner": "A",
+  "final_answer": "**Choose PostgreSQL with the TimescaleDB extension.** It covers 90% of the analytics workload without a second\ndatabase and keeps operations simple for a team of three.\n\n## Neden PostgreSQL? (Türkçe özet)\n\nEkip küçük; tek bir veritabanı işletmek, iki ayrı sistem işletmekten çok daha ucuzdur. Günlük 40 milyon satıra kadar\nTimescaleDB yeterli performans gösterir.\n\n## Capacity estimate\n\nExpected load is $N = 4 \\times 10^7$ rows per day; with compression ratio $k \\approx 8$ storage for a year is\n\n$$S = \\frac{N \\cdot 365 \\cdot 120\\ \\text{bytes}}{k} \\approx 220\\ \\text{GB}$$\n\n## Benchmark summary\n\n| Engine | Ingest, rows/s | p95 query, ms | Storage/yr | Ops effort | License | Managed in RU | SQL dialect | Joins |\n|---|---|---|---|---|---|---|---|---|\n| PostgreSQL + TimescaleDB | 180 000 | 420 | 220 GB | low | Apache/TSL | yes | full SQL | full |\n| ClickHouse | 1 200 000 | 85 | 90 GB | medium | Apache 2.0 | yes | ClickHouse SQL | limited |\n| BigQuery | n/a (batch) | 1 900 | pay per TB | very low | proprietary | no | GoogleSQL | full |\n\n## Migration snippet\n\n```sql\nCREATE EXTENSION IF NOT EXISTS timescaledb;\nSELECT create_hypertable('events', 'created_at', chunk_time_interval => INTERVAL '1 day');\nALTER TABLE events SET (timescaledb.compress, timescaledb.compress_segmentby = 'tenant_id');\n```\n\nDocumentation: https://docs.timescale.com/use-timescale/latest/compression/about-compression/?utm_source=council-report&utm_medium=pdf&utm_campaign=very-long-link-check",
+  "why": "Three of four ballots ranked PostgreSQL first; reviewers valued the lower operational load.",
+  "dissent": [
+   "gemini: ClickHouse will be needed once ingest exceeds 100k rows/s sustained."
+  ],
+  "risks": [
+   "Compression settings must be tested on real data before go-live."
+  ]
+ },
+ "stats": {
+  "claude": {
+   "calls": 3,
+   "prompt_tokens": 18000,
+   "completion_tokens": 5200,
+   "cost": 0.014,
+   "failures": [],
+   "cached_tokens": 6000
+  },
+  "chatgpt": {
+   "calls": 3,
+   "prompt_tokens": 19500,
+   "completion_tokens": 5600,
+   "cost": 0.017,
+   "failures": [],
+   "cached_tokens": 6300
+  },
+  "gemini": {
+   "calls": 3,
+   "prompt_tokens": 21000,
+   "completion_tokens": 6000,
+   "cost": 0.02,
+   "failures": [],
+   "cached_tokens": 6600
+  },
+  "kimi": {
+   "calls": 3,
+   "prompt_tokens": 22500,
+   "completion_tokens": 6400,
+   "cost": 0.023,
+   "failures": [],
+   "cached_tokens": 6900
+  }
+ },
+ "total_cost_usd": 0.1032,
+ "started_at": "2026-11-08T18:30:00+00:00",
+ "duration_s": 128.0,
+ "attachments": [],
+ "request": {
+  "chair": "claude"
+ },
+ "agreement": {
+  "tau": 0.83,
+  "level": "high",
+  "pairs": 6,
+  "ballots": 4
+ },
+ "chair_proposed": false,
+ "coverage": {
+  "min": 4,
+  "max": 4,
+  "options": 3,
+  "ballots": 4
+ }
+}
