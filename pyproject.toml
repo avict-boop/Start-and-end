@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dosrip"
+version = "0.1.0"
+description = "Восстановление графики, звука, музыки и кода старых DOS-игр"
+requires-python = ">=3.9"
+dependencies = ["pillow>=9", "capstone>=5", "unicorn>=2"]
+
+[project.optional-dependencies]
+web = ["flask>=2"]
+test = ["pytest"]
+
+[project.scripts]
+dosrip = "dosrip.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["dosrip*"]
