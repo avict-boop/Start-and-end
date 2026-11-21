@@ -21,6 +21,7 @@ th{color:var(--muted);font-weight:500}a{color:var(--accent)}audio{width:100%;max
 code{font-size:13px}.exe{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 14px;margin-bottom:12px}
 .exe h3{margin:0 0 8px;font-size:16px}.exe dl{display:grid;grid-template-columns:max-content 1fr;gap:2px 14px;margin:0;font-size:14px}
 .exe dt{color:var(--muted)}.exe dd{margin:0}
+button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:8px 16px;font-size:14px;cursor:pointer}
 """
 
 

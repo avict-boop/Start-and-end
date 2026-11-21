@@ -98,7 +98,7 @@ def test_web_upload(tmp_path):
     from dosrip.web import create_app
 
     client = create_app(tmp_path).test_client()
-    assert "Восстановить" in client.get("/").get_data(as_text=True)
+    assert "Перетащите сюда zip" in client.get("/").get_data(as_text=True)
     resp = client.post("/upload", data={"game": (io.BytesIO(game_zip()), "mygame.zip")},
                        content_type="multipart/form-data")
     assert resp.status_code == 302
@@ -108,3 +108,27 @@ def test_web_upload(tmp_path):
     job = resp.headers["Location"].split("/")[2]
     dl = client.get(f"/job/{job}/download")
     assert zipfile.ZipFile(io.BytesIO(dl.data)).namelist()
+
+
+def test_desktop_mode(tmp_path):
+    from dosrip.web import create_app
+
+    client = create_app(tmp_path, desktop=True).test_client()
+    resp = client.post("/upload", data={"game": (io.BytesIO(game_zip()), "My Game.zip")},
+                       content_type="multipart/form-data")
+    assert resp.status_code == 302
+    job = resp.headers["Location"].split("/")[2]
+    assert job.startswith("My_Game-")
+    assert (tmp_path / job / "result" / "report.html").exists()
+    assert not (tmp_path / job / "game.zip").exists()  # загруженный zip не хранится
+    html = client.get(resp.headers["Location"]).get_data(as_text=True)
+    assert "Показать в Finder" in html
+    assert client.post(f"/job/{job}/reveal").status_code == 204
+    assert job in client.get("/").get_data(as_text=True)  # в списке «Недавние»
+    assert client.get("/job/..%2F..%2Fetc/report.html").status_code == 404
+
+
+def test_desktop_selftest():
+    from dosrip.desktop import selftest
+
+    assert selftest() == 0

@@ -5,7 +5,20 @@
 Загружаете zip со всеми файлами игры, получаете папку (или zip) с извлечённой графикой, звуком,
 музыкой, распакованным и дизассемблированным кодом и HTML-отчётом.
 
-### Установка
+### Приложение для macOS (Apple Silicon)
+
+Готовый `dosrip-<версия>-arm64.dmg` собирается автоматически в GitHub Actions на Mac с M-процессором
+(вкладка **Actions** → «macOS app (Apple Silicon)» → артефакт `dosrip-macos-arm64`; для тегов `v*` — в Releases).
+
+1. Откройте `.dmg` и перетащите **dosrip** в «Программы».
+2. Приложение подписано ad-hoc, без сертификата Apple Developer, поэтому при первом запуске macOS его заблокирует.
+   Откройте «Системные настройки → Конфиденциальность и безопасность» и нажмите «Всё равно открыть».
+   Можно и через терминал: `xattr -dr com.apple.quarantine /Applications/dosrip.app`.
+3. Перетащите zip с игрой в окно. Результаты сохраняются в `~/Documents/dosrip/`, кнопка «Показать в Finder» открывает папку.
+
+Собрать вручную на Mac с Apple Silicon: `pip install -e ".[mac]" pyinstaller && ./packaging/macos/build.sh`.
+
+### Установка (Python, любая ОС)
 
 ```bash
 pip install -e ".[web]"

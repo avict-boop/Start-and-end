@@ -12,9 +12,11 @@ dependencies = ["pillow>=9", "capstone>=5", "unicorn>=2"]
 [project.optional-dependencies]
 web = ["flask>=2"]
 test = ["pytest"]
+mac = ["pywebview>=5", "flask>=2"]
 
 [project.scripts]
 dosrip = "dosrip.cli:main"
+dosrip-app = "dosrip.desktop:main"
 
 [tool.setuptools.packages.find]
 include = ["dosrip*"]
