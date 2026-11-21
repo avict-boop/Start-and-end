@@ -1,0 +1,511 @@
+"""Проверка моделей и грубая оценка стоимости заседания до запуска."""
+from __future__ import annotations
+
+import difflib
+from dataclasses import dataclass, field
+from typing import Any
+
+from .config import CouncilConfig, Mode
+
+# Как считается оценка.
+# Вход каждого запроса = инструкции этапа + вопрос (уточнённый и исходный) + вложения + то, что модель читает
+# на этом этапе: на критике, доработке, голосовании и итоге — ВСЕ чужие варианты целиком. Поэтому главное,
+# от чего зависит цена, — длина вариантов. Её программа берёт из ваших прошлых заседаний (сколько токенов модели
+# реально пишут на каждом этапе, включая продолжения длинных ответов, повторы и скрытые рассуждения);
+# если истории нет — значения по умолчанию ниже.
+INSTR = {"framing": 500, "proposal": 800, "critique": 1100, "revision": 1400, "vote": 700, "verdict": 1400,
+         "factcheck": 700, "describe": 500, "arbitration": 900}
+DEFAULT_OUT = {"framing": 300, "proposal": 4000, "critique": 350, "revision": 4500, "vote": 500,
+               "verdict": 5000, "factcheck": 900, "arbitration": 3000}   # critique — на ОДИН оцениваемый вариант
+FEEDBACK_PER_REVIEW = 250   # отзыв одного рецензента на доработке
+NOTES_PER_PROPOSAL = 150    # сводка критики для председателя
+FACT_CHECKER = "факт-чек"  # как в session.FACT_CHECKER
+HIGH_FACTOR = 2.5           # верхняя граница без истории
+HIGH_FACTOR_LEARNED = 1.6   # верхняя граница, когда длины взяты из прошлых заседаний
+ATTACHMENT_STAGES = {"framing", "proposal", "critique", "revision", "verdict"}  # как в session.Council
+VOTE_DOC_CHARS = 20_000  # как Council.VOTE_DOC_CHARS
+
+
+@dataclass
+class Price:
+    prompt: float  # $ за токен
+    completion: float
+    request: float = 0.0  # $ за запрос (у моделей с поиском, например Perplexity)
+
+
+@dataclass
+class MemberEstimate:
+    name: str
+    model: str
+    calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost: float | None = 0.0  # None — цена неизвестна
+
+
+@dataclass
+class Estimate:
+    members: list[MemberEstimate] = field(default_factory=list)
+    learned_from: int = 0          # по скольким прошлым заседаниям взяты длины ответов
+    lengths: dict[str, int] = field(default_factory=dict)
+    question_tokens: int = 0
+
+    @property
+    def low(self) -> float:
+        return sum(m.cost or 0 for m in self.members)
+
+    @property
+    def high(self) -> float:
+        return self.low * (HIGH_FACTOR_LEARNED if self.learned_from >= 3 else HIGH_FACTOR)
+
+    @property
+    def basis(self) -> str:
+        """Пояснение, на чём основана оценка."""
+        src = (f"длина ответов — по {self.learned_from} последним заседаниям" if self.learned_from
+               else "длина ответов — по умолчанию (истории заседаний пока нет)")
+        def n(x: int) -> str:
+            return f"{x:,}".replace(",", " ")
+        return (f"{src}: вариант ≈ {n(self.lengths.get('proposal', 0))} ток., после доработки ≈ "
+                f"{n(self.lengths.get('revision', 0))}, итог ≈ {n(self.lengths.get('verdict', 0))}; "
+                f"вопрос ≈ {n(self.question_tokens)} ток. в каждом запросе")
+
+    @property
+    def calls(self) -> int:
+        return sum(m.calls for m in self.members)
+
+
+def parse_pricing(models: list[dict[str, Any]]) -> dict[str, Price]:
+    out = {}
+    for m in models:
+        pr = m.get("pricing") or {}
+        try:
+            out[m["id"]] = Price(float(pr.get("prompt") or 0), float(pr.get("completion") or 0),
+                                 float(pr.get("request") or 0))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def unknown_models(cfg: CouncilConfig, known: set[str]) -> dict[str, list[str]]:
+    """Модели из конфига, которых нет на OpenRouter, с похожими вариантами названий."""
+    result = {}
+    for m in cfg.active_members:
+        if m.model not in known:
+            result[m.model] = difflib.get_close_matches(m.model, sorted(known), n=3, cutoff=0.5)
+    return result
+
+
+def plan_calls(
+    cfg: CouncilConfig,
+    mode: Mode,
+    rounds: int,
+    n_options: int | None,
+    has_criteria: bool,
+) -> dict[str, list[tuple[str, int]]]:
+    """Сколько вызовов каждого этапа сделает каждый участник: name -> [(stage, n_proposals)]."""
+    members = [m.name for m in cfg.active_members]
+    # председатель без своего варианта, если без него хватает участников для кворума (как в session.Council)
+    judge = not n_options and not cfg.chair_proposes and len(members) - 1 >= cfg.min_quorum
+    proposers = [m for m in members if not (judge and m == cfg.chair)]
+    n = n_options or len(proposers)
+    own = 0 if n_options else 1  # своего варианта участник не оценивает
+    critique_rounds = 0 if mode == "quick" else (1 if mode in ("evaluate", "research", "creative") else rounds)
+    plan: dict[str, list[tuple[str, int]]] = {name: [] for name in members}
+    if not has_criteria:
+        plan[cfg.chair].append(("framing", 0))
+    for name in members:
+        mine = own if name in proposers else 0
+        if not n_options and name in proposers:
+            plan[name].append(("proposal", 0))
+        for _ in range(critique_rounds):
+            plan[name].append(("critique", n - mine))
+            if mode in ("debate", "research", "creative") and name in proposers:
+                plan[name].append(("revision", n - mine))
+        plan[name].append(("vote", n - mine))
+    plan[cfg.chair].append(("verdict", n))
+    if mode == "research":  # вместо проверки лидеров — арбитраж доказательств по утверждениям всех вариантов
+        if cfg.research.arbitration:
+            chunks = -(-cfg.research.arbitration_claims // 5)  # пачки по 5 утверждений (research.ARBITRATION_BATCH)
+            rc = cfg.research
+            extra = -(-rc.recheck_unclear // 5) + -(-rc.post_revision_claims // 5)  # второй поиск и новые после доработки
+            plan[FACT_CHECKER] = [("arbitration", 5)] * (rc.missions * chunks + extra)
+    elif cfg.fact_check.enabled and mode != "creative":  # в «Креативе» проверки фактов нет
+        plan[FACT_CHECKER] = [("factcheck", 1)] * min(cfg.fact_check.top, n)
+    return plan
+
+
+def estimate(
+    cfg: CouncilConfig,
+    pricing: dict[str, Price],
+    *,
+    mode: Mode,
+    rounds: int,
+    n_options: int | None = None,
+    has_criteria: bool = False,
+    doc_tokens: int = 0,
+    images: int = 0,
+    vision: dict[str, bool | None] | None = None,
+    question_chars: int = 0,
+    options_chars: int = 0,
+    lengths: dict[str, Any] | None = None,
+    objects: int = 0,
+) -> Estimate:
+    """doc_tokens/images — объём вложений: они добавляются к запросам этапов, где модели видят материалы.
+    question_chars — длина вопроса; options_chars — суммарная длина вариантов пользователя (режим «Оценка»);
+    lengths — длины ответов по этапам из прошлых заседаний (learn_lengths), иначе значения по умолчанию."""
+    from .attachments import IMAGE_TOKENS
+
+    if mode == "selection":
+        return estimate_selection(cfg, pricing, question_chars=question_chars, doc_tokens=doc_tokens, objects=objects,
+                                  lengths=lengths)
+    learned = dict(lengths or {})
+    defaults = dict(DEFAULT_OUT)
+    if cfg.compact_proposals:
+        # компактные варианты: ~2,2 токена на слово по-русски (вместе с обоснованием, плюсами и рисками)
+        defaults["proposal"] = int(cfg.compact_words * 2.2) + 400
+        defaults["revision"] = int(cfg.compact_words * 2.2) + 700
+    out = {k: int(learned.get(k) or v) for k, v in defaults.items()}
+    if mode == "research" and cfg.research.max_words != 1400:  # длина варианта задана иначе, чем по умолчанию
+        scale = (cfg.research.max_words or 3000) / 1400  # без ограничения — считаем как ~3000 слов
+        for k in ("proposal", "revision"):
+            out[k] = int(out[k] * scale)
+    est = Estimate(learned_from=int(learned.get("sessions") or 0), lengths=out)
+    q = int(question_chars / 3 * 1.3)  # уточнённый вопрос + исходный дословно
+    est.question_tokens = q
+    plan = plan_calls(cfg, mode, rounds, n_options, has_criteria)
+    opt_len = int(options_chars / 3 / n_options) + 100 if n_options and options_chars else out["proposal"]
+    first_len = opt_len if n_options else out["proposal"]           # вариант до доработки
+    final_len = out["revision"] if mode in ("debate", "research", "creative") else first_len  # вариант, который читают голосующие и председатель
+    small_docs = 0 < doc_tokens * 3 <= VOTE_DOC_CHARS
+
+    def call_tokens(stage: str, n: int, att: int, critique_round: int) -> tuple[int, int]:
+        cur = first_len if critique_round == 0 else out["revision"]  # на втором раунде критикуют доработанные
+        base = INSTR[stage] + q
+        if stage == "framing":
+            return base + att, out["framing"]
+        if stage == "proposal":
+            return base + att, out["proposal"]
+        if stage == "critique":
+            return base + n * cur + att, out["critique"] * n
+        if stage == "revision":
+            return base + cur + n * FEEDBACK_PER_REVIEW + n * cur + att, out["revision"]
+        if stage == "vote":
+            return base + n * final_len + (doc_tokens if small_docs else 0), out["vote"]
+        if stage == "verdict":
+            return base + n * final_len + n * NOTES_PER_PROPOSAL + att, out["verdict"]
+        return base, out.get(stage, 500)
+    vision = vision or {}
+    blind = [m for m in cfg.active_members if vision.get(m.model) is False]
+    describer = None
+    if images and blind:
+        seers = [m.name for m in cfg.active_members if vision.get(m.model) is not False]
+        describer = cfg.chair if cfg.chair in seers else (seers[0] if seers else None)
+    for member in cfg.active_members:
+        me = MemberEstimate(member.name, member.model)
+        sees = vision.get(member.model) is not False
+        att = doc_tokens + (images * IMAGE_TOKENS if sees else images * 350)  # «незрячим» — описание текстом
+        rounds_seen = 0
+        searched = 0  # поиск у автора: каждый шаг поиска заново отправляет запрос — вход растёт в разы
+        for stage, n in plan[member.name]:
+            me.calls += 1
+            inp, outp = call_tokens(stage, n, att if stage in ATTACHMENT_STAGES else 0, rounds_seen)
+            if stage == "critique":
+                rounds_seen += 1
+            if member.web_search and (stage == "proposal" or (stage == "revision" and (
+                    mode != "research" or cfg.research.revision_search))):
+                uses = 10 if cfg.search_unlimited else cfg.search_uses
+                inp = int(inp * (1 + uses / 2) + uses * cfg.search_results * 700)  # ≈700 токенов на результат
+                searched += uses * cfg.search_results
+            me.prompt_tokens += inp
+            me.completion_tokens += outp  # длинные ответы продолжаются, поэтому лимит длины их не обрезает
+        if member.name == describer:
+            me.calls += 1
+            me.prompt_tokens += 500 + images * IMAGE_TOKENS
+            me.completion_tokens += 400 * images
+        price = pricing.get(member.model)
+        me.cost = (
+            me.prompt_tokens * price.prompt + me.completion_tokens * price.completion + searched * 0.004
+            if price else None
+        )
+        est.members.append(me)
+    if FACT_CHECKER in plan:
+        fc = cfg.fact_check
+        me = MemberEstimate(FACT_CHECKER, fc.model)
+        for stage, n in plan[FACT_CHECKER]:
+            me.calls += 1
+            if stage == "arbitration":  # утверждения всех вариантов, ответ с источниками
+                me.prompt_tokens += INSTR["arbitration"] + q + n * 80
+                me.completion_tokens += out.get("arbitration", 3000)
+            else:
+                me.prompt_tokens += INSTR["factcheck"] + q + final_len
+                me.completion_tokens += min(out["factcheck"], fc.max_tokens)
+        price = pricing.get(fc.model)
+        me.cost = (me.prompt_tokens * price.prompt + me.completion_tokens * price.completion + me.calls * price.request
+                   if price else None)
+        est.members.append(me)
+    return est
+
+
+def estimate_selection(cfg: CouncilConfig, pricing: dict[str, Price], *, question_chars: int = 0, doc_tokens: int = 0,
+                       objects: int = 0, lengths: dict[str, Any] | None = None) -> Estimate:
+    """«Отбор»: поиск кандидатов и отсев (модель поиска), по объекту — поиск источников и две модели по тексту
+    страниц, спорное — несколько участников, рамка и вывод — председатель. Число кандидатов — оценка."""
+    sc = cfg.selection
+    start = sc.start if sc.start != "auto" else ("check" if objects >= 3 else "find")
+    q = int(question_chars / 3) + doc_tokens
+    if start == "check":
+        cands, deep = objects, min(objects, sc.max_deep or objects)
+    else:
+        cands = min(sc.max_candidates or 10**6, int(sc.angles * sc.per_angle * 0.5) + objects)
+        deep = min(sc.shortlist or sc.max_deep or cands, max(objects, int(cands * 0.5)))
+    est = Estimate(learned_from=int((lengths or {}).get("sessions") or 0),
+                   lengths={"proposal": 0, "revision": 0, "verdict": 1500}, question_tokens=q)
+    members = cfg.active_members
+    chair = cfg.member(cfg.chair)
+
+    def price_of(model: str) -> Price | None:
+        return pricing.get(model)
+
+    def cheap_key(m: Any) -> float:
+        p = price_of(m.model)
+        return (p.prompt * 4 + p.completion) if p else 1e9
+
+    named = [m for n in sc.fillers for m in members if m.name == n][:2]
+    pool = sorted([m for m in members if m.name != chair.name and m not in named], key=lambda m: (cheap_key(m), members.index(m)))
+    fillers = (named + pool)[:2]
+    judges = ([chair] + [m for m in members if m.name != chair.name and m not in fillers]
+              + [m for m in members if m in fillers and m.name != chair.name])[:sc.judges]
+    disputes = max(1, int(deep * 0.25)) if deep else 0  # часть споров (документ против сайта) решает программа
+    tokens: dict[str, list[int]] = {}
+    fees: dict[str, float] = {}
+
+    def add(m: Any, calls: int, inp: int, out: int) -> None:
+        t = tokens.setdefault(m.name, [0, 0, 0])
+        t[0] += calls
+        t[1] += calls * inp
+        t[2] += calls * out
+    add(chair, 1, 2500 + q, 2500)                       # рамка
+    # каждая найденная страница идёт модели на вход: ≈2500 токенов на результат поиска (по реальным заседаниям)
+    found_tokens = sc.search_uses * sc.search_results * 2500
+    searches = sc.angles + (2 if sc.rounds > 1 else 0)  # направлений с учётом второго круга
+    if start != "check" and sc.discover_by == "all":   # поиск кандидатов: по discover_models участников на направление
+        k = len(members) if not sc.discover_models else min(len(members), sc.discover_models)
+        per = searches * k / max(1, len(members))
+        for m in members:
+            fees[m.name] = max(1, round(per)) * sc.search_uses * sc.search_results * 0.004  # плата за результаты поиска
+            add(m, max(1, round(per)), 3000 + min(q, 3000) + found_tokens,
+                2500 + (4000 if sc.search_reasoning in ("medium", "high", "default") else 1500))
+    add(chair, 1, 4000 + deep * 350, 1500)              # вывод
+    sites_row = None
+    if start != "check" and sc.screen and sc.screen_by == "pages" and sc.discover_by == "scouts":
+        # поиск официальных сайтов у «не выяснено» без своего сайта: Perplexity Sonar, пачки по 5 (найденное во
+        # вход не идёт — платится короткий запрос и плата за поиск)
+        p2 = price_of("perplexity/sonar") or price_of(sc.search_model or cfg.fact_check.model)
+        calls2 = -(-min(200, int(cands * 0.4)) // 5)
+        inp2, out2 = 900, 500
+        sites_row = MemberEstimate("поиск сайтов", "perplexity/sonar", calls2, calls2 * inp2, calls2 * out2,
+                                   (calls2 * (inp2 * p2.prompt + out2 * p2.completion + p2.request)) if p2 else None)
+    expert_rows: list[MemberEstimate] = []
+    if start != "check" and sc.screen and sc.expert:  # эксперты по памяти: пачки по 80 названий
+        e_calls, e_in, e_out = -(-cands // 80), 2500 + 80 * 45, 80 * 30 + 2000
+        for mid in sc.experts:
+            mem = next((m for m in members if m.model == mid), None)
+            if mem is not None:
+                add(mem, e_calls, e_in, e_out)
+                continue
+            pe = price_of(mid)
+            expert_rows.append(MemberEstimate(f"эксперт {mid.split('/')[-1]}", mid, e_calls, e_calls * e_in,
+                                              e_calls * e_out,
+                                              e_calls * (e_in * pe.prompt + e_out * pe.completion) if pe else None))
+        if not sc.experts:
+            ex = next((m for m in members if m.name == sc.expert_model), None) or chair
+            add(ex, e_calls, e_in, e_out)
+    if start != "check" and sc.screen and sc.screen_by == "pages" and fillers:  # отсев по скачанным страницам
+        add(fillers[0], -(-cands // sc.screen_batch), 1500 + sc.screen_batch * sc.screen_chars // 3, 400 * sc.screen_batch)
+    page_in = int(sc.object_chars // 3 * 0.8) + 1800     # страницы без повторов (меню, подвалы) — примерно −20%
+    for i, m in enumerate(fillers):                      # второе прочтение — примерно у 60% объектов («где нужно»)
+        add(m, deep if i == 0 or sc.second_read == "always" else max(1, round(deep * 0.6)), page_in, 1500)
+    need = len(judges) // 2 + 1 if sc.judges_on_demand and len(judges) > 2 else len(judges)
+    for i, m in enumerate(judges):                     # спорное: остальные судьи — только где первые разошлись (~40%)
+        add(m, disputes if i < need else max(1, round(disputes * 0.4)), 3500, 600)
+    out = ([sites_row] if sites_row else []) + expert_rows
+    for m in members:
+        if m.name not in tokens:
+            continue
+        calls, inp, outp = tokens[m.name]
+        p = price_of(m.model)
+        out.append(MemberEstimate(m.name, m.model, calls, inp, outp,
+                                  (inp * p.prompt + outp * p.completion + fees.get(m.name, 0.0)) if p else None))
+    search_model = sc.search_model or cfg.fact_check.model
+    if start != "check" and sc.lists:  # готовые списки: читает дешёвая модель, кусками по 30 тыс. знаков (≈ 3 на список)
+        reader_m = min(members, key=cheap_key) if members else None
+        rp = price_of(reader_m.model) if reader_m else None
+        chunks = sc.lists * min(7, -(-sc.list_chars // 12_000))  # части по 12 тыс. знаков (≈4,5 тыс. токенов)
+        out.append(MemberEstimate("чтение списков", reader_m.model if reader_m else "", chunks, chunks * 5_000,
+                                  chunks * 3000, (chunks * (5_000 * rp.prompt + 3000 * rp.completion)) if rp else None))
+    if start != "check" and sc.discover_by == "scouts":  # разведчики: младшие модели компаний и вторая Perplexity
+        from .scouts import PROVIDERS, perplexity_pair, pick_scouts, scout_name
+        pseudo = [{"id": k, "pricing": {"prompt": v.prompt, "completion": v.completion}} for k, v in pricing.items()]
+        ids = list(sc.scouts) or list(pick_scouts(pseudo, tuple(p for p in PROVIDERS if p not in sc.scouts_skip)).values())
+        ids = [i for i in dict.fromkeys(perplexity_pair(search_model, pseudo) + ids) if i != search_model]
+        for mid in ids:
+            p = price_of(mid)
+            ppx = mid.startswith("perplexity/")
+            inp = 2000 + min(q, 3000) + (0 if ppx else found_tokens)  # у Perplexity найденное во вход не идёт
+            outp = 2500 + (0 if ppx else 1500)
+            fee = 0.0 if ppx else searches * sc.search_uses * sc.search_results * 0.004
+            out.append(MemberEstimate(scout_name(mid), mid, searches, searches * inp, searches * outp,
+                                      (searches * (inp * p.prompt + outp * p.completion + p.request) + fee) if p else None))
+    screen_search = sc.screen and sc.screen_by == "search"
+    s_calls = (0 if start == "check" else sc.angles + (2 if sc.rounds > 1 else 0)
+               + (-(-cands // sc.screen_batch) if screen_search else 0)
+               ) + deep
+    s_in = s_calls * (2000 + min(q, 3000))  # у модели поиска (Perplexity) найденное не идёт во вход — поиск встроен
+    s_out = s_calls * 2200
+    p = price_of(search_model)
+    out.append(MemberEstimate(FACT_CHECKER, search_model, s_calls, s_in, s_out,
+                              (s_in * p.prompt + s_out * p.completion + s_calls * p.request) if p else None))
+    est.members = out
+    return est
+
+
+# Запасной вариант, если каталог OpenRouter недоступен: известные модели без зрения
+_BLIND_HINTS = ("deepseek", "kimi-k2", "qwen3-max", "mistral-large")
+
+
+def vision_map(cfg: CouncilConfig, models: list[dict[str, Any]] | None) -> dict[str, bool | None]:
+    """Модель -> умеет ли принимать картинки (по каталогу OpenRouter; без каталога — по известным названиям)."""
+    from .attachments import supports_images
+
+    info = {m.get("id"): m for m in (models or [])}
+    out: dict[str, bool | None] = {}
+    for m in cfg.active_members:
+        v = supports_images(info.get(m.model))
+        if v is None and any(h in m.model for h in _BLIND_HINTS):
+            v = False
+        out[m.model] = v
+    return out
+
+
+class ModelCatalog:
+    """Кэшированный список моделей OpenRouter (для проверки id и цен)."""
+
+    def __init__(self, ttl: float = 600) -> None:
+        self.ttl = ttl
+        self._ts = 0.0
+        self._models: list[dict[str, Any]] | None = None
+
+    async def get(self) -> list[dict[str, Any]] | None:
+        import logging
+        import os
+        import time
+
+        from .client import OpenRouterClient
+
+        if self._models is not None and time.time() - self._ts < self.ttl:
+            return self._models
+        client = OpenRouterClient(os.environ.get("OPENROUTER_API_KEY", ""), timeout=20)
+        try:
+            models = await client.list_models()
+        except Exception as e:  # noqa: BLE001 — проверка необязательна
+            logging.getLogger("council").warning("не удалось получить список моделей: %r", e)
+            return None
+        finally:
+            await client.aclose()
+        self._models, self._ts = models, time.time()
+        return models
+
+
+# ------------------------------------------------------------------ длины ответов по прошлым заседаниям
+
+_LEARN_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+LEARN_LIMIT_STAGES = ("proposal", "revision", "verdict")  # где модель пишет длинно и упирается в предел
+
+
+def max_out_map(models: list[dict[str, Any]] | None) -> dict[str, int]:
+    """Наибольшая длина ответа каждой модели по каталогу OpenRouter (выше поднимать предел нельзя)."""
+    out = {}
+    for m in models or []:
+        v = (m.get("top_provider") or {}).get("max_completion_tokens")
+        if m.get("id") and isinstance(v, (int, float)) and v > 0:
+            out[m["id"]] = int(v)
+    return out
+
+
+def learn_lengths(runs_dir: str | Any, limit: int = 30, *, compact: bool = False) -> dict[str, Any]:
+    """Сколько токенов модели реально пишут на каждом этапе — по стенограммам последних заседаний.
+
+    Для каждого участника и этапа суммируются выходные токены ВСЕХ попыток (продолжения длинных ответов,
+    повторы, скрытые рассуждения) и делятся на число принятых ответов. Критика — на один оцениваемый вариант.
+    Берётся медиана по заседаниям. Возвращает {"proposal": …, "revision": …, …, "sessions": N, "recent": [...]}.
+    compact — учитывать только заседания с компактными вариантами (или только без них): длины там разные.
+    """
+    import json
+    from pathlib import Path
+    from statistics import median
+
+    d = Path(runs_dir)
+    files = sorted((p for p in d.glob("*.json") if not p.name.endswith(".events.json")), reverse=True)[:limit] \
+        if d.is_dir() else []
+    stamp = max((p.stat().st_mtime for p in files), default=0.0)
+    key = (str(d.resolve()) if d.exists() else str(d)) + f"|compact={compact}"
+    hit = _LEARN_CACHE.get(key)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    per_stage: dict[str, list[float]] = {}
+    by_model: dict[str, dict[str, int]] = {}
+    recent = []
+    used = 0
+    for p in files:
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        tr = data.get("transcript") or []
+        if not tr or bool((data.get("request") or {}).get("compact_proposals")) != compact:
+            continue
+        groups: dict[tuple[str, str], dict[str, float]] = {}
+        model_of: dict[str, str] = {}
+        for e in tr:
+            if e.get("model"):
+                model_of[e.get("member", "")] = str(e["model"])
+            g = groups.setdefault((e.get("member", ""), e.get("stage", "")), {"out": 0.0, "ok": 0, "labels": 0})
+            toks = e.get("tokens") or [0, 0]
+            g["out"] += float(toks[1] if len(toks) > 1 else 0)
+            if "parsed" in e:
+                g["ok"] += 1
+                if e.get("stage") == "critique":
+                    g["labels"] += len((e.get("parsed") or {}).get("reviews") or [])
+        session_vals: dict[str, list[float]] = {}
+        for (who, stage), g in groups.items():
+            if not g["ok"] or not g["out"]:
+                continue
+            if stage in LEARN_LIMIT_STAGES and model_of.get(who):  # сколько модель пишет за ответ (с продолжениями)
+                per_model = by_model.setdefault(model_of[who], {})
+                per_model[stage] = max(per_model.get(stage, 0), int(g["out"] / g["ok"]))
+            val = g["out"] / (g["labels"] if stage == "critique" and g["labels"] else g["ok"])
+            session_vals.setdefault(stage, []).append(val)
+        for stage, vals in session_vals.items():
+            per_stage.setdefault(stage, []).append(median(vals))
+        used += 1
+        recent.append({"cost": float(data.get("total_cost_usd") or 0), "mode": data.get("mode", ""),
+                       "members": len(data.get("stats") or {}), "duration": float(data.get("duration_s") or 0)})
+    out: dict[str, Any] = {stage: int(median(v)) for stage, v in per_stage.items() if v and stage in DEFAULT_OUT}
+    out["sessions"] = used
+    out["recent"] = recent
+    out["by_model"] = by_model
+    _LEARN_CACHE[key] = (stamp, out)
+    return out
+
+
+def similar_actual(lengths: dict[str, Any] | None, mode: str, members: int) -> dict[str, Any] | None:
+    """Сколько реально стоили последние похожие заседания (тот же режим, похожее число участников)."""
+    rec = [r for r in (lengths or {}).get("recent", []) if r["mode"] == mode and abs(r["members"] - members) <= 1
+           and r["cost"] > 0]
+    if not rec:
+        return None
+    costs = sorted(r["cost"] for r in rec)
+    return {"count": len(costs), "min": round(costs[0], 4), "max": round(costs[-1], 4),
+            "avg": round(sum(costs) / len(costs), 4)}

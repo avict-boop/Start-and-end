@@ -1,0 +1,151 @@
+{
+ "question": "Как назвать кофейню у университета?",
+ "refined_question": "",
+ "criteria": [
+  "Запоминаемость",
+  "Связь с местом"
+ ],
+ "mode": "quick",
+ "authors": {
+  "A": "claude",
+  "B": "chatgpt",
+  "C": "gemini"
+ },
+ "proposals": {
+  "A": {
+   "title": "«Зерно и книга»",
+   "summary": "Название **«Зерно и книга»** — про кофе и учёбу, легко запомнить.",
+   "reasoning": "",
+   "pros": [],
+   "risks": [],
+   "confidence": 0.75
+  },
+  "B": {
+   "title": "«Конспект»",
+   "summary": "**«Конспект»** — студенческое слово, хорошо для вывески.",
+   "reasoning": "",
+   "pros": [],
+   "risks": [],
+   "confidence": 0.75
+  },
+  "C": {
+   "title": "«Перемена»",
+   "summary": "**«Перемена»** — про паузу между парами.",
+   "reasoning": "",
+   "pros": [],
+   "risks": [],
+   "confidence": 0.75
+  }
+ },
+ "critiques": {},
+ "ballots": {
+  "claude": {
+   "ranking": [
+    "B",
+    "C"
+   ],
+   "rationale": "Короче и смешнее."
+  },
+  "chatgpt": {
+   "ranking": [
+    "C",
+    "A"
+   ],
+   "rationale": "Тёплое слово."
+  },
+  "gemini": {
+   "ranking": [
+    "B",
+    "A"
+   ],
+   "rationale": "Сразу понятно, для кого."
+  }
+ },
+ "tally": [
+  {
+   "label": "B",
+   "borda": 0.67,
+   "avg_score": null,
+   "first_places": 2,
+   "ballots": 2,
+   "pairwise": 1.0,
+   "tie_break": "",
+   "schulze": 2
+  },
+  {
+   "label": "C",
+   "borda": 0.5,
+   "avg_score": null,
+   "first_places": 1,
+   "ballots": 2,
+   "pairwise": 0.0,
+   "tie_break": "",
+   "schulze": 1
+  },
+  {
+   "label": "A",
+   "borda": 0.0,
+   "avg_score": null,
+   "first_places": 0,
+   "ballots": 2,
+   "pairwise": -1.0,
+   "tie_break": "",
+   "schulze": 0
+  }
+ ],
+ "verdict": {
+  "winner": "B",
+  "final_answer": "Назвать кофейню **«Конспект»**. Короткое, студенческое, хорошо читается на вывеске.",
+  "why": "Два из трёх бюллетеней поставили его первым.",
+  "dissent": [],
+  "risks": [
+   "Проверить, свободен ли товарный знак."
+  ]
+ },
+ "stats": {
+  "claude": {
+   "calls": 2,
+   "prompt_tokens": 18000,
+   "completion_tokens": 5200,
+   "cost": 0.0028,
+   "failures": [],
+   "cached_tokens": 6000
+  },
+  "chatgpt": {
+   "calls": 2,
+   "prompt_tokens": 19500,
+   "completion_tokens": 5600,
+   "cost": 0.0034,
+   "failures": [],
+   "cached_tokens": 6300
+  },
+  "gemini": {
+   "calls": 2,
+   "prompt_tokens": 21000,
+   "completion_tokens": 6000,
+   "cost": 0.004,
+   "failures": [],
+   "cached_tokens": 6600
+  }
+ },
+ "total_cost_usd": 0.0184,
+ "started_at": "2026-11-09T09:12:00+00:00",
+ "duration_s": 41.0,
+ "attachments": [],
+ "request": {
+  "chair": "claude"
+ },
+ "agreement": {
+  "tau": 0.33,
+  "level": "medium",
+  "pairs": 3,
+  "ballots": 3
+ },
+ "chair_proposed": true,
+ "coverage": {
+  "min": 1,
+  "max": 2,
+  "options": 3,
+  "ballots": 3
+ }
+}

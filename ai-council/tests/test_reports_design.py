@@ -1,0 +1,194 @@
+"""Новое оформление отчётов: порядок разделов, PDF с тегами и закладками, Word со стилями, Markdown, формулы и ссылки."""
+import io
+import re
+
+import pytest
+from docx import Document
+from docx.oxml.ns import qn
+
+from council.archive import Archive, all_reports
+from council.reports import samples
+from council.reports.docx import render_docx
+from council.reports.html import render_html
+from council.reports.md import demote, render_md
+from council.reports.pdf import PDF_AVAILABLE, render_pdf
+from council.reports.view import View, latex_to_html, md_to_html
+
+
+def test_decision_comes_before_details_and_request_comes_last():
+    v = View(samples.full_debate(), "x")
+    html = render_html(v)
+    order = [html.index(f'id="{a}"') for a in ("verdict", "why", "facts", "voting", "proposals", "critique", "members", "request")]
+    assert order == sorted(order)
+    md = render_md(v)
+    assert md.index("## Решение совета") < md.index("## Голосование") < md.index("## Запрос и условия")
+    assert "Какую CRM выбрать" in v.display_title
+
+
+def test_long_prompt_title_comes_from_framing():
+    d = samples.quick_short()
+    d["question"] = "Ты — эксперт по CRM.\n" + "\n".join(f"Пункт {i}: подробное условие задачи." for i in range(12))
+    d["refined_question"] = "Какую CRM выбрать отделу продаж из 12 человек?"
+    v = View(d, "x")
+    assert v.question_is_prompt and v.display_title == "Какую CRM выбрать отделу продаж из 12 человек?"
+    html = render_html(v, summary=True)
+    assert "Полный текст запроса" in html and html.index('id="verdict"') < html.index('id="request"')
+    assert "Ты — эксперт по CRM." in html  # начало запроса и полный текст в конце — данные не теряются
+
+
+def test_short_question_is_not_repeated_under_title():
+    v = View(samples.full_debate(), "x")
+    html = render_html(v)
+    lead = html.split('<div class="lead">', 1)[1].split("</div></div>", 1)[0]
+    assert "Какую CRM выбрать" not in lead and "Сейчас заявки ведём" in lead
+
+
+def test_latex_and_bare_links():
+    assert latex_to_html(r"x^2 + \frac{a}{b} \le \alpha") == "x<sup>2</sup> + a⁄b ≤ α"
+    h = md_to_html("Цена $215 и $300, формула $x_i^2$, ссылка https://ex.com/a_b?x=1. Код `$a_b$`")
+    assert "$215 и $300" in h and '<span class="math">x<sub>i</sub><sup>2</sup></span>' in h
+    assert '<a href="https://ex.com/a_b?x=1">' in h and "<code>$a_b$</code>" in h
+
+
+def test_markdown_model_headings_are_demoted():
+    assert demote("# Итог\n## План\n```\n# не заголовок\n```", 3) == "### Итог\n#### План\n```\n# не заголовок\n```"
+    md = render_md(View(samples.full_debate(), "x"))
+    assert "\n## Почему amoCRM" not in md and "\n### Почему amoCRM" in md
+
+
+def test_word_is_a_real_document():
+    doc = Document(io.BytesIO(render_docx(View(samples.full_debate(), "x"))))
+    styles = {p.style.name for p in doc.paragraphs}
+    assert {"Title", "Heading 1", "Heading 2", "List Bullet", "List Number"} <= styles
+    assert doc.sections[0].page_width.cm == pytest.approx(21, abs=0.01)  # A4
+    assert doc.core_properties.title and doc.core_properties.language == "ru-RU"
+    body = doc.element.body.xml
+    assert 'TOC \\o "1-2"' in body and "<w:tblHeader/>" in body  # оглавление и повтор шапки таблиц
+    # каждый нумерованный список начинается с 1: у разных списков разные номера списка Word
+    num_ids = {p._p.pPr.numPr.numId.val for p in doc.paragraphs
+               if p.style.name == "List Number" and p._p.pPr is not None and p._p.pPr.numPr is not None}
+    assert len(num_ids) >= 2
+    assert any(t.style.name == "Council Table" for t in doc.tables)
+    pics = doc.element.body.findall(".//" + qn("wp:docPr"))
+    assert pics and all(p.get("descr") for p in pics)  # у картинок есть альтернативный текст
+
+
+@pytest.mark.skipif(not PDF_AVAILABLE, reason="нет WeasyPrint")
+def test_pdf_is_tagged_with_section_bookmarks():
+    from pypdf import PdfReader
+    pdf = PdfReader(io.BytesIO(render_pdf(View(samples.full_debate(), "x"))))
+    root = pdf.trailer["/Root"]
+    assert "/StructTreeRoot" in root and root.get("/Lang") in ("ru", "ru-RU")
+    titles = [o.title for o in pdf.outline if not isinstance(o, list)]
+    assert titles[:4] == ["Решение совета", "Обоснование", "Что взято из других вариантов", "Проверка фактов"]
+    assert "Почему amoCRM" not in str(pdf.outline)  # заголовки из ответа модели — не в закладках
+    assert pdf.metadata.title.startswith("Какую CRM выбрать")
+
+
+def test_all_samples_build_in_every_format(tmp_path):
+    arc = Archive(tmp_path)
+    for name in ("03-nichya-i-sboi", "04-ocenka-variantov-en-tr", "06-utochnenie"):
+        res = arc.build(name, all_reports(), data=samples.SAMPLES[name]())
+        assert not [k for k, x in res.items() if str(x).startswith("ошибка")], res
+    text = (tmp_path / "03-nichya-i-sboi.md").read_text()
+    assert "Ничья за первое место" in text and "Председатель выбрал не лидера" in render_html(View(samples.tie_deviation(), "x"))
+    assert re.search(r"Уточнение к заседанию «Как назвать кофейню", (tmp_path / "06-utochnenie.md").read_text())
+
+
+def test_archive_rebuild_after_version_change_keeps_finished_reports(tmp_path, monkeypatch):
+    import os
+    import time
+
+    from council import archive as A
+    arc = Archive(tmp_path)
+    for name in ("02-bystryi-otvet", "06-utochnenie"):
+        (tmp_path / f"{name}.json").write_text(__import__("json").dumps(samples.SAMPLES[name](), ensure_ascii=False))
+    (tmp_path / A.MARKER).write_text("старая")
+    calls = []
+    monkeypatch.setattr(A, "RENDER", {k: (lambda v, k=k: calls.append(k) or b"x") for k in A.RENDER})
+    assert not arc._fresh("02-bystryi-otvet", "md")
+    built, failed = arc.ensure_all()
+    assert (built, failed) == (2, 0) and len(calls) == 2 * len(all_reports())
+    calls.clear()
+    assert arc.ensure_all() == (0, 0) and not calls  # готовое не пересобирается
+    arc.report("06-utochnenie", "md")
+    assert not calls  # отчёт, собранный в фоне, отдаётся сразу
+    # отчёт старше смены версии — устарел
+    old = time.time() - 3600
+    os.utime(tmp_path / "02-bystryi-otvet.md", (old, old))
+    assert not arc._fresh("02-bystryi-otvet", "md")
+    # пока фоновую пересборку ведёт другой процесс, второй её не начинает
+    with A._ProcessLock(tmp_path / A.LOCK) as got:
+        assert got and Archive(tmp_path).ensure_all(force=True) == (0, 0)
+
+
+def test_isolated_archive_builds_reports_in_a_separate_process(tmp_path):
+    import json
+    (tmp_path / "02-bystryi-otvet.json").write_text(json.dumps(samples.quick_short(), ensure_ascii=False))
+    (tmp_path / ".reports-version").write_text(__import__("council.archive").archive.REPORT_VERSION)
+    arc = Archive(tmp_path, isolate=True)
+    p = arc.report("02-bystryi-otvet", "decision.md")
+    assert p.is_file() and "Решение совета" in p.read_text()
+    assert arc._build("нет-такого", ["md"])["md"].startswith("ошибка")
+
+
+def test_decision_only_report_has_no_question():
+    from council.reports.docx import render_decision_docx
+    from council.reports.md import render_decision_md
+    from council.reports.html import render_decision_html
+    d = samples.full_debate()
+    v = View(d, "x")
+    md = render_decision_md(v)
+    html = render_decision_html(v)
+    doc = Document(io.BytesIO(render_decision_docx(v)))
+    word = "\n".join(p.text for p in doc.paragraphs) + doc.sections[0].header.paragraphs[0].text
+    for text in (md, html, word):
+        assert "Какую CRM выбрать" not in text and "Сейчас заявки ведём" not in text and "Вопрос совету" not in text
+        assert "Решение совета" in text
+    assert "amoCRM" in md and doc.core_properties.title.startswith("Решение совета")
+
+
+def test_ideas_worth_keeping_are_collected_and_decided():
+    from council.schemas import CritiqueSet, IdeaDecision
+    from council.session import collect_ideas, normalize_ideas
+
+    def cs(*reviews):
+        return CritiqueSet(reviews=[{"label": l, "scores": {"x": 5}, "keep": k} for l, k in reviews])
+    crit = {"kimi": cs(("A", ["лендинг", "пилот", "чек-лист", "четвёртая"]), ("B", ["идея лидера"])),
+            "gemini": cs(("A", ["Лендинг!", "скидка"]), ("B", []))}
+    ideas = collect_ideas(crit, exclude={"B"})
+    assert [i["idea"] for i in ideas] == ["Лендинг!", "скидка", "пилот"]  # по кругу от критиков, без повторов, до 3
+    assert ideas[0]["by"] == ["gemini", "kimi"] and [i["id"] for i in ideas] == ["I1", "I2", "I3"]
+    ids = [i["id"] for i in ideas]
+    with pytest.raises(ValueError, match="I3"):
+        normalize_ideas([IdeaDecision(id="I1"), IdeaDecision(id="2", decision="rejected", reason="дорого")], ids, strict=True)
+    with pytest.raises(ValueError, match="reason"):
+        normalize_ideas([IdeaDecision(id=i, decision="rejected") for i in ids], ids, strict=True)
+    got = normalize_ideas([IdeaDecision(id="I1", decision="Включена")], ids, strict=False)
+    assert [d.decision for d in got] == ["included", "not_addressed", "not_addressed"]
+
+
+def test_ideas_section_in_reports():
+    v = View(samples.full_debate(), "x")
+    html = render_html(v)
+    assert html.index('id="why"') < html.index('id="ideas"') < html.index('id="facts"')
+    assert "Что взято из других вариантов" in render_html(v, summary=True)
+    assert "4 идеи: включено 2, отклонено 1, не рассмотрено 1" in html
+    md = render_md(v)
+    assert "## Что взято из других вариантов" in md and "| ✗ Отклонена |" in md
+    doc = Document(io.BytesIO(render_docx(v)))
+    assert any(p.text == "Что взято из других вариантов" for p in doc.paragraphs)
+    assert "Что взято" not in render_md(v, decision=True)
+
+
+def test_mock_session_records_ideas(tmp_path):
+    import asyncio
+
+    from council.config import load_config
+    from council.mock import MockClient
+    from council.session import Council
+    from pathlib import Path
+    cfg = load_config(Path(__file__).parent.parent / "config.yaml")
+    res = asyncio.run(Council(cfg, MockClient(delay=0)).run("Как запустить новый продукт?", mode="debate"))
+    assert res.ideas and all(i["decision"] in ("included", "rejected") and i["reason"] for i in res.ideas)
+    assert res.tally[0].label not in {i["label"] for i in res.ideas}  # идеи — из вариантов, не ставших основой решения
