@@ -61,6 +61,7 @@ class Journal:
         # Ответы из стенограммы архивного заседания (для «доделать»): (этап, участник, номер обращения) -> ответ
         self.loose: dict[tuple[str, str, int], dict[str, Any]] = {}
         self.loose_model: dict[tuple[str, str, int], str] = {}  # какая модель дала этот ответ
+        self.loose_objects: dict[tuple[str, str, int], list] = {}  # для какой пачки кандидатов был ответ
         # «Вернуться к этапу»: этапы, ответы которых по номеру обращения не подставляются (вход мог измениться —
         # годится только точное совпадение запроса); забытые этапы спрашиваются заново
         # (Ответы, полученные ПОСЛЕ возврата, снова подставляются и по номеру — иначе после «поиск заново» и
@@ -117,6 +118,8 @@ class Journal:
             k = (e.get("stage", ""), e.get("member", ""))
             n = e["call"] if isinstance(e.get("call"), int) else count.get(k, 0)  # номер обращения, если записан
             self.loose[(*k, n)] = e["parsed"]
+            if isinstance(e.get("objects"), list):  # для какой пачки кандидатов был ответ
+                self.loose_objects[(*k, n)] = e["objects"]
             if e.get("requested"):  # старые записи без неё не сверяем: провайдер пишет id модели по-своему
                 self.loose_model[(*k, n)] = str(e["requested"])
             count[k] = n + 1

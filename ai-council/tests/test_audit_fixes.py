@@ -522,3 +522,47 @@ def test_all_suitable_go_to_shortlist(tmp_path):
     from council.modes import selection as SM
     src = inspect.getsource(SM.run)
     assert "S.suits(e) or e.get(\"near_loc\")" in src and '"limit":' in src
+
+
+def test_batch_answer_replayed_only_for_same_batch(tmp_path):
+    """21.11: при продолжении ответ отсева по номеру обращения подставлялся другой пачке кандидатов — они выходили
+    «модель не ответила». Теперь по номеру — только той же пачке; точное совпадение запроса — как раньше."""
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.session import Council
+    p = tmp_path / "j.jsonl"
+    j = Journal(p)
+    j.entry({"stage": "expert", "member": "a", "call": 0, "objects": ["O1", "O2"], "requested": "m/a",
+             "parsed": {"items": [{"n": 1, "verdict": "yes"}]}})
+    j.entry({"stage": "expert", "member": "a", "call": 1, "requested": "m/a",
+             "parsed": {"items": [{"n": 1, "verdict": "yes"}]}})
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "members": [{"name": n, "model": f"m/{n}"} for n in "ab"]})
+    c = Council(cfg, MockClient(delay=0), journal=Journal(p))
+    m = cfg.member("a")
+    r1 = asyncio.run(c._ask(m, "expert", "Companies:\n1. X\n2. Y", S.Expert, meta={"objects": ["O7", "O8"]}))
+    assert c.replayed == 0                       # другая пачка — спросили заново (демо-клиент)
+    c2 = Council(cfg, MockClient(delay=0), journal=Journal(p))
+    asyncio.run(c2._ask(m, "expert", "Companies:\n1. X\n2. Y", S.Expert, meta={"objects": ["O1", "O2"]}))
+    assert c2.replayed == 1                      # та же пачка — из сохранённого
+
+
+def test_many_spellings_not_foreign_site_majority_and_articles():
+    """21.11: пять написаний BioGrowing с одним сайтом — не «общий сайт выставки»; 均瑤潤盈 = 均瑶润盈; сайт карточки —
+    по большинству находок (у Sirio не чужой сайт); статья на новостном сайте — не сайт компании."""
+    f = [("a", S.Candidate(name="BioGrowing Co., Ltd.", website="https://www.biogrowing.cn/")),
+         ("b", S.Candidate(name="均瑶润盈生物科技（上海）有限公司", website="https://www.biogrowing.cn/")),
+         ("c", S.Candidate(name="均瑤潤盈生物科技（上海）有限公司", website="https://www.biogrowing.cn/")),
+         ("d", S.Candidate(name="BioGrowing", local_name="博瑞生物",
+                           website="http://www.goaheadlines.org/2025/06/14/cphi-hnc-2024-biogrowing-showcases")),
+         ("e", S.Candidate(name="BioGrowing Co., Ltd.", local_name="百合生物科技股份有限公司", website="https://www.made-in-china.com/x")),
+         ("f", S.Candidate(name="Weihai Baihe Biotechnology Co., Ltd.", local_name="百合生物科技股份有限公司", website="http://www.baiheshengwu.com")),
+         ("g", S.Candidate(name="Sirio Pharma Co., Ltd.", website="https://www.siriopharma.com")),
+         ("h", S.Candidate(name="Sirio Pharma Co., Ltd.", website="https://www.siriopharma.com/en")),
+         ("i", S.Candidate(name="sirio pharma co.,ltd", website="https://www.shineway.com.cn/"))]
+    ents = S.merge_candidates(f)
+    bio = [e for e in ents if any("biogrow" in n.lower() or "均瑶" in n for n in e["names"])]
+    assert len(bio) == 1 and "biogrowing.cn" in bio[0]["website"]
+    assert not any("百合生物科技股份有限公司" == n for n in bio[0]["names"]) or all("baihe" not in n.lower() for n in bio[0]["names"])
+    sirio = next(e for e in ents if any("sirio" in n.lower() for n in e["names"]))
+    assert "siriopharma" in sirio["website"]
+    assert S.site_like("https://www.biogrowing.cn/") and not S.site_like("http://x.org/2025/06/14/biogrowing")

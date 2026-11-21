@@ -589,8 +589,8 @@ def trader_name(e: dict[str, Any]) -> str:
 
 # частые традиционные иероглифы → упрощённые: «威海百合生物技術» и «威海百合生物技术», «仙樂» и «仙乐» — одна
 # компания (17.11 обе пары шли отдельными строками)
-_T2S = str.maketrans("術樂業藥醫營養東廣華國際開發興實製劑產廠團億長門龍鳳寶葉臺灣蘇蘭麗陽貿進務體種農質優電網訊華豐慶紅綠為樓團衛連鎮輕鐵銀關圖書協會濟環境飲務貨費資車馬",
-                     "术乐业药医营养东广华国际开发兴实制剂产厂团亿长门龙凤宝叶台湾苏兰丽阳贸进务体种农质优电网讯华丰庆红绿为楼团卫连镇轻铁银关图书协会济环境饮务货费资车马")
+_T2S = str.maketrans("術樂業藥醫營養東廣華國際開發興實製劑產廠團億長門龍鳳寶葉臺灣蘇蘭麗陽貿進務體種農質優電網訊豐慶紅綠為樓衛連鎮輕鐵銀關圖書協會濟環飲貨費資車馬瑤潤鈣鋅鎂維補膠漢達貝嶺聖爾圓陝遼魯雲貴歐匯偉創傑鴻莊齊啟錦參靈瑪堅驗檢測頓碩現時寧萬與應來點線從問號個們對學經機專區縣鄉麥糧魚腸鹽礦純淨潔濱島嶼遠運選適邁鄭鄧劉楊張陳黃趙吳孫錢鄒謝韓馮鍾盧蔣瀋綜結構據統標準層臨範縮擁護療瘋癒醬飼稱穀",
+                     "术乐业药医营养东广华国际开发兴实制剂产厂团亿长门龙凤宝叶台湾苏兰丽阳贸进务体种农质优电网讯丰庆红绿为楼卫连镇轻铁银关图书协会济环饮货费资车马瑶润钙锌镁维补胶汉达贝岭圣尔圆陕辽鲁云贵欧汇伟创杰鸿庄齐启锦参灵玛坚验检测顿硕现时宁万与应来点线从问号个们对学经机专区县乡麦粮鱼肠盐矿纯净洁滨岛屿远运选适迈郑邓刘杨张陈黄赵吴孙钱邹谢韩冯钟卢蒋沈综结构据统标准层临范缩拥护疗疯愈酱饲称谷")
 
 
 def norm_name(s: str) -> str:
@@ -681,6 +681,31 @@ def _sure(x: str) -> str:
 
 # «Hubei Junyao Healthy Beverage (через 均瑶润盈)», «… via its subsidiary …» — это группа, а кандидат — дочерняя
 VIA = re.compile(r"\bчерез\b|\bvia\b|\bthrough\b|по линии|дочерн|subsidiar|通过|旗下", re.I)
+
+
+ARTICLE = re.compile(r"/(?:19|20)\d{2}/\d{1,2}/|/(?:news|article|articles|press|blog|post|posts|story)/|\.s?html?$.*\d{5,}", re.I)
+
+
+def site_like(url: str) -> bool:
+    """Адрес похож на сайт компании, а не на статью: без даты и разделов «news/article/blog» в пути. Статья на
+    чужом сайте («goaheadlines.org/2025/06/14/…biogrowing…») — не сайт компании (21.11 такой «сайт» не дал
+    склеить дубль BioGrowing)."""
+    path = re.sub(r"^https?://[^/]+", "", url or "")
+    return not ARTICLE.search(path)
+
+
+def _major_site(cs: list["Candidate"], foreign: set[str]) -> str:
+    """Свой сайт, указанный в большинстве находок; при равенстве — первый. Площадки и новости — только если своего нет."""
+    own = [c.website for c in cs if site_of(c.website) and not weak_source(c.website) and site_like(c.website)
+           and site_brand(site_of(c.website)) not in foreign]
+    if own:
+        votes: dict[str, int] = {}
+        for w in own:
+            votes[site_brand(site_of(w))] = votes.get(site_brand(site_of(w)), 0) + 1
+        best = max(votes, key=lambda b: (votes[b], -[site_brand(site_of(w)) for w in own].index(b)))
+        # из вариантов адреса этого сайта — самый короткий (главная, а не глубокая страница)
+        return min((w for w in own if site_brand(site_of(w)) == best), key=len)
+    return next((c.website for c in cs if site_of(c.website) and site_brand(site_of(c.website)) not in foreign), "")
 
 
 def display_name(cs: list["Candidate"]) -> str:
@@ -781,26 +806,53 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
     # у кого какой СВОЙ сайт (не площадка, не новость; не «сайт», указанный у трёх и более разных названий): две
     # группы с разными своими сайтами по имени не склеиваются — одна находка с перепутанным названием иначе сшивала
     # две компании (19.11 Perplexity выдал «BioGrowing / 百合生物科技», и BioGrowing склеился с Weihai Baihe)
-    brand_names: dict[str, set[str]] = {}
-    for it in items:
+    # «общий» сайт (выставка, СМИ, реестр) — у трёх и более РАЗНЫХ компаний; разные компании считаем по склейке
+    # названий (без проверки сайтов): «BioGrowing», «均瑶润盈», «均瑤潤盈», «博瑞生物» — написания одной (21.11 из-за
+    # пяти написаний biogrowing.cn сочли сайтом выставки, защита не сработала и BioGrowing снова сшился с Baihe)
+    pre = list(range(len(items)))
+
+    def pfind(i: int) -> int:
+        while pre[i] != i:
+            pre[i] = pre[pre[i]]
+            i = pre[i]
+        return i
+    first: dict[str, int] = {}
+    for i, it in enumerate(items):
+        c = it["c"]
+        for x in [c.name, c.local_name, *c.aliases]:
+            for v in ([x, *[p.strip() for p in x.split(" / ")]] if x and _sure(x) else []):
+                k = norm_name(v)
+                if _name_key_ok(k):
+                    if k in first:
+                        a, b = pfind(i), pfind(first[k])
+                        if a != b:
+                            pre[max(a, b)] = min(a, b)
+                    else:
+                        first[k] = i
+    brand_names: dict[str, set[int]] = {}
+    for i, it in enumerate(items):
         b = site_brand(site_of(it["c"].website) or "")
         if b and not weak_source(it["c"].website):
-            brand_names.setdefault(b, set()).add(norm_name(it["c"].name))
+            brand_names.setdefault(b, set()).add(pfind(i))
     root_sites: dict[int, set[str]] = {}
     for i, it in enumerate(items):
         b = site_brand(site_of(it["c"].website) or "")
-        root_sites[i] = {b} if b and not weak_source(it["c"].website) and len(brand_names.get(b, ())) < 3 else set()
+        root_sites[i] = ({b} if b and not weak_source(it["c"].website) and site_like(it["c"].website)
+                         and len(brand_names.get(b, ())) < 3 else set())
 
-    def join(a: int, b: int) -> bool:
+    members: dict[int, list[int]] = {i: [i] for i in range(len(items))}
+
+    def join(a: int, b: int, force: bool = False) -> bool:
         ra, rb = find(a), find(b)
         if ra == rb:
             return True
         sa, sb = root_sites.get(ra, set()), root_sites.get(rb, set())
-        if sa and sb and not (sa & sb):
+        if sa and sb and not (sa & sb) and not force:
             return False
         lo, hi = min(ra, rb), max(ra, rb)
         parent[hi] = lo
         root_sites[lo] = sa | sb
+        members[lo] = members.pop(lo, [lo]) + members.pop(hi, [hi])
         return True
 
     def variants(x: str) -> list[str]:
@@ -808,6 +860,11 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
         out = [x, *[p.strip() for p in x.split(" / ")]]
         out += [re.sub(r"\s*[（(][^)）]*[)）]\s*", " ", v).strip() for v in list(out)]
         return list(dict.fromkeys(v for v in out if v))
+
+    def legal_keys(c: "Candidate") -> set[str]:
+        return {f"L:{re.sub(r'[\s（）()]', '', v.translate(_T2S))}" for x in [c.name, c.local_name, *c.aliases] if _sure(x)
+                for v in variants(x) if CJK.search(v) and "公司" in v and len(v) >= 8 and not re.search(r"[A-Za-z]", v)}
+    item_legal = [legal_keys(it["c"]) for it in items]
 
     by_key: dict[str, list[int]] = {}
     for i, it in enumerate(items):
@@ -822,25 +879,32 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
                 keys.add(f"c:{core}@{city}")
         # полное китайское юридическое название, совпавшее до знака («南京泽朗生物科技有限公司» с двумя сайтами), —
         # одна компания и при разных сайтах: в Китае оно уникально
-        legal = {f"L:{re.sub(r'[\s（）()]', '', v.translate(_T2S))}" for x in [c.name, c.local_name, *c.aliases] if _sure(x)
-                 for v in variants(x) if CJK.search(v) and "公司" in v and len(v) >= 8 and not re.search(r"[A-Za-z]", v)}
-        for k in sorted(legal):
+        # при разных сайтах — только если обе стороны сами и есть эта компания (все их находки с этим юрназванием),
+        # а не карточка другой компании, к которой ошибочная находка приписала чужое юрназвание
+        for k in sorted(item_legal[i]):
             if k in by_key:
-                union(i, by_key[k][0])
-                ra = find(i)
-                root_sites[ra] = root_sites.get(ra, set()) | root_sites.get(i, set()) | root_sites.get(by_key[k][0], set())
+                h = by_key[k][0]
+                if not join(i, h):
+                    pure = all(k in item_legal[j] for r in (find(i), find(h)) for j in members.get(r, [r]))
+                    if pure:
+                        join(i, h, force=True)
             else:
                 by_key[k] = [i]
         for k in sorted(keys):
             holders = by_key.setdefault(k, [])
-            if not any([join(i, h) for h in holders]):
+            # длинное латинское название целиком («Anhui Kangbote Health Food») — одна компания и при двух сайтах;
+            # короткое ядро («百合», «ytbio») при разных сайтах не склеивает — через него ошибочная находка сшивала
+            # чужие компании
+            strong = k.startswith("n:") and not CJK.search(k) and len(k) >= 14
+            if not any([join(i, h, force=strong) for h in holders]):
                 holders.append(i)
     site_groups: dict[str, set[int]] = {}
     for i, it in enumerate(items):
         site = site_brand(site_of(it["c"].website) or "")
         if site:
             site_groups.setdefault(site, set()).add(find(i))
-    foreign = {st for st, g in site_groups.items() if len(g) >= 3}
+    # чужой — у трёх и более групп после склейки, если это и по названиям разные компании (см. brand_names)
+    foreign = {st for st, g in site_groups.items() if len(g) >= 3 and len(brand_names.get(st, g)) >= 3}
     by_site: dict[str, int] = {}
     for i, it in enumerate(items):
         site = site_brand(site_of(it["c"].website) or "")
@@ -864,8 +928,9 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
             "id": f"O{n}", "name": main, "names": names,
             # свой сайт важнее карточки площадки или новости: иначе после склейки оставалась карточка Alibaba,
             # а сайт компании терялся
-            "website": next((c.website for c in sorted(cs, key=lambda c: weak_source(c.website)) if site_of(c.website)
-                             and site_brand(site_of(c.website)) not in foreign), ""),
+            # сайт — тот, что указан в большинстве находок (не площадка и не общий): 21.11 у Sirio стоял сайт
+            # другой фармкомпании из одной находки, и отсев читал чужой сайт
+            "website": _major_site(cs, foreign),
             "location": next((c.location for c in cs if c.location), ""),
             "group": re.sub(r"\s*[（(][^)）]*[)）]", "", next((c.group for c in cs if c.group), "")).strip(),
             "angles": angles, "seed": bool(seed),

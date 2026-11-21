@@ -455,6 +455,17 @@ class Council:
         if loose:  # запрос изменился (обновление программы) или «доделать» из архива: ответ того же участника
             cached = self.journal.loose.get((stage, member.name, n))  # на том же этапе по порядку обращений
             was = self.journal.loose_model.get((stage, member.name, n), "")
+            had = self.journal.loose_objects.get((stage, member.name, n))
+            # старая запись без списка пачки — не знаем, о ком ответ: по номеру не подставляем (точное совпадение
+            # запроса выше по-прежнему подставляется бесплатно)
+            if cached is not None and isinstance((meta or {}).get("objects"), list) and (had is None
+                                                                                         or list(had) != list(meta["objects"])):
+                # ответ был про другую пачку кандидатов (состав пачек изменился: добавились кандидаты, нашлись сайты)
+                # — не подставляем: 21.11 так к пачке «Ersha Pharma, İSOPHARMA…» подставлялся ответ о других
+                # компаниях, и они выходили «модель не ответила»
+                log.info("%s%s · %s#%d — сохранённый ответ был о другой пачке кандидатов: спрашиваем заново",
+                         self._tag, member.name, stage, n)
+                cached = None
             if cached is not None and was and not same_model(was, member.model):
                 # участнику сменили модель — старый ответ дала другая модель, его не подставляем (аудит F02)
                 log.info("%s%s · %s#%d — в сохранённом ответ модели %s, сейчас %s: спрашиваем заново",
@@ -626,6 +637,8 @@ class Council:
                 "requested": member.model,  # какую модель спрашивали (comp.model — что ответил провайдер)
                 "attempt": attempt + 1,
                 "call": call_n,  # номер обращения участника на этапе — по нему продолжение находит ответ
+                # для чего был ответ (пачка кандидатов отбора): по номеру обращения подставляется только той же пачке
+                **({"objects": list(meta["objects"])} if isinstance(meta.get("objects"), list) else {}),
                 "raw": comp.text,
                 "cost": comp.cost,
                 "tokens": [comp.prompt_tokens, comp.completion_tokens],

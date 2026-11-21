@@ -824,7 +824,7 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     if sc.shortlist_only_pass and not sc.shortlist:
         extra = [e for e in keep if (S.suits(e) or e.get("near_loc")) and e not in shortlist]
         if extra:
-            shortlist = shortlist + extra[:max(0, 200 - len(shortlist))]
+            shortlist = shortlist + extra  # без потолка: урезать — на остановке (21.11 потолок 200 выбросил BioGrowing и Sirio)
             log.info("%sотбор: подходящих больше предела %d — в список добавлены все подходящие (+%d)", c._tag,
                      min(limit, cap), len(extra))
     keep_all.sort(key=_order)
