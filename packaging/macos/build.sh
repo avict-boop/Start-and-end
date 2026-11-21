@@ -3,7 +3,7 @@
 set -euo pipefail
 
 VERSION=$(python3 -c "import dosrip; print(dosrip.__version__)")
-BUILD=build/macos
+BUILD="$(pwd)/build/macos"
 rm -rf "$BUILD" dist/dosrip.app dist/dosrip-*.dmg
 mkdir -p "$BUILD"
 
@@ -19,7 +19,7 @@ python3 -m PyInstaller --noconfirm --clean --windowed \
   --collect-submodules webview \
   --workpath "$BUILD/pyinstaller" \
   --specpath "$BUILD" \
-  packaging/macos/launcher.py
+  "$(pwd)/packaging/macos/launcher.py"
 
 APP=dist/dosrip.app
 PLIST="$APP/Contents/Info.plist"
