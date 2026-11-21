@@ -825,7 +825,22 @@ async function doEstimate() {
 }
 
 let membersBound = false;
+// программа устарела — заседание пойдёт на старой логике (21.11 так BioGrowing выпал на старой версии): предупредить
+async function staleCheck() {
+  const el = $("staleNote");
+  if (!el) return;
+  try {
+    const d = await api("/api/system/check");
+    if (d && d.behind > 0) {
+      el.hidden = false;
+      el.innerHTML = `<b>Доступна новая версия программы</b> (${d.behind} ${plural(d.behind, "изменение", "изменения", "изменений")}) — заседание пойдёт на старой.
+        Обновите: «Настройки → Программа → Обновить программу».`;
+    } else el.hidden = true;
+  } catch { el.hidden = true; }  // проверка недоступна (нет связи, ключ только для чтения) — молчим
+}
+
 async function initForm() {
+  staleCheck();
   config = await api("/api/config");
   if (config.upload) {
     uploadCfg = config.upload;

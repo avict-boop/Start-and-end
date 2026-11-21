@@ -118,7 +118,10 @@ class Journal:
             k = (e.get("stage", ""), e.get("member", ""))
             n = e["call"] if isinstance(e.get("call"), int) else count.get(k, 0)  # номер обращения, если записан
             self.loose[(*k, n)] = e["parsed"]
-            if isinstance(e.get("objects"), list):  # для какой пачки кандидатов был ответ
+            # для какой пачки кандидатов был ответ: названия (устойчивы к пересклейке), иначе номера
+            if isinstance(e.get("batch"), list):
+                self.loose_objects[(*k, n)] = e["batch"]
+            elif isinstance(e.get("objects"), list):
                 self.loose_objects[(*k, n)] = e["objects"]
             if e.get("requested"):  # старые записи без неё не сверяем: провайдер пишет id модели по-своему
                 self.loose_model[(*k, n)] = str(e["requested"])

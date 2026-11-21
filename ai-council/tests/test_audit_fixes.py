@@ -516,12 +516,21 @@ def test_prior_sessions_same_task(tmp_path):
 
 
 def test_all_suitable_go_to_shortlist(tmp_path):
-    """20.11: из 134 подходящих в список вошли 80 (число из задания), подтверждённые только экспертом (BioGrowing,
-    Sirio) — нет. Теперь в предложенный список — все подходящие; урезать можно на остановке."""
-    import inspect
+    """Статусы вместо отсечек: подходит (страница или эксперт), вероятно (не подтверждено одно условие или 3+ поиска),
+    не подходит (с цитатой), неизвестно; торговое название — неизвестно."""
     from council.modes import selection as SM
-    src = inspect.getsource(SM.run)
-    assert "S.suits(e) or e.get(\"near_loc\")" in src and '"limit":' in src
+    hard = [S.Attribute(id=f"A{i}", name=f"У{i}", kind="bool", screen=True, knockout="нет") for i in (1, 2, 3)]
+    def ent(i, res, passes=(), yes=False, angles=1, trader=False):
+        return {"id": i, "name": i, "angles": [f"a{k}" for k in range(angles)],
+                "screen": {"result": res, "trader": trader,
+                           "checks": [{"attr": a, "verdict": "pass"} for a in passes]},
+                "expert": {"verdict": "yes" if yes else "unknown"}}
+    es = [ent("P", "pass", ("A1", "A2", "A3")), ent("X", "unclear", yes=True), ent("N", "unclear", ("A1", "A2")),
+          ent("M", "unclear", ("A1",), angles=3), ent("M0", "unclear", angles=3), ent("U", "unclear", ("A1",)), ent("F", "fail"), ent("FY", "fail", yes=True),
+          ent("T", "unclear", ("A1", "A2"), trader=True)]
+    SM.assign_statuses(es, hard, True)
+    assert {e["id"]: e["status"] for e in es} == {"P": "fit", "X": "fit", "N": "likely", "M": "likely", "M0": "unknown", "U": "unknown",
+                                                    "F": "unfit", "FY": "fit", "T": "unknown"}
 
 
 def test_batch_answer_replayed_only_for_same_batch(tmp_path):
@@ -566,3 +575,78 @@ def test_many_spellings_not_foreign_site_majority_and_articles():
     sirio = next(e for e in ents if any("sirio" in n.lower() for n in e["names"]))
     assert "siriopharma" in sirio["website"]
     assert S.site_like("https://www.biogrowing.cn/") and not S.site_like("http://x.org/2025/06/14/biogrowing")
+
+
+def test_identity_full_name_majority_and_site_merge():
+    """Склейка: «By-Health» и «By-health Co., Ltd.» — одна; компания с двумя доменами (у большинства находок одно
+    полное название) — одна; ошибочная находка-мостик (у меньшинства) — не склеивает; карточки с одним сайтом после
+    поиска сайтов — одна; мерило считает чужие склейки и дубли."""
+    from council import quality as Q
+    f = [("a", S.Candidate(name="By-Health")),
+         ("b", S.Candidate(name="汤臣倍健股份有限公司", aliases=["By-health Co., Ltd. (汤臣倍健)"], website="https://www.by-health.com/")),
+         ("c", S.Candidate(name="Shandong Yuwang Pharmaceutical Co., Ltd.", website="https://www.yuwangpharma.com")),
+         ("d", S.Candidate(name="Shandong Yuwang Pharmaceutical Co., Ltd.", website="https://www.yuwangpharma.com/en")),
+         ("e", S.Candidate(name="Shandong Yuwang Pharmaceutical Co., Ltd.", website="https://www.yuwangcn.com")),
+         ("f", S.Candidate(name="Shandong Yuwang Pharmaceutical Co., Ltd.", website="https://www.yuwangcn.com/oem"))]
+    ents = S.merge_candidates(f)
+    assert sum(1 for e in ents if any("by-health" in n.lower() or "汤臣" in n for n in e["names"])) == 1
+    assert sum(1 for e in ents if "yuwang" in e["name"].lower()) == 1
+    two = [{"id": "O1", "name": "Shandong Focusfreda Biotech", "names": ["Shandong Focusfreda Biotech"],
+            "website": "https://focusfreda.com", "angles": ["a", "b"]},
+           {"id": "O2", "name": "山东福瑞达生物股份有限公司", "names": ["山东福瑞达生物股份有限公司"],
+            "website": "https://www.focusfreda.com/en", "angles": ["c"]},
+           {"id": "O3", "name": "Other", "names": ["Other"], "website": "https://other.cn", "angles": []}]
+    merged, n = S.merge_by_site(two)
+    assert n == 1 and len(merged) == 2 and "山东福瑞达生物股份有限公司" in merged[0]["names"]
+    ctl = [{"name": "By-Health", "patterns": ["by-health", "汤臣倍健"], "site": "by-health"}]
+    res = Q.evaluate(f, ents, ctl)
+    assert res["summary"]["one_card"] == 1 and res["summary"]["mixed"] == 0
+
+
+def test_batch_identity_by_names_survives_renumbering(tmp_path):
+    """Пачка узнаётся по названиям: после пересклейки номера сдвинулись (O1→O7), а компании те же — ответ
+    подставляется бесплатно; другие компании — спрашиваем заново."""
+    from council.config import CouncilConfig
+    from council.mock import MockClient
+    from council.session import Council
+    from council.modes import selection as SM
+    p = tmp_path / "j.jsonl"
+    Journal(p).entry({"stage": "expert", "member": "a", "call": 0, "requested": "m/a", "objects": ["O1", "O2"],
+                      "batch": ["alpha", "beta"], "parsed": {"items": [{"n": 1, "verdict": "yes"}]}})
+    cfg = CouncilConfig.model_validate({"chair": "a", "runs_dir": str(tmp_path), "members": [{"name": n, "model": f"m/{n}"} for n in "ab"]})
+    c = Council(cfg, MockClient(delay=0), journal=Journal(p))
+    b = [{"id": "O7", "name": "Alpha"}, {"id": "O8", "name": "Beta"}]
+    asyncio.run(c._ask(cfg.member("a"), "expert", "Companies:\n1. Alpha\n2. Beta", S.Expert, meta=SM.bmeta(b)))
+    assert c.replayed == 1
+    assert [e["name"] for e in SM.stable([{"id": "O2", "name": "Beta"}, {"id": "O1", "name": "Alpha"}])] == ["Alpha", "Beta"]
+
+
+def test_screen_coarse_max_three_and_location_country():
+    """Отсев — не больше трёх самых весомых условий; место — только страна; страница OEM читается первой."""
+    from council.modes import selection as SM
+    attrs = [S.Attribute(id=f"A{i}", name=f"У{i}", kind="bool", screen=True, knockout="нет", weight=w)
+             for i, w in enumerate([9, 2, 8, 7, 5], 1)]
+    fr = S.chair_screen_rules(S.SelectionFrame(refined_question="q", attributes=attrs))
+    assert [a.id for a in fr.attributes if a.screen] == ["A1", "A3", "A4"]
+    p = S.screen_read_prompt(S.SelectionFrame(refined_question="q"), attrs[:1], [{"id": "O1", "name": "X"}], {"O1": []})
+    assert "LOCATION attribute at screening needs only the country" in p
+    assert SM.OEM_PAGE.search("https://x.cn/oem.asp") and not SM.OEM_PAGE.search("https://x.cn/news/1.html")
+
+
+def test_market_registry(tmp_path):
+    """Реестр рынка: компании заседания со статусом записываются; новое заседание с тем же заданием их берёт;
+    известный сайт не ищется второй раз; видна история («подходит»)."""
+    from council import registry as R
+    assert R.market_of("Широкий список китайских заводов") == "china" and R.market_of("заводы в Турции") == "turkey"
+    ents = [{"id": "O1", "name": "BioGrowing Co., Ltd.", "names": ["BioGrowing Co., Ltd.", "均瑶润盈生物科技（上海）有限公司"],
+             "website": "https://www.biogrowing.cn/", "status": "fit", "screen": {"result": "unclear", "reason": "x"},
+             "expert": {"yes": ["kimi"]}},
+            {"id": "O2", "name": "Nosite Bio Co., Ltd.", "names": ["Nosite Bio Co., Ltd."], "status": "unknown"}]
+    assert R.update(tmp_path, "china", {"t:ТЗ 1"}, "s1", ents) == 2
+    got = R.finds_for(tmp_path, "china", {"t:ТЗ 1"})
+    assert {c.name for _, c in got} == {"BioGrowing Co., Ltd.", "Nosite Bio Co., Ltd."}
+    assert R.finds_for(tmp_path, "china", {"t:другое"}) == []
+    new = [{"id": "O9", "name": "BioGrowing Co., Ltd.", "names": ["BioGrowing Co., Ltd."], "website": ""}]
+    assert R.fill_sites(tmp_path, "china", new) == 1 and "biogrowing.cn" in new[0]["website"]
+    R.history(tmp_path, "china", new)
+    assert new[0]["history"].endswith("подходит")

@@ -458,8 +458,8 @@ class Council:
             had = self.journal.loose_objects.get((stage, member.name, n))
             # старая запись без списка пачки — не знаем, о ком ответ: по номеру не подставляем (точное совпадение
             # запроса выше по-прежнему подставляется бесплатно)
-            if cached is not None and isinstance((meta or {}).get("objects"), list) and (had is None
-                                                                                         or list(had) != list(meta["objects"])):
+            want = (meta or {}).get("batch") if isinstance((meta or {}).get("batch"), list) else (meta or {}).get("objects")
+            if cached is not None and isinstance(want, list) and (had is None or list(had) != list(want)):
                 # ответ был про другую пачку кандидатов (состав пачек изменился: добавились кандидаты, нашлись сайты)
                 # — не подставляем: 21.11 так к пачке «Ersha Pharma, İSOPHARMA…» подставлялся ответ о других
                 # компаниях, и они выходили «модель не ответила»
@@ -639,6 +639,7 @@ class Council:
                 "call": call_n,  # номер обращения участника на этапе — по нему продолжение находит ответ
                 # для чего был ответ (пачка кандидатов отбора): по номеру обращения подставляется только той же пачке
                 **({"objects": list(meta["objects"])} if isinstance(meta.get("objects"), list) else {}),
+                **({"batch": list(meta["batch"])} if isinstance(meta.get("batch"), list) else {}),
                 "raw": comp.text,
                 "cost": comp.cost,
                 "tokens": [comp.prompt_tokens, comp.completion_tokens],

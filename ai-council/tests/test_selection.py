@@ -669,8 +669,9 @@ def test_shortlist_diverse_and_added_marked_and_required_angles():
            for i in range(5)]
     pro = [{"id": f"P{i}", "name": f"Pro {i}", "angles": ["пробиотики"], "screen": {"result": "pass"}} for i in range(3)]
     order = [e["id"] for e in SM.diverse_order(gen + pro)]
-    assert set(order[:4]) & {"P0", "P1", "P2"}  # специалист — среди первых, а не в хвосте
-    assert sorted(order) == sorted(e["id"] for e in gen + pro)
+    # порядок — по силе доказательств (найдены тремя поисками — выше); специалистов категории в список возвращает
+    # охват обязательных поисков задания (required_coverage), а не чередование
+    assert order[:5] == [f"G{i}" for i in range(5)] and sorted(order) == sorted(e["id"] for e in gen + pro)
     added = SM.apply_list_edits([], {"add": ["Biogrowing"]}, start_n=0)[0]
     assert S.origin_label(added) == "добавлен вами" and S.origin_label({"why": "добавлено вами"}) == "добавлен вами"
     fr = S.SelectionFrame.model_validate({"required_angles": ["пробиотики: 益生菌 代工", " "], "angles": ["a"]})

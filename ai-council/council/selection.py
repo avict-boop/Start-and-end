@@ -166,10 +166,15 @@ class Candidate(BaseModel):
     def _t(cls, v: Any) -> str:
         return _txt(v)
 
+    @field_validator("name", "local_name", "group")
+    @classmethod
+    def _clean(cls, v: str) -> str:
+        return clean_name(v)
+
     @field_validator("aliases", mode="before")
     @classmethod
     def _l(cls, v: Any) -> list[str]:
-        return [x for x in to_list(v) if x.strip()]
+        return [clean_name(x) for x in to_list(v) if clean_name(x).strip()]
 
 
 class Candidates(BaseModel):
@@ -551,7 +556,11 @@ WEAK_SOURCES = MARKETPLACES | {
     "einpresswire.com", "prnewswire.com", "businesswire.com", "globenewswire.com", "openpr.com", "newswire.com",
     "foodtalks.cn", "foodaily.com", "sohu.com", "163.com", "sina.com.cn", "qq.com", "ifeng.com", "toutiao.com",
     "hc360.com", "foodsc.cn", "caitongtong.com", "made-in-china.com", "ec21.com", "ecplaza.net", "tradeindia.com",
-    "exportersindia.com", "go4worldbusiness.com", "dhgate.com", "aliexpress.com", "zoominfo.com", "zhihu.com"}
+    "exportersindia.com", "go4worldbusiness.com", "dhgate.com", "aliexpress.com", "zoominfo.com", "zhihu.com",
+    # каталоги и площадки, которые модели вписывают «сайтом» (и опечатки крупных): по ним не склеиваем и не судим
+    "madeinchina.com", "alibab.com", "88lan.com", "baiyewang.com.cn", "b2b168.com", "china.cn", "globalsources.com",
+    "tradekey.com", "chinabidding.com", "qcc.com", "tianyancha.com", "aiqicha.baidu.com", "11467.com", "kompass.com",
+    "europages.com", "dnb.com", "linkedin.com", "facebook.com", "crunchbase.com", "bloomberg.com", "reuters.com"}
 
 
 def weak_source(url: str) -> bool:
@@ -591,6 +600,36 @@ def trader_name(e: dict[str, Any]) -> str:
 # компания (17.11 обе пары шли отдельными строками)
 _T2S = str.maketrans("術樂業藥醫營養東廣華國際開發興實製劑產廠團億長門龍鳳寶葉臺灣蘇蘭麗陽貿進務體種農質優電網訊豐慶紅綠為樓衛連鎮輕鐵銀關圖書協會濟環飲貨費資車馬瑤潤鈣鋅鎂維補膠漢達貝嶺聖爾圓陝遼魯雲貴歐匯偉創傑鴻莊齊啟錦參靈瑪堅驗檢測頓碩現時寧萬與應來點線從問號個們對學經機專區縣鄉麥糧魚腸鹽礦純淨潔濱島嶼遠運選適邁鄭鄧劉楊張陳黃趙吳孫錢鄒謝韓馮鍾盧蔣瀋綜結構據統標準層臨範縮擁護療瘋癒醬飼稱穀",
                      "术乐业药医营养东广华国际开发兴实制剂产厂团亿长门龙凤宝叶台湾苏兰丽阳贸进务体种农质优电网讯丰庆红绿为楼卫连镇轻铁银关图书协会济环饮货费资车马瑶润钙锌镁维补胶汉达贝岭圣尔圆陕辽鲁云贵欧汇伟创杰鸿庄齐启锦参灵玛坚验检测顿硕现时宁万与应来点线从问号个们对学经机专区县乡麦粮鱼肠盐矿纯净洁滨岛屿远运选适迈郑邓刘杨张陈黄赵吴孙钱邹谢韩冯钟卢蒋沈综结构据统标准层临范缩拥护疗疯愈酱饲称谷")
+
+
+# пометка модели в скобках по-русски: «(английское название не из источника)», «(предположительно; …)»
+_NOTE = re.compile(r"\s*[（(][^()（）]*[а-яё][^()（）]*[)）]", re.I)
+
+
+def clean_name(x: str) -> str:
+    """Название без пометок модели (по-русски в скобках): они мешали склейке и отображению."""
+    if not x:
+        return x
+    # «(через 均瑶润盈 / …)» — не пометка, а связь группы с заводом: её оставляем (по ней имя берётся у завода)
+    t = _NOTE.sub(lambda m: m.group(0) if re.search(r"через|дочерн", m.group(0), re.I) else "", x)
+    return re.sub(r"\s{2,}", " ", t).strip(" ;,—-")
+
+
+# не компания: страницы ведомств и проектов, отчёты, рекламные строки товара, описания вместо названия
+_JUNK_CJK = re.compile(r"项目|报告表|公示|公告|环境局|管理局|政府|通知|名单|关于|某")
+_JUNK_LAT = re.compile(r"^(?:oem/?odm\b|private label\b|a |an |the |top \d+|list of|best |how to)|"
+                       r"\b(?:manufacturers? in|suppliers? in|powder|capsules?|tablets?|softgels?)\b.*\d", re.I)
+_COMPANY = re.compile(r"公司|集团|工厂|厂\b|\b(?:co|ltd|inc|corp|llc|gmbh|limited|group|a\.?ş|şti)\b", re.I)
+
+
+def is_junk_name(x: str) -> bool:
+    """Строка — не название компании (её не берём в кандидаты)."""
+    t = (x or "").strip()
+    if not t or t.startswith(("http://", "https://")) or len(t) > 120:
+        return True
+    if CJK.search(t) and _JUNK_CJK.search(t) and "公司" not in t:
+        return True
+    return bool(not CJK.search(t) and _JUNK_LAT.search(t) and not _COMPANY.search(t))
 
 
 def norm_name(s: str) -> str:
@@ -756,6 +795,41 @@ def group_hints(entities: list[dict[str, Any]], limit: int = 30) -> list[dict[st
     return out[:limit]
 
 
+LEGAL_FORMS = re.compile(r"\b(?:co|company|ltd|limited|inc|incorporated|corp|corporation|llc|plc|gmbh|sa|as|a\.?s|"
+                         r"ltd\.?\s*şti|şti|san|tic|ve)\b\.?|股份有限公司|有限责任公司|有限公司|集团有限公司", re.I)
+
+
+def full_name_key(x: str) -> str:
+    """Название целиком без форм собственности и знаков: «By-health Co., Ltd.» и «By-Health» → «byhealth»;
+    отраслевые слова (health, bio, pharma) остаются — по ним и различаются компании."""
+    t = LEGAL_FORMS.sub(" ", (x or "").translate(_T2S).lower())
+    return re.sub(r"[\W_]+", "", t)
+
+
+def merge_by_site(entities: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Карточки с одним и тем же СВОИМ сайтом — одна компания (сайт найден уже после склейки по названиям:
+    «Shandong Focusfreda» и «山东福瑞达生物» с сайтом focusfreda.com). Сайт, общий для трёх и более карточек, — не
+    сайт компании (каталог, выставка), по нему не склеиваем. Первой в группе — карточка, найденная чаще."""
+    by: dict[str, list[dict[str, Any]]] = {}
+    for e in entities:
+        w = e.get("website") or ""
+        b = site_brand(site_of(w) or "")
+        if b and not weak_source(w) and site_like(w):
+            by.setdefault(b, []).append(e)
+    groups = []
+    for b, es in by.items():
+        def keys(e: dict[str, Any]) -> set[str]:
+            return {k for x in e.get("names") or [e["name"]] for k in [norm_name(x)] if _name_key_ok(k)}
+        # двое — склеиваем; трое — только если у каждой есть общее название с другой из группы (иначе это похоже на
+        # каталог, указанный «сайтом» у разных компаний)
+        if len(es) == 2 or (len(es) == 3 and all(any(keys(a) & keys(b) for b in es if b is not a) for a in es)):
+            es = sorted(es, key=lambda e: (-len(e.get("angles") or []), not e.get("seed")))
+            groups.append([e["id"] for e in es])
+    if not groups:
+        return entities, 0
+    return merge_entities(entities, groups), sum(len(g) - 1 for g in groups)
+
+
 def merge_entities(entities: list[dict[str, Any]], merge: list[list[str]]) -> list[dict[str, Any]]:
     """Склеить кандидатов по решению человека: первый в группе вбирает названия, страницы и находки остальных."""
     by_id = {e["id"]: e for e in entities}
@@ -785,7 +859,7 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
         if s.strip():
             items.append({"angle": "ваш список", "c": Candidate(name=s.strip())})
     for angle, c in found:
-        if c.name.strip():
+        if c.name.strip() and not is_junk_name(c.name):
             items.append({"angle": angle, "c": c})
     parent = list(range(len(items)))
 
@@ -866,11 +940,27 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
                 for v in variants(x) if CJK.search(v) and "公司" in v and len(v) >= 8 and not re.search(r"[A-Za-z]", v)}
     item_legal = [legal_keys(it["c"]) for it in items]
 
+    item_keys: dict[int, set[str]] = {}
+
+    def share(k: str, r: int, cur: int, cur_keys: set[str]) -> float:
+        """Доля находок карточки r, у которых есть ключ k (у настоящей компании её полное название — у большинства;
+        у ошибочной находки-мостика чужое имя — у меньшинства)."""
+        ms = members.get(r, [r])
+        return sum(1 for j in ms if k in (cur_keys if j == cur else item_keys.get(j, set()))) / len(ms)
+
+    def carriers(k: str, r: int, cur: int, cur_keys: set[str]) -> int:
+        """Сколько находок карточки r несут ключ k: две и больше — это не случайная ошибочная находка."""
+        return sum(1 for j in members.get(r, [r]) if k in (cur_keys if j == cur else item_keys.get(j, set())))
+
     by_key: dict[str, list[int]] = {}
     for i, it in enumerate(items):
         c = it["c"]
         keys = {f"n:{norm_name(v)}" for x in [c.name, c.local_name, *c.aliases] if _sure(x)
                 for v in variants(x) if _name_key_ok(norm_name(v))}
+        # название целиком (как написано, без знаков): две находки «By-Health» — одна компания, хотя после снятия
+        # общих слов остаётся «by» (20.11 две такие карточки не склеились)
+        keys |= {f"x:{full}" for x in [c.name, c.local_name, *c.aliases] if _sure(x)
+                 for v in variants(x) for full in [full_name_key(v)] if len(full) >= 6}
         for x in [c.name, c.local_name, *c.aliases]:  # одно ядро названия в одном городе — одна компания
             if not _sure(x):
                 continue
@@ -885,7 +975,8 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
             if k in by_key:
                 h = by_key[k][0]
                 if not join(i, h):
-                    pure = all(k in item_legal[j] for r in (find(i), find(h)) for j in members.get(r, [r]))
+                    pure = all(sum(k in item_legal[j] for j in members.get(r, [r])) / len(members.get(r, [r])) > 0.5
+                               for r in (find(i), find(h)))
                     if pure:
                         join(i, h, force=True)
             else:
@@ -895,9 +986,20 @@ def merge_candidates(found: list[tuple[str, Candidate]], seeds: list[str] | None
             # длинное латинское название целиком («Anhui Kangbote Health Food») — одна компания и при двух сайтах;
             # короткое ядро («百合», «ytbio») при разных сайтах не склеивает — через него ошибочная находка сшивала
             # чужие компании
-            strong = k.startswith("n:") and not CJK.search(k) and len(k) >= 14
-            if not any([join(i, h, force=strong) for h in holders]):
+            # (китайское название целиком сюда не входит: ошибочная находка часто пишет точное юрназвание ЧУЖОЙ
+            # компании — для него правило «обе стороны сами эта компания» выше)
+            strong = not CJK.search(k) and ((k.startswith("n:") and len(k) >= 14) or (k.startswith("x:") and len(k) >= 10))
+            done = False
+            for h in holders:
+                if join(i, h):
+                    done = True
+                elif strong and all(share(k, r, i, keys) > 0.5 or carriers(k, r, i, keys) >= 2 for r in (find(i), find(h))):
+                    # при разных сайтах — только если обе стороны сами и есть эта компания (у всех их находок это
+                    # название), а не карточка другой компании, к которой ошибочная находка приписала чужое имя
+                    done = join(i, h, force=True) or done
+            if not done:
                 holders.append(i)
+        item_keys[i] = keys
     site_groups: dict[str, set[int]] = {}
     for i, it in enumerate(items):
         site = site_brand(site_of(it["c"].website) or "")
@@ -1655,10 +1757,12 @@ Build the frame of the study:
   annual report, registry record, certificate, company page…), "keywords" (words to find it on pages, INCLUDING the
   language of the sources — e.g. Chinese terms 产能, 万粒, 保健食品, SC证 — and English), "weight" 0–10 (importance for
   the user's decision; 0 = for information only), "better" (high | low | yes | no | newer | older | "" for text),
-  "wanted" (for lists: the items the user needs, e.g. forms), "screen": true for 2–4 quick knock-out attributes
-  (is it a manufacturer, makes the needed forms, has a production licence…) with "knockout" (which value excludes,
-  in words). NEVER "screen" an attribute the task calls an advantage, a plus or "not a condition" — only hard
-  requirements;
+  "wanted" (for lists: the items the user needs, e.g. forms), "screen": true for 2–3 COARSE knock-out attributes
+  that a company's own home or OEM page usually states (is it a manufacturer of the needed kind, does it take outside
+  / OEM orders, is production in the required country) with "knockout" (which value excludes, in words). NEVER
+  "screen" an advantage, a plus or "not a condition", and NEVER precise details a home page rarely shows — city or
+  address of the plant, capacity, certificates, MOQ, prices: those go to the detailed check (screen false). For a
+  location requirement the screen checks only the country / region;
 - "required_angles": searches the task EXPLICITLY demands — one per category it lists ("a separate search for each
   category"), one per type of object it requires (e.g. universal makers / specialists / makers of their own raw
   materials WITH finished forms), and its example queries grouped by topic. Each is a concrete web-search instruction
@@ -1777,7 +1881,15 @@ def chair_screen_rules(frame: "SelectionFrame") -> "SelectionFrame":
     for a in frame.attributes:
         if a.screen and not is_knockout(a):
             a.screen = False
+    # не больше трёх условий отсева (самые весомые): чем больше условий, тем чаще «не выяснено» у настоящих заводов
+    # (20.11 из-за «города площадки» 46 подходящих стояли «не выяснено»); остальные проверяет подробная проверка
+    hard = sorted([a for a in frame.attributes if a.screen], key=lambda a: -float(a.weight or 0))
+    for a in hard[SCREEN_MAX:]:
+        a.screen = False
     return frame
+
+
+SCREEN_MAX = 3
 
 
 def sites_prompt(objs: list[dict[str, Any]]) -> str:
@@ -1817,6 +1929,9 @@ Objects:
 For each object and attribute: "verdict" pass | fail | unclear. "fail" ONLY when a page clearly proves the exclusion
 rule (a company that ALSO makes raw materials is not excluded for that if it makes finished products too); not on the
 pages → unclear. Planned, under construction or "will be put into production" is not production → unclear, quote it.
+A LOCATION attribute at screening needs only the country / region of production: "pass" when the page shows the
+plant or production is in the required country (a city or full address is NOT needed here — the detailed check finds
+it); "fail" only when production is clearly elsewhere.
 ONE OBJECT = ALL ITS NAMES: the names in brackets are the same object (group, its production subsidiary, plant,
 brand, Chinese and English names) — a statement about ANY of them is about THIS object (e.g. the page of the
 subsidiary named there counts in full). "pass" ONLY when the page states it for this object and its own site: a
@@ -2095,10 +2210,11 @@ def report_md(sel: dict[str, Any], conclusion: Conclusion | None) -> str:
                    + (f"; {npass} из них подтверждены отсевом или экспертами, в таблицу не вошли по пределу"
                       if npass else "")
                    + ". Названия — как в источниках: ищите по латинице, иероглифам или сайту.\n\n"
-                   "| Компания | Сайт | Где найдена | Подтверждено | Открытый вопрос |\n|---|---|---|---|---|\n"
+                   "| Компания | Статус | Сайт | Где найдена | Подтверждено | Открытый вопрос |\n|---|---|---|---|---|---|\n"
                    + "\n".join(
                        f"| {esc(x['name'])}" + (f"<br>{esc(', '.join(n for n in x.get('names') or [] if n != x['name'])[:120])}"
                                                if len(x.get("names") or []) > 1 else "")
+                       + f" | {esc(x.get('status_ru') or '—')}"
                        + f" | {esc(domain(x.get('website') or '') or '—')}"
                        + f" | {esc('; '.join(x.get('found_by') or [])[:120]) or '—'}"
                        + f" | {esc(', '.join(short_name(a) for a in x.get('confirmed') or [])) or '—'}"

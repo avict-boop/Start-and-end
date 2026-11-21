@@ -238,7 +238,7 @@ function renderReview(s) {
         return `<label class="sel-item"><input type="checkbox" data-id="${esc(x.id)}" ${rv.gate === "candidates" || short.has(x.id) ? "checked" : ""}>
           <span><b>${esc(x.name)}</b>${(x.names || []).length > 1 ? ` <span class="muted small">${esc(x.names.slice(1, 4).join(", "))}</span>` : ""}
           ${x.merged ? '<span class="badge plain">склеено</span>' : ""}${x.seed ? '<span class="badge plain">ваш список</span>' : ""}
-          ${scr ? `<span class="badge ${scr[0]}">${scr[1]}</span>` : ""}${x.expert && x.expert.verdict === "yes" ? `<span class="badge ok">эксперты: да ${(x.expert.yes || []).length} из ${(x.expert.yes || []).length + (x.expert.no || []).length + (x.expert.unknown || []).length}</span>` : x.expert && x.expert.verdict === "no" ? '<span class="badge plain">эксперты: нет</span>' : ""}
+          ${scr ? `<span class="badge ${scr[0]}">${scr[1]}</span>` : ""}${x.status === "likely" ? '<span class="badge plain">вероятно подходит</span>' : ""}${x.expert && x.expert.verdict === "yes" ? `<span class="badge ok">эксперты: да ${(x.expert.yes || []).length} из ${(x.expert.yes || []).length + (x.expert.no || []).length + (x.expert.unknown || []).length}</span>` : x.expert && x.expert.verdict === "no" ? '<span class="badge plain">эксперты: нет</span>' : ""}
           <small class="muted">${[x.website ? esc(x.website) : "", x.location ? esc(x.location) : "",
             (x.models || []).length ? `нашли ${x.models.length} ${plural(x.models.length, "источник", "источника", "источников")}: ${esc(x.models.map((m) => memberName(s, m)).join(", "))}`
               : (x.angles || []).length ? `найден ${x.angles.length} ${plural(x.angles.length, "раз", "раза", "раз")}` : ""].filter(Boolean).join(" · ")}</small>

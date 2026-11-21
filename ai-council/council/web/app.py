@@ -1260,10 +1260,12 @@ def create_app(config_path: str | Path, *, mock_delay: float = 0.6, password: st
               "status": f"в таблице, место {place[o['id']]}" if o["id"] in place else "в таблице", "reason": ""}
              for o in sel.get("objects") or []]
             + [{"name": x["name"], "names": x.get("names") or [], "website": x.get("website") or "",
-                "status": ("подтверждена отсевом, не вошла в таблицу" if x.get("page_pass", x.get("passed"))
-                           else "подходит по мнению экспертов — требует проверки" if x.get("passed")
-                           else "требует проверки"),
-                "reason": x.get("reason") or ""} for x in sel.get("pending") or []]
+                "status": ((f"{x['status_ru']} — подробно не проверялась" if x.get("status_ru") else "")
+                           or ("подтверждена отсевом, не вошла в таблицу" if x.get("page_pass", x.get("passed"))
+                               else "подходит по мнению экспертов — требует проверки" if x.get("passed")
+                               else "требует проверки")),
+                "reason": (x.get("reason") or "") + (f" · прежде: {x['history']}" if x.get("history") else "")}
+               for x in sel.get("pending") or []]
             + [{"name": x["name"], "names": [], "website": "", "status": "исключена при отсеве",
                 "reason": x.get("reason") or ""} for x in sel.get("excluded") or []]
             + [{"name": x["name"], "names": [], "website": "", "status": "не удалось проверить", "reason": ""}

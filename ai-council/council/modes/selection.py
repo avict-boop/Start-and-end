@@ -374,19 +374,75 @@ REWIND: dict[str, dict[str, Any]] = {
 }
 
 
+STATUS_RU = {"fit": "подходит", "likely": "вероятно подходит", "unfit": "не подходит", "unknown": "неизвестно"}
+
+
+def assign_statuses(entities: list[dict[str, Any]], screen_attrs: list[S.Attribute], screened: bool) -> None:
+    """Статус каждого кандидата по доказательствам (e["status"]): fit — «да» проверки по страницам или эксперта;
+    likely — из обязательных условий не подтверждено одно, или её нашли 3+ независимых поиска; unfit — «нет» с
+    цитатой и без «да» эксперта; unknown — остальное. Торговое название без «да» — unknown."""
+    hard = [a.id for a in screen_attrs if S.is_knockout(a)]
+    for e in entities:
+        r = (e.get("screen") or {})
+        if not screened or not r:
+            e["status"] = "unknown"
+            continue
+        if S.suits(e):
+            e["status"] = "fit"
+        elif r.get("result") == "fail":
+            e["status"] = "unfit"
+        elif r.get("trader"):
+            e["status"] = "unknown"
+        else:
+            got = sum(1 for ch in r.get("checks") or [] if ch.get("attr") in hard and ch.get("verdict") == "pass")
+            near = bool(hard) and got >= len(hard) - 1
+            # «заметная» (нашли 3+ поиска) — «вероятно», только если хоть одно условие подтверждено
+            e["status"] = "likely" if near or (got >= 1 and len(e.get("angles") or []) >= 3) else "unknown"
+
+
+def gate_on(c: Council, name: str) -> bool:
+    """Будет ли остановка name (человек увидит список и сможет урезать или добавить)."""
+    return bool(c.review_enabled and (name in c.cfg.selection.review or name in getattr(c, "force_gates", set())))
+
+
+OEM_PAGE = re.compile(
+    r"oem|odm|cdmo|contract|private[-_]?label|fason|manufactur|factory|production|代工|代加工|贴牌|生产|工厂|about", re.I)
+
+
+def bmeta(b: list[dict[str, Any]]) -> dict[str, Any]:
+    """Метка обращения о пачке кандидатов: номера (для экрана) и названия — по ним при продолжении сохранённый ответ
+    подставляется только той же пачке (номера после пересклейки сдвигаются, названия — нет)."""
+    return {**META, "objects": [e["id"] for e in b], "batch": [S.norm_name(e.get("name") or "") or e["id"] for e in b]}
+
+
+def stable(es: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Устойчивый порядок для пачек: по названию — при продолжении пачки собираются так же, и оплаченные ответы
+    подставляются бесплатно."""
+    return sorted(es, key=lambda e: (S.norm_name(e.get("name") or ""), e.get("name") or "", e["id"]))
+
+
 def _uniq(xs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return list({e["id"]: e for e in xs}.values())
 
 
-def _order(e: dict[str, Any]) -> tuple:
-    """Порядок короткого списка: ваш список; подходящие — сначала подтверждённые и страницей, и экспертами, затем
-    только страницей, затем только экспертами (память модели — слабее цитаты со страницы: при пределе таблицы
-    они не вытесняют подтверждённых страницей); внутри — по числу «да» экспертов, весу подтверждённого и числу
-    нашедших поисков."""
+STATUS_RANK = {"fit": 0, "likely": 1, "unknown": 2, "unfit": 3}
+
+
+def evidence(e: dict[str, Any]) -> float:
+    """Сила доказательств «подходит» — для порядка внутри статуса: подтверждение страницей, «да» экспертов (каждый —
+    независимый голос), сколько независимых поисков нашли компанию (заметность; до 5), вес подтверждённых условий.
+    Раньше подтверждённые только экспертом шли всегда после подтверждённых страницей — и при «урезать до 80» крупные
+    заводы (BioGrowing, Sirio) уступали малоизвестным с одной карточкой."""
     page = (e.get("screen") or {}).get("result") == "pass"
     yes = len((e.get("expert") or {}).get("yes") or [])
-    return (not e.get("seed"), not S.suits(e), not (page and yes), not page, -yes, -screen_passes(e),
-            -len(e.get("angles") or []))
+    return 2.0 * page + 1.5 * yes + 0.4 * min(len(e.get("angles") or []), 5) + 0.1 * screen_passes(e)
+
+
+def _order(e: dict[str, Any]) -> tuple:
+    """Порядок списка: ваш список; затем по статусу (подходит → вероятно → неизвестно → не подходит); внутри — по
+    силе доказательств."""
+    st = e.get("status") or ("fit" if S.suits(e) else "unknown")
+    return (not e.get("seed"), STATUS_RANK.get(st, 2), -evidence(e), -len(e.get("angles") or []))
 
 
 def expert_members(c: Council) -> list[MemberConfig]:
@@ -427,13 +483,14 @@ async def expert_opinion(c: Council, frame: S.SelectionFrame, attrs: list[S.Attr
     whos = expert_members(c)
     c._emit("stage", stage="screen", title=f"Мнение экспертов ({', '.join(m.name for m in whos)}): {len(entities)} "
                                           "кандидатов, по памяти, без поиска")
-    batches = [entities[i:i + S.EXPERT_BATCH] for i in range(0, len(entities), S.EXPERT_BATCH)]
+    order = stable(entities)
+    batches = [order[i:i + S.EXPERT_BATCH] for i in range(0, len(order), S.EXPERT_BATCH)]
     votes: dict[str, dict[str, dict[str, str]]] = {e["id"]: {} for e in entities}
 
     async def one(who: MemberConfig, b: list[dict[str, Any]]) -> int:
         try:
             r = await c._ask(who, "expert", S.expert_prompt(frame, attrs, b), S.Expert,
-                             meta={**META, "objects": [e["id"] for e in b]}, max_tokens=12000)
+                             meta=bmeta(b), max_tokens=12000)
         except (BudgetExceeded, OutOfCredits):
             raise
         except (ProviderError, InvalidResponse) as err:
@@ -504,6 +561,8 @@ def pending_list(entities: list[dict[str, Any]], keep_ids: set[str], excluded_id
         if ex.get("verdict") == "no":
             reason += f"; эксперты — {S.expert_votes(e)}" + (f" ({ex['knows'][:200]})" if ex.get("knows") else "")
         out.append({"id": e["id"], "name": e["name"], "names": (e.get("names") or [])[:4],
+                    "status": e.get("status") or "", "status_ru": STATUS_RU.get(e.get("status") or "", ""),
+                    "history": e.get("history") or "",
                     "website": e.get("website") or "", "location": e.get("location") or "",
                     "found_by": [str(a) for a in (e.get("angles") or [])][:4], "angles": len(e.get("angles") or []),
                     "confirmed": [names[a] for a in ok if a in names], "open": open_, "reason": reason,
@@ -748,6 +807,22 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     experts_used: list[dict[str, Any]] = []
     screened: dict[str, dict[str, Any]] = {}
     screen_attrs = [a for a in attrs if a.screen]
+    if sc.screen and screen_attrs and start != "check" and sc.screen_by == "pages":
+        # сначала сайт, потом склейка: у кого нет своего сайта — ищем его (Sonar, пачками); карточки с одним сайтом —
+        # одна компания. Так дубли, разошедшиеся по названиям, сходятся до отсева (и отсев не платит за каждый)
+        from .. import registry as R
+        known = R.fill_sites(c.cfg.runs_dir, R.market_of(question), entities)  # сайт уже известен — не ищем
+        if known:
+            log.info("%sотбор: сайты %d кандидатов взяты из реестра рынка", c._tag, known)
+        lost = sorted([e for e in entities if not own_site(e) and not e.get("_sites_tried")],
+                      key=lambda e: -len(e.get("angles") or []))
+        if lost:
+            await find_sites(c, lost[:SCREEN_SITES])
+        entities, n_site = S.merge_by_site(entities)
+        if n_site:
+            log.info("%sотбор: по общему сайту склеено %d карточек", c._tag, n_site)
+            c._emit("warning", stage="screen", member="",
+                    text=f"отсев: {n_site} карточек оказались дублями — у них один официальный сайт; склеены")
     if sc.screen and screen_attrs and start != "check":
         # торговое название (贸易, 进出口, Trading) — не повод исключать: у группы завод и экспортная фирма бывают
         # разными юрлицами. В отсев не идут (бесплатно), остаются «не выяснено» с вопросом и видны в отчёте в разделе
@@ -771,63 +846,37 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
         # «да» эксперта тоже не даёт исключить: проверка сказала «нет», эксперт «да» — в таблицу с пометкой
         excluded = [{"id": e["id"], "name": e["name"], "reason": e["screen"]["reason"]}
                     for e in entities if e["screen"]["result"] == "fail" and not e.get("seed") and not S.suits(e)]
-        passed = [e for e in entities if e["screen"]["result"] == "pass"]
-        unclear = [e for e in entities if e["screen"]["result"] == "unclear"]
-        seeds_failed = [e for e in entities if e["screen"]["result"] == "fail" and e.get("seed")]
-        by_expert = [e for e in entities if S.suits(e) and e["screen"]["result"] != "pass"]
-        keep = _uniq(passed + by_expert + unclear + seeds_failed)
-        # в таблицу — подтверждённые отсевом и ваши; «не выяснено» — только если подтверждённых нет вовсе
-        keep_all = list(keep)
-        if sc.shortlist_only_pass and (passed or by_expert):
-            # «почти подтверждённые»: из условий отсева не подтверждено одно (обычно город площадки — на главной его
-            # нет), остальные — да. 17.11 так за бортом остались Sirio, 汤臣倍健, 艾兰得, 百合, 金达威, 长兴, 科拓:
-            # подробная проверка ищет их адрес по годовым отчётам и сайту
-            hard = [a.id for a in screen_attrs if S.is_knockout(a)]
-            # и «заметные»: их нашли 3+ независимых поиска — так находятся крупные заводы, чья главная страница
-            # ничего не говорит отсеву (百合, 汤臣倍健, 长兴)
-            near = [e for e in unclear if not e["screen"].get("trader") and (
-                (hard and sum(1 for ch in (e["screen"].get("checks") or [])
-                              if ch.get("attr") in hard and ch.get("verdict") == "pass") >= len(hard) - 1)
-                or len(e.get("angles") or []) >= 3)]
-            keep = _uniq(passed + by_expert + near + seeds_failed + [e for e in unclear if e.get("seed")])
-            # не подтверждено только «где площадка» (город, адрес) — на главной его почти никогда нет, а подробная
-            # проверка находит его по годовым отчётам и «Контактам»: такие тоже не отсекаются пределом (20.11 так за
-            # бортом были 汤臣倍健, Aland Taizhou, Tingchuang, Biodep — 23 кандидата)
-            loc = {a.id for a in screen_attrs if re.search(r"город|площадк|адрес|провинц|местонахожд|\bcity\b|location|address",
-                                                           a.name, re.I)}
-            for e in near:
-                miss = {a for a in hard if not any(ch.get("attr") == a and ch.get("verdict") == "pass"
-                                                   for ch in e["screen"].get("checks") or [])}
-                if miss and miss <= loc:
-                    e["near_loc"] = True
-    else:
-        keep = list(entities)
-        keep_all = list(keep)
+    screened_on = bool(sc.screen and screen_attrs and start != "check")
+    assign_statuses(entities, screen_attrs, screened_on)
+    from .. import registry as R
+    market = R.market_of(question)
+    R.history(c.cfg.runs_dir, market, entities)  # что было с компанией в прежних заседаниях
     SCREEN_WEIGHTS.clear()
     SCREEN_WEIGHTS.update({a.id: max(0.5, float(a.weight)) for a in attrs})
-    # сколько проверять подробно: из настроек; иначе — сколько просит задание (широкий список «60–80» → 80: это
-    # число сильнее предела max_deep — его назвали вы сами), но не меньше первой группы; иначе — max_deep
+    # Один принцип вместо пяти отсечек: у каждой компании статус по доказательствам — подходит (страница или эксперт),
+    # вероятно (не подтверждено одно условие или её нашли 3+ поиска), не подходит (с цитатой), неизвестно. В
+    # предложенный список идут ваши, «подходит» и «вероятно» — все; урезать можно на остановке. Бюджет («Проверять
+    # подробно», число из задания) режет список сам, только когда остановки нет (бот) или число задано на экране
+    # вопроса. Никто не пропадает: не вошедшие — в «требуют проверки» со статусом.
     task_n = max(frame.shortlist, frame.top_n) if frame.shortlist else 0
-    limit = sc.shortlist or task_n or sc.max_deep or len(keep)
-    cap = min(200, max(sc.max_deep, sc.shortlist or task_n)) if sc.max_deep else len(keep)
-    keep.sort(key=_order)
-    keep = diverse_order(keep)
-    # «Проверять подробно» = 0 — без предела: подробно проверяются все прошедшие отсев и сомнительные
-    # число на экране вопроса («Проверять подробно: 30») — ваше прямое указание: оно сильнее и «проверять подробно
-    # всех» из настроек (раньше при max_deep 0 оно молча не действовало)
-    shortlist = keep[:sc.shortlist] if sc.shortlist else keep if not sc.max_deep else keep[:min(limit, cap)]
-    # подходящие (подтверждённые страницей или хоть одним экспертом; и те, у кого не найден только город площадки)
-    # не отсекаются числом из задания («60–80») и
-    # пределом «Проверять подробно» — в предложенный список идут все, урезать можно на остановке. 20.11 из 134
-    # подходящих в список вошли 80, а подтверждённые только экспертом (BioGrowing, Sirio) — нет. Только число,
-    # заданное на экране вопроса, — ваше прямое указание — сильнее
-    if sc.shortlist_only_pass and not sc.shortlist:
-        extra = [e for e in keep if (S.suits(e) or e.get("near_loc")) and e not in shortlist]
-        if extra:
-            shortlist = shortlist + extra  # без потолка: урезать — на остановке (21.11 потолок 200 выбросил BioGrowing и Sirio)
-            log.info("%sотбор: подходящих больше предела %d — в список добавлены все подходящие (+%d)", c._tag,
-                     min(limit, cap), len(extra))
-    keep_all.sort(key=_order)
+    pri = [e for e in entities if e.get("seed") or e.get("status") in ("fit", "likely")]
+    if not screened_on or not sc.shortlist_only_pass or not any(e.get("status") in ("fit", "likely") for e in entities):
+        pri = [e for e in entities if e.get("seed") or e.get("status") != "unfit"]
+    pri.sort(key=_order)
+    pri = diverse_order(pri)
+    keep = pri
+    keep_all = sorted([e for e in entities if e.get("seed") or e.get("status") != "unfit"], key=_order)
+    limit = sc.shortlist or task_n or sc.max_deep or len(pri)
+    cap = limit if sc.max_deep or sc.shortlist else len(pri)
+    if sc.shortlist:          # число на экране вопроса — ваше прямое указание
+        shortlist = pri[:sc.shortlist]
+    elif not gate_on(c, "shortlist"):  # остановки нет — бюджет режет сам; остальные — «требуют проверки»
+        shortlist = pri[:limit] if sc.max_deep else pri
+    else:
+        shortlist = pri
+    log.info("%sотбор: статусы %s; предложено %d (предел для «урезать» %d)", c._tag,
+             {k: sum(1 for e in entities if e.get("status") == k) for k in ("fit", "likely", "unfit", "unknown")},
+             len(shortlist), limit)
     coverage = required_coverage(frame, keep_all, shortlist)  # для охвата категорий — и «не выяснено»
     added = [e for x in coverage for e in x.pop("_add")]
     if added:
@@ -861,6 +910,9 @@ async def run(c: Council, question: str, *, criteria: list[str] | None, context:
     keep_ids = {e["id"] for e in shortlist}
     excluded = [x for x in excluded if x["id"] not in keep_ids]  # возвращённые вами на остановке — не «исключены»
     pending = pending_list(entities, keep_ids, {x["id"] for x in excluded}, screen_attrs)
+    if start != "check":  # реестр рынка: все кандидаты заседания со статусом — для следующих заседаний
+        n_reg = R.update(c.cfg.runs_dir, market, _task_keys(question), getattr(c, "session_id", "") or "", entities)
+        log.info("%sреестр рынка «%s»: обновлено %d компаний", c._tag, market, n_reg)
     pending += [{"id": e["id"], "name": e["name"], "names": (e.get("names") or [])[:4], "website": e.get("website") or "",
                  "location": e.get("location") or "", "found_by": [str(a) for a in (e.get("angles") or [])][:4],
                  "angles": len(e.get("angles") or []), "confirmed": [], "open": [], "passed": False, "page_pass": False,
@@ -1207,7 +1259,11 @@ async def discover(c: Council, frame: S.SelectionFrame, seeds: list[str]) -> tup
     have = {k for _, cd in found for k in keys(cd)}
     old = prior_finds(c)
     if sc.reuse_sessions:
-        old += prior_sessions(c, getattr(c, "_question", "") or frame.refined_question)
+        q0 = getattr(c, "_question", "") or frame.refined_question
+        old += prior_sessions(c, q0)
+        # и реестр рынка: компании прежних заседаний с тем же заданием, с их известными сайтами
+        from .. import registry as R
+        old += R.finds_for(c.cfg.runs_dir, R.market_of(q0), _task_keys(q0))
     prior = [(a, cd) for a, cd in old if not (keys(cd) & have)]
     # найдена снова — к нынешней находке добавляем прежние названия и источник (ссылку с цитатой)
     old_by: dict[str, S.Candidate] = {}
@@ -1273,14 +1329,15 @@ async def screen(c: Council, frame: S.SelectionFrame, attrs: list[S.Attribute], 
     sc = c.cfg.selection
     c._emit("stage", stage="screen", title=f"Отсев: {len(entities)} кандидатов по {len(attrs)} признакам "
                                           f"({', '.join(a.name for a in attrs)})")
-    batches = [entities[i:i + sc.screen_batch] for i in range(0, len(entities), sc.screen_batch)]
+    order = stable(entities)
+    batches = [order[i:i + sc.screen_batch] for i in range(0, len(order), sc.screen_batch)]
     prog = {"done": 0, "total": len(batches), "checked": 0, "objects": len(entities)}
     c._emit("progress", stage="screen", unit="пачек", **prog)
 
     async def check(b: list[dict[str, Any]]) -> Any:
         try:
             return await c._ask(searcher(c), "screen", S.screen_prompt(frame, attrs, b), S.ScreenBatch,
-                                meta={**META, "objects": [e["id"] for e in b]}, web_search=True)
+                                meta=bmeta(b), web_search=True)
         finally:
             prog["done"] += 1
             prog["checked"] += len(b)
@@ -1356,32 +1413,10 @@ def screen_passes(e: dict[str, Any]) -> float:
 
 
 def diverse_order(keep: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Порядок короткого списка: внутри каждой ступени (ваши → прошедшие отсев → сомнительные) — по очереди из каждого
-    направления поиска. Раньше брали «найденных чаще всего», и универсальные заводы, которых находит любой поиск,
-    вытесняли специалистов категории (пробиотики, пребиотики…), найденных одним направлением."""
-    def tier(e: dict[str, Any]) -> tuple[bool, ...]:  # ступени — те же, что в _order: чередование их не смешивает
-        return _order(e)[:4]
-    out: list[dict[str, Any]] = []
-    i = 0
-    while i < len(keep):
-        j = i
-        while j < len(keep) and tier(keep[j]) == tier(keep[i]):
-            j += 1
-        group = keep[i:j]
-        by_angle: dict[str, list[dict[str, Any]]] = {}
-        for e in group:  # каждый кандидат — в очереди своего самого «узкого» направления (где найдено меньше всего)
-            angs = [a.split(S.BY)[0] for a in e.get("angles") or []] or [""]
-            by_angle.setdefault(min(angs, key=lambda a: sum(1 for x in group if a in
-                                                              [y.split(S.BY)[0] for y in x.get("angles") or []])), []).append(e)
-        # внутри направления — сначала те, у кого отсев подтвердил больше признаков; сами направления — по очереди,
-        # чтобы специалисты и сырьевики из своих поисков не уступали место универсалам с «4 из 5»
-        queues = [sorted(q, key=lambda e: -screen_passes(e)) for q in by_angle.values()]
-        while any(queues):
-            for q in queues:
-                if q:
-                    out.append(q.pop(0))
-        i = j
-    return out
+    """Порядок списка — по статусу и силе доказательств (_order). Раньше внутри ступени чередовали направления поиска,
+    и при «урезать до N» заметные заводы уступали случайным из узких поисков (на данных 21.11: 8 контрольных
+    компаний из 80 против 12 при порядке по доказательствам); охват категорий задания держит required_coverage."""
+    return sorted(keep, key=_order)
 
 
 def _counts_text(found: int, excluded: int, checked: int, ranked: int) -> str:
@@ -1422,10 +1457,12 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
         us = [u for u in [e.get("url") or "", *(e.get("urls") or [])] if u.startswith(("http://", "https://"))
               and u not in shared and not S.weak_source(u)]
         home = _home(e["website"]) if S.site_of(e.get("website") or "") else ""
-        # страница, где нашли кандидата, и главная его сайта (если это другая страница) — не больше двух
+        # страница про OEM / производство (если такая среди найденных) — в первую очередь: на ней и стоит то, что
+        # спрашивает отсев; затем страница находки и главная — не больше двух
+        us.sort(key=lambda u: not OEM_PAGE.search(u))
         plan[e["id"]] = list(dict.fromkeys(([us[0]] if us else []) + ([home] if home else [])))[:2]
     # своей страницы нет совсем (нашли только в списке) и сайт не указан — ищем официальный сайт сразу
-    lost = [e for e in entities if not plan[e["id"]] and not own_site(e)]
+    lost = [e for e in entities if not plan[e["id"]] and not own_site(e) and not e.get("_sites_tried")]
     if lost:
         lost.sort(key=lambda e: -len(e.get("angles") or []))
         await find_sites(c, lost[:SCREEN_SITES])
@@ -1437,7 +1474,8 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
     prog = {"done": 0, "total": len(entities), "checked": 0, "objects": len(entities)}
     c._emit("progress", stage="screen", unit="кандидатов", **prog)
     stats = {"readable": 0}
-    chunks = [entities[k:k + SCREEN_CHUNK] for k in range(0, len(entities), SCREEN_CHUNK)]
+    order = stable(entities)
+    chunks = [order[k:k + SCREEN_CHUNK] for k in range(0, len(order), SCREEN_CHUNK)]
     gate_chunks = asyncio.Semaphore(SCREEN_CHUNKS_AT_ONCE)
 
     # кто не получил ответа у первой модели (сбой пачки или пропущен в ответе) — его дочитывает вторая
@@ -1460,7 +1498,7 @@ async def screen_pages(c: Council, frame: S.SelectionFrame, attrs: list[S.Attrib
         try:
             # 5 кандидатов × 5 признаков с цитатами не помещались в 4000: обрывы и «рассуждения съели лимит» (16.11)
             r = await c._ask(who, "screen", S.screen_read_prompt(frame, attrs, b, texts), S.ScreenBatch,
-                             meta={**META, "objects": [e["id"] for e in b]}, max_tokens=8000)
+                             meta=bmeta(b), max_tokens=8000)
         except (BudgetExceeded, OutOfCredits):
             raise
         except (ProviderError, InvalidResponse) as err:
@@ -1662,7 +1700,7 @@ async def find_sites(c: Council, ents: list[dict[str, Any]]) -> int:
     async def one(b: list[dict[str, Any]]) -> int:
         try:
             r = await c._ask(who, "sites", S.sites_prompt(b), S.Candidates,
-                             meta={**META, "objects": [e["id"] for e in b]}, web_search=True, max_tokens=4000)
+                             meta=bmeta(b), web_search=True, max_tokens=4000)
         except (BudgetExceeded, OutOfCredits):
             raise
         except (ProviderError, InvalidResponse) as err:
@@ -1680,7 +1718,8 @@ async def find_sites(c: Council, ents: list[dict[str, Any]]) -> int:
                 n += 1
         return n
 
-    batches = [ents[k:k + SITES_BATCH] for k in range(0, len(ents), SITES_BATCH)]
+    order = stable(ents)
+    batches = [order[k:k + SITES_BATCH] for k in range(0, len(order), SITES_BATCH)]
     for r in await asyncio.gather(*(one(b) for b in batches), return_exceptions=True):
         if isinstance(r, BaseException):
             raise r
