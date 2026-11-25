@@ -13,6 +13,9 @@ from pathlib import Path
 
 from flask import Flask, abort, redirect, request, send_from_directory, url_for
 
+from html import escape
+
+from .mod import build_mod, find_dosbox
 from .pipeline import UnsafeArchive, process_zip, zip_dir
 from .util import safe_name
 
@@ -61,6 +64,18 @@ document.addEventListener('drop',ev=>{if(ev.dataTransfer.files.length){file.file
 def _job_name(filename: str) -> str:
     stem = safe_name(Path(filename).stem)[:60] or "game"
     return f"{stem}-{uuid.uuid4().hex[:6]}"
+
+
+BUILD_PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Сборка мода</title>
+<style>:root{--bg:#f6f5f1;--fg:#1d1d1b;--muted:#6b6a64;--card:#fff;--line:#e3e1da;--accent:#2f6f5e}
+@media (prefers-color-scheme:dark){:root{--bg:#161614;--fg:#ecebe6;--muted:#9d9b93;--card:#21211e;--line:#34332f;--accent:#7cc4ad}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 16px}a{color:var(--accent)}.muted{color:var(--muted)}
+button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:9px 16px;font-size:14px;cursor:pointer;margin:0 8px 8px 0}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line)}
+td{padding:6px 10px;border-bottom:1px solid var(--line);vertical-align:top;font-size:14px;word-break:break-word}
+.ok{color:#2e8b57}.warn{color:#c98a00}.error{color:#c0392b}</style></head><body><main>{body}</main></body></html>"""
 
 
 def reveal_in_finder(path: Path):
@@ -126,9 +141,64 @@ def create_app(work_dir=None, desktop=False):
         return send_from_directory(jd, "result.zip", as_attachment=True, download_name=f"{job}.zip")
 
     @app.post("/job/<job>/reveal")
-    def reveal(job):
-        reveal_in_finder(job_dir(job) / "result")
+    @app.post("/job/<job>/reveal/<what>")
+    def reveal(job, what="result"):
+        sub = {"result": "result", "mod": "result/mod", "patched": "result/patched"}.get(what)
+        if not sub:
+            abort(404)
+        reveal_in_finder(job_dir(job) / sub)
         return "", 204
+
+    @app.post("/job/<job>/build")
+    def build(job):
+        result = job_dir(job) / "result"
+        try:
+            res = build_mod(result, log=lambda *_: None)
+        except (OSError, ValueError) as e:
+            return BUILD_PAGE.replace("{body}", f"<p class='error'>Ошибка сборки: {escape(str(e))}</p>"), 500
+        rows = "".join(
+            f"<tr><td class='{it.status}'>{ {'ok': '✓', 'warn': '!', 'error': '✗'}[it.status] }</td>"
+            f"<td>{escape(it.file)}</td><td>{escape(it.message)}</td></tr>" for it in res.items)
+        if not rows:
+            rows = "<tr><td colspan='3' class='muted'>Изменённых файлов нет — собрана исходная игра.</td></tr>"
+        errors = len(res.errors)
+        head = ("<h1>Игра собрана</h1>" if not errors else
+                f"<h1>Собрано с ошибками: {errors}</h1><p class='muted'>Файлы с ошибками оставлены "
+                "в исходном виде, остальные правки применены.</p>")
+        buttons = ""
+        if desktop:
+            buttons += (f"<button onclick=\"fetch('/job/{job}/reveal/patched',{{method:'POST'}})\">"
+                        f"Показать игру в Finder</button>")
+            if res.main_exe:
+                if find_dosbox():
+                    buttons += (f"<button onclick=\"fetch('/job/{job}/run',{{method:'POST'}})\">"
+                                f"Запустить в DOSBox ({escape(res.main_exe)})</button>")
+                else:
+                    buttons += ("<p class='muted'>Чтобы запускать игру отсюда, установите DOSBox Staging "
+                                "(dosbox-staging.github.io) в «Программы».</p>")
+        buttons += f"<p><a href='/job/{job}/download/patched'>Скачать собранную игру (zip)</a> · " \
+                   f"<a href='/job/{job}/report.html'>Назад к отчёту</a></p>"
+        body = (f"{head}{buttons}<table>{rows}</table>"
+                f"<p class='muted'>Без изменений: {res.unchanged}. Папка: {escape(res.patched_dir)}</p>")
+        return BUILD_PAGE.replace("{body}", body)
+
+    @app.post("/job/<job>/run")
+    def run_game(job):
+        conf = job_dir(job) / "result" / "patched" / "dosbox.conf"
+        cmd = find_dosbox()
+        if not desktop or not cmd or not conf.exists():
+            abort(404)
+        subprocess.Popen(cmd + ["-conf", str(conf)])
+        return "", 204
+
+    @app.get("/job/<job>/download/patched")
+    def download_patched(job):
+        jd = job_dir(job)
+        patched = jd / "result" / "patched"
+        if not patched.is_dir():
+            abort(404)
+        zip_dir(patched, jd / "patched.zip")
+        return send_from_directory(jd, "patched.zip", as_attachment=True, download_name=f"{job}-mod.zip")
 
     @app.get("/job/<job>/<path:path>")
     def files(job, path):
@@ -137,13 +207,22 @@ def create_app(work_dir=None, desktop=False):
             report = result / "report.html"
             if not report.is_file():
                 abort(404)
+            mod_box = (f"<div class='exe'><h3>Режим мода: правка ресурсов</h3>"
+                       f"<p>Графика, палитры, звуки, тексты и строки программ выгружены для правки в папку "
+                       f"<code>mod/</code> (подробности в <a href='mod/README.txt'>README</a>). "
+                       f"Отредактируйте файлы и соберите игру заново.</p>")
             if desktop:
                 bar = (f"<main><p><button onclick=\"fetch('/job/{job}/reveal',{{method:'POST'}})\">"
                        f"Показать в Finder</button> &nbsp; <a href='/'>Разобрать другую игру</a></p>"
                        f"<p class='muted'>Папка: {result}</p>")
+                mod_box += (f"<button onclick=\"fetch('/job/{job}/reveal/mod',{{method:'POST'}})\">"
+                            f"Открыть папку для правок</button> ")
             else:
                 bar = (f"<main><p><a href='/job/{job}/download'>Скачать всё одним zip</a> · "
                        f"<a href='/'>Загрузить другую игру</a></p>")
+            mod_box += (f"<form method='post' action='/job/{job}/build' style='display:inline'>"
+                        f"<button>Собрать игру с правками</button></form></div>")
+            bar += mod_box
             return report.read_text(encoding="utf-8").replace("<main>", bar, 1)
         return send_from_directory(result, path)
 

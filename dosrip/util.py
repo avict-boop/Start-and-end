@@ -55,3 +55,12 @@ def looks_like_text(data: bytes) -> bool:
 def find_strings(data: bytes, min_len: int = 5):
     for m in re.finditer(rb"[\x20-\x7e]{%d,}" % min_len, data):
         yield m.start(), m.group().decode("ascii")
+
+
+def guess_dos_encoding(data: bytes) -> str:
+    """CP866 (русские DOS-игры) или CP437 (остальные): по доле байт кириллицы CP866."""
+    high = [b for b in data if b >= 0x80]
+    if len(high) < 20:
+        return "cp437"
+    cyr = sum(1 for b in high if b <= 0xAF or 0xE0 <= b <= 0xF1)
+    return "cp866" if cyr / len(high) > 0.7 else "cp437"

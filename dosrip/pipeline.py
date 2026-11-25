@@ -14,7 +14,7 @@ from .exe.disasm import Disassembly
 from .exe.mz import looks_packed, parse_le_summary, parse_mz
 from .exe.unpack import unpack
 from .formats import audio, images
-from .util import entropy, find_strings, looks_like_text, safe_name
+from .util import entropy, find_strings, guess_dos_encoding, looks_like_text, safe_name
 
 MAX_TOTAL_UNPACKED = 2 * 1024 ** 3
 MAX_FILES = 20000
@@ -33,6 +33,8 @@ class Output:
     note: str = ""
     width: int = 0
     height: int = 0
+    sha1: str = ""  # хеш исходных байт ресурса (для поиска его копий)
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -51,6 +53,7 @@ class Report:
     version: str = __version__
     files: list = field(default_factory=list)
     duplicates: int = 0
+    copies: dict = field(default_factory=dict)  # sha1 -> [[файл, смещение, длина], ...] повторных копий
 
     def outputs(self, kind=None):
         return [o for f in self.files for o in f.outputs if kind is None or o.kind == kind]
@@ -85,6 +88,7 @@ class Extractor:
         self.out = out
         self.log = log
         self.seen = set()
+        self.copies = {}
         self.duplicates = 0
         self.palette = None
         self.palette_source = ""
@@ -101,10 +105,12 @@ class Extractor:
         img.save(d / name)
         return f"{sub}/{name}", img.width, img.height
 
-    def _dup(self, blob: bytes) -> bool:
-        h = hashlib.sha1(blob).digest()
+    def _dup(self, blob: bytes, source: str = "", off: int = 0) -> bool:
+        h = hashlib.sha1(blob).hexdigest()
+        self._last_sha1 = h
         if h in self.seen:
             self.duplicates += 1
+            self.copies.setdefault(h, []).append([source, off, len(blob)])
             return True
         self.seen.add(h)
         return False
@@ -112,8 +118,9 @@ class Extractor:
     # ------------------------------------------------------------ ресурсы
     def convert_hit(self, rep: FileReport, data: bytes, off: int, length: int, fmt: str):
         blob = data[off: off + length]
-        if self._dup(blob):
+        if self._dup(blob, rep.path, off):
             return
+        first_new = len(rep.outputs)
         base = f"{safe_name(rep.path)}@{off:06X}"
         O = lambda kind, path, note="", w=0, h=0: rep.outputs.append(  # noqa: E731
             Output(kind, path, rep.path, off, length, fmt, note, w, h))
@@ -166,6 +173,8 @@ class Extractor:
                 O("music", self._write("music", f"{base}.{fmt}", blob), "трекерная музыка")
         except Exception as e:  # noqa: BLE001 - повреждённые данные не должны ронять весь процесс
             rep.notes.append(f"{fmt} @ {off:#x}: не удалось преобразовать ({e})")
+        for o in rep.outputs[first_new:]:
+            o.sha1 = self._last_sha1
 
     def whole_file(self, rep: FileReport, data: bytes, ext: str):
         name = safe_name(rep.path)
@@ -174,7 +183,8 @@ class Extractor:
             if self.palette is None:
                 self.palette, self.palette_source = pal, rep.path
             path, w, h = self._save_img("graphics/palettes", name + ".png", images.palette_swatch(pal))
-            rep.outputs.append(Output("palette", path, rep.path, 0, len(data), "vga-palette", "палитра VGA", w, h))
+            rep.outputs.append(Output("palette", path, rep.path, 0, len(data), "vga-palette", "палитра VGA", w, h,
+                                      hashlib.sha1(data).hexdigest()))
             return True
         screen = images.guess_raw_screen(data)
         if screen and entropy(data) < 7.9:
@@ -184,14 +194,18 @@ class Extractor:
                 pal = self.palette or images.DEFAULT_PALETTE
                 note = (f"экран VGA 320x200, палитра из {self.palette_source}" if self.palette
                         else "экран VGA 320x200, палитра приблизительная")
-            if not self._dup(data):
+            if not self._dup(data, rep.path, 0):
                 path, w, h = self._save_img("graphics", name + ".png", images.raw_vga_screen(pixels, pal))
-                rep.outputs.append(Output("image", path, rep.path, 0, len(data), "raw-vga", note, w, h))
+                extra = {"palette_source": "" if len(data) == 64768 else (self.palette_source if self.palette else "")}
+                rep.outputs.append(Output("image", path, rep.path, 0, len(data), "raw-vga", note, w, h,
+                                          self._last_sha1, extra))
             return True
         if looks_like_text(data) and (ext in TEXT_EXT or len(data) < 200_000):
-            text = data.replace(b"\x1a", b"").decode("cp437")
+            enc = guess_dos_encoding(data)
+            text = data.replace(b"\x1a", b"").decode(enc)
             path = self._write("text", name + ".txt", text.encode("utf-8"))
-            rep.outputs.append(Output("text", path, rep.path, 0, len(data), "text", "CP437 -> UTF-8"))
+            rep.outputs.append(Output("text", path, rep.path, 0, len(data), "text", f"{enc.upper()} -> UTF-8",
+                                      extra={"encoding": enc}))
             return True
         return False
 
@@ -309,9 +323,12 @@ def process_zip(zip_path, out_dir, log=print, name=None) -> Report:
         report.files.append(ex.process_file(rel, data))
     report.files.sort(key=lambda f: f.path)
     report.duplicates = ex.duplicates
+    report.copies = ex.copies
     (out / "report.json").write_text(json.dumps(asdict(report), ensure_ascii=False, indent=2), encoding="utf-8")
+    from .mod import export_mod
     from .report import write_html
 
+    export_mod(out, report)
     write_html(report, out / "report.html")
     return report
 

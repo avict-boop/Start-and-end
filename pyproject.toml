@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dosrip"
-version = "0.1.0"
+version = "0.2.0"
 description = "Восстановление графики, звука, музыки и кода старых DOS-игр"
 requires-python = ">=3.9"
 dependencies = ["pillow>=9", "capstone>=5", "unicorn>=2"]

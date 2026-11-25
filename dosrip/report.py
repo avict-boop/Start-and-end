@@ -93,6 +93,11 @@ def write_html(report, dest):
                 h.append(f"<p class='muted'>{escape(n)}</p>")
             h.append("</div>")
 
+    h.append("<h2>Режим мода</h2><p>Ресурсы для правки лежат в папке <a href='mod/README.txt'>mod/</a>: "
+             "картинки, палитры, звуки, тексты и строки программ. Отредактируйте их и соберите игру командой "
+             "<code>dosrip build &lt;эта папка&gt;</code> или кнопкой в приложении. Готовая игра появится "
+             "в <code>patched/</code>.</p>")
+
     if texts:
         h.append("<h2>Тексты</h2><ul>")
         for o in texts:

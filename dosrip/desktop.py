@@ -43,7 +43,9 @@ def selftest() -> int:
     exe = build_mz(prog, [], 0, 0, 0x10, 0x100, minalloc=0x20)
     assert unpack(exe) is None  # обычная программа — распаковывать нечего, эмулятор отработал
     buf = io.BytesIO()
-    Image.new("P", (8, 8)).save(buf, "PCX")
+    pic = Image.new("P", (8, 8))
+    pic.putpalette([v for i in range(256) for v in (i, i, i)])
+    pic.save(buf, "PCX")
     z = io.BytesIO()
     with zipfile.ZipFile(z, "w") as zf:
         zf.writestr("GAME/PIC.PCX", buf.getvalue())
@@ -54,6 +56,13 @@ def selftest() -> int:
         rep = process_zip(zp, Path(td) / "out", log=lambda *_: None)
         assert len(rep.outputs("image")) == 1, rep
         assert (Path(td) / "out/code/GAME__GAME.EXE/listing.asm").exists()
+        from .mod import build_mod
+
+        png = Path(td) / "out/mod/graphics/GAME__PIC.PCX@000000.png"
+        Image.new("RGB", (16, 16), (255, 255, 255)).save(png)  # перерисовка в 2x
+        res = build_mod(Path(td) / "out", log=lambda *_: None)
+        assert not res.errors, res.items
+        assert (Path(td) / "out/patched/GAME/PIC.PCX").read_bytes() != buf.getvalue()
     print(f"dosrip {__version__} selftest OK")
     return 0
 
