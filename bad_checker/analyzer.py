@@ -6,7 +6,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from .models import Finding, Ingredient, Level, NutrientResult, Product, Report
+from .models import Finding, Ingredient, Level, NutrientResult, Product, Report, pct, round_half_up, times
 from .parser import normalize
 from . import sgr
 
@@ -14,53 +14,19 @@ DATA_DIR = Path(__file__).parent / "data"
 
 MASS_FACTORS = {"г": 1_000_000.0, "мг": 1_000.0, "мкг": 1.0}  # в микрограммах
 
-MINERALS = {"calcium", "phosphorus", "magnesium", "iron", "zinc", "iodine", "copper",
-            "manganese", "selenium", "chromium", "molybdenum"}
-COMPOUND_MARKERS = ("цитрат", "оксид", "карбонат", "сульфат", "глюконат", "фумарат",
-                    "бисглицинат", "пиколинат", "лактат", "хлорид", "йодид", "йодат",
-                    "селенит", "молибдат", "хелат", "аспарагинат", "малат")
-ELEMENTAL_MARKERS = ("в пересчете на", "элементарн", "в т.ч.", "в том числе")
-
-# Обязательные элементы маркировки БАД (ТР ТС 022/2011 ст. 4.4, ТР ТС 021/2011 ст. 7 и др.)
-LABEL_REQUIREMENTS = [
-    ("label_bad_status", [r"биологически активн\w* добавк\w* к пище", r"\bбад\b"],
-     "Не указано, что продукт является биологически активной добавкой к пище",
-     "ТР ТС 022/2011, ст. 4.4; ТР ТС 021/2011"),
-    ("label_not_drug", [r"не является лекарственн\w* (средством|препаратом)"],
-     "Нет надписи «Не является лекарственным средством»",
-     "ТР ТС 022/2011, ст. 4.4"),
-    ("label_usage", [r"рекомендаци\w* по применению", r"способ применения", r"принимать по"],
-     "Нет рекомендаций по применению (дозировка, способ применения)",
-     "ТР ТС 022/2011, ст. 4.4"),
-    ("label_contra", [r"противопоказани"],
-     "Не указаны противопоказания",
-     "ТР ТС 022/2011, ст. 4.4"),
-    ("label_storage", [r"услови\w* хранения", r"хранить"],
-     "Не указаны условия хранения",
-     "ТР ТС 022/2011, ст. 4.1"),
-    ("label_shelf", [r"срок годности", r"годен до"],
-     "Не указан срок годности",
-     "ТР ТС 022/2011, ст. 4.1"),
-    ("label_manufacturer", [r"изготовител", r"производител"],
-     "Не указан изготовитель",
-     "ТР ТС 022/2011, ст. 4.1"),
-    ("label_sgr", [r"свидетельств\w* о (государственной )?регистрации", r"\bсгр\b", r"ru\.\d{2}\.\d{2}"],
-     "Не указаны сведения о государственной регистрации (СГР)",
-     "ТР ТС 021/2011, ст. 24; ТР ТС 022/2011, ст. 4.4"),
-]
-
-# БАД не может позиционироваться как лекарство (ТР ТС 022/2011 ст. 4.4; 38-ФЗ «О рекламе» ст. 25)
-MEDICAL_CLAIMS = [
-    r"\bлеч(ит|ат|ени\w*|ебн\w*|ащ\w*|им\w*)", r"\bизлеч\w*", r"\bвылеч\w*",
-    r"\bисцел\w*", r"\bот (всех )?болезн\w*", r"\bтерапи\w*",
-    r"\bзаменяет (лекарств\w*|препарат\w*)", r"\bгарантирует\w*",
-    r"\b100\s*% (результат|эффект)\w*",
-]
-
-
 @lru_cache(maxsize=None)
 def load_db(name: str) -> dict:
     return json.loads((DATA_DIR / f"{name}.json").read_text(encoding="utf-8"))
+
+
+_RULES = load_db("rules")
+MINERALS = set(_RULES["minerals"])
+COMPOUND_MARKERS = tuple(_RULES["compound_markers"])
+ELEMENTAL_MARKERS = tuple(_RULES["elemental_markers"])
+# Обязательные элементы маркировки БАД (ТР ТС 022/2011 ст. 4.4, ТР ТС 021/2011 и др.)
+LABEL_REQUIREMENTS = [(r["code"], r["patterns"], r["message"], r["basis"]) for r in _RULES["label_requirements"]]
+# БАД не может позиционироваться как лекарство (ТР ТС 022/2011 ст. 4.4; 38-ФЗ «О рекламе» ст. 25)
+MEDICAL_CLAIMS = _RULES["medical_claims"]
 
 
 def _stem(word: str) -> str:
@@ -123,7 +89,8 @@ def convert(amount: float, unit: str, nutrient: dict) -> float | None:
 
 
 def _fmt(x: float) -> str:
-    return f"{x:.3f}".rstrip("0").rstrip(".") if x < 10 else f"{x:.1f}".rstrip("0").rstrip(".")
+    s = f"{round_half_up(x, 3):.3f}" if x < 10 else f"{round_half_up(x, 1):.1f}"
+    return s.rstrip("0").rstrip(".")
 
 
 class Analyzer:
@@ -214,23 +181,28 @@ class Analyzer:
                 f"({nutrient['name']}). Нормы установлены для элемента — уточните пересчёт",
                 ingredient=ing.name))
 
+        upper = f"{_fmt(nutrient['upper'])} {nutrient['unit']}"
         if daily > nutrient["upper"]:
+            extra = (f"; суточная потребность ({_fmt(nutrient['adequate'])} {nutrient['unit']}) "
+                     f"превышена {times(res.ratio_adequate)}")
             report.findings.append(Finding(
                 Level.CRITICAL, f"over_upper:{nutrient['id']}",
-                f"{nutrient['name']}: {amount_str} превышает верхний допустимый уровень "
-                f"{_fmt(nutrient['upper'])} {nutrient['unit']} ({res.pct_upper:.0f}% ВДУ)",
+                f"{nutrient['name']}: {amount_str} — верхний допустимый уровень ({upper}) "
+                f"превышен {times(res.ratio_upper)}{extra}",
                 ingredient=ing.name, basis=basis))
         elif res.pct_adequate < 15:
             report.findings.append(Finding(
                 Level.INFO, f"low:{nutrient['id']}",
-                f"{nutrient['name']}: {amount_str} — {res.pct_adequate:.0f}% адекватного уровня (<15%); "
+                f"{nutrient['name']}: {amount_str} — {pct(res.pct_adequate)}% адекватного уровня (<15%); "
                 f"заявлять продукт «источником» этого вещества нельзя",
                 ingredient=ing.name, basis="ТР ТС 022/2011, ст. 4.4, п. 13; Приложение 2"))
         else:
+            over_adequate = (f", выше суточной потребности {times(res.ratio_adequate)}"
+                             if res.ratio_adequate >= 1.05 else "")
             report.findings.append(Finding(
                 Level.OK, f"within:{nutrient['id']}",
-                f"{nutrient['name']}: {amount_str} — {res.pct_adequate:.0f}% АУП, "
-                f"не превышает ВДУ {_fmt(nutrient['upper'])} {nutrient['unit']}",
+                f"{nutrient['name']}: {amount_str} — {pct(res.pct_adequate)}% АУП{over_adequate}; "
+                f"не превышает ВДУ {upper} ({pct(res.pct_upper)}% ВДУ)",
                 ingredient=ing.name, basis=basis))
 
     def _check_full_text(self, product: Product, report: Report) -> None:
@@ -250,6 +222,13 @@ class Analyzer:
     # --- маркировка ---------------------------------------------------------
     def _check_label(self, label: str, report: Report) -> None:
         text = normalize(label)
+        letters = re.findall(r"[^\W\d_]", text)
+        if len(letters) >= 40 and sum("а" <= c <= "я" for c in letters) / len(letters) < 0.3:
+            report.findings.append(Finding(
+                Level.WARNING, "label_not_russian",
+                "Маркировка не на русском языке. Для обращения в РФ информация на этикетке "
+                "должна быть на русском языке (допускается наклейка-перевод)",
+                basis="ТР ТС 022/2011, ст. 4.8"))
         for code, patterns, message, basis in LABEL_REQUIREMENTS:
             if not any(re.search(p, text) for p in patterns):
                 report.findings.append(Finding(Level.WARNING, code, message, basis=basis))
@@ -261,7 +240,7 @@ class Analyzer:
                     Level.CRITICAL, "medical_claim",
                     f"Недопустимое заявление лечебных свойств: «{m.group(0)}». "
                     f"БАД не может позиционироваться как лекарственное средство",
-                    basis="ТР ТС 022/2011, ст. 4.4; ФЗ № 38-ФЗ «О рекламе», ст. 25"))
+                    basis=_RULES["medical_claims_basis"]))
 
     def _check_sgr(self, label: str, report: Report) -> None:
         numbers = sgr.find_sgr(label)

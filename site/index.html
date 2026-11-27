@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Анализатор БАД</title>
+<meta name="description" content="Проверка состава и маркировки БАД по законодательству РФ и ЕАЭС: фото этикетки на любом языке, запрещённые компоненты, превышение суточных норм.">
+<meta name="theme-color" content="#2f6b4f">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <h1>Анализатор БАД</h1>
+    <p>Состав и маркировка по ТР ТС 021/2011, 022/2011, 029/2012 и Единым санитарным требованиям</p>
+  </div>
+</header>
+
+<main class="wrap layout">
+  <section class="panel" aria-labelledby="in-h">
+    <h2 id="in-h" class="sr-only">Данные продукта</h2>
+
+    <div class="photo-actions">
+      <label class="btn primary big" for="camera">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 4h6l1.5 2H20a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h3.5L9 4zm3 4a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm0 2a3 3 0 1 1 0 6 3 3 0 0 1 0-6z"/></svg>
+        Сфотографировать этикетку
+      </label>
+      <input type="file" id="camera" accept="image/*" capture="environment" hidden>
+      <label class="btn ghost" for="gallery">Выбрать фото</label>
+      <input type="file" id="gallery" accept="image/*" hidden>
+    </div>
+
+    <fieldset class="langs">
+      <legend>Язык этикетки <span class="hint">— можно несколько</span></legend>
+      <div id="langs" class="chips"></div>
+    </fieldset>
+
+    <div id="photo" class="photo" hidden>
+      <img id="photo-img" alt="Фото этикетки">
+      <div class="ocr-status" id="ocr-status" role="status" aria-live="polite"></div>
+      <div class="progress" id="ocr-progress" hidden><i></i></div>
+    </div>
+
+    <label for="text">Состав и текст этикетки
+      <span class="hint">— распознанный текст можно исправить; каждый компонент с новой строки</span></label>
+    <textarea id="text" rows="9" spellcheck="false" placeholder="Состав:&#10;Витамин C (аскорбиновая кислота) – 80 мг&#10;Витамин D3 – 400 МЕ&#10;Цинк – 10 мг"></textarea>
+
+    <div class="row">
+      <div class="field">
+        <label for="perday">Приёмов в сутки</label>
+        <input type="number" id="perday" value="1" min="0.1" step="any" inputmode="decimal">
+      </div>
+      <label class="check" for="perunit">
+        <input type="checkbox" id="perunit" checked>
+        Количества указаны на 1 приём (таблетку, капсулу, порцию)
+      </label>
+    </div>
+
+    <div class="actions">
+      <button class="btn primary" type="button" id="go">Проверить</button>
+      <button class="btn ghost" type="button" id="example">Пример</button>
+      <button class="btn ghost" type="button" id="clear">Очистить</button>
+    </div>
+    <div id="err" role="alert"></div>
+  </section>
+
+  <section class="panel results" id="result" aria-live="polite">
+    <div class="empty">
+      <p><strong>Сфотографируйте этикетку</strong> или вставьте состав текстом.</p>
+      <p>Программа найдёт запрещённые для БАД компоненты, сравнит суточные дозы с допустимыми уровнями и покажет, во сколько раз превышена норма, а также проверит маркировку и номер СГР.</p>
+    </div>
+  </section>
+</main>
+
+<footer class="wrap foot">
+  Справочный инструмент. Не заменяет экспертизу и государственную регистрацию. Фото обрабатываются на вашем устройстве и никуда не отправляются.
+</footer>
+
+<script src="js/engine.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

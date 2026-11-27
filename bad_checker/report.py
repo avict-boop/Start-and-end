@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 
-from .models import Level, Report
+from .models import Level, Report, times
 
 ORDER = [Level.CRITICAL, Level.WARNING, Level.INFO, Level.OK]
 DISCLAIMER = ("Результат носит справочный характер и не заменяет экспертизу и государственную "
@@ -30,10 +30,11 @@ def to_text(report: Report) -> str:
     ]
     if report.nutrients:
         lines.append("Нормируемые вещества (в сутки):")
-        lines.append(f"  {'Вещество':<28}{'Доза':>12}  {'% АУП':>7}  {'% ВДУ':>7}")
+        lines.append(f"  {'Вещество':<28}{'Доза':>12}  {'% АУП':>7}  {'% ВДУ':>7}  {'Превышение ВДУ':<14}")
         for n in report.nutrients:
+            over = times(n.ratio_upper) if n.ratio_upper > 1 else "—"
             lines.append(f"  {n.name[:27]:<28}{n.daily_amount:>9.4g} {n.unit:<3}"
-                         f"{n.pct_adequate:>7.0f}%  {n.pct_upper:>6.0f}%")
+                         f"{n.pct_adequate:>7.0f}%  {n.pct_upper:>6.0f}%  {over}")
         lines.append("")
     for f in _sorted(report):
         lines.append(f"[{f.level.label}] {f.message}")
@@ -47,9 +48,10 @@ def to_markdown(report: Report) -> str:
     p = report.product
     out = [f"# Анализ БАД: {p.name}", "", f"**Итог:** {report.verdict}", ""]
     if report.nutrients:
-        out += ["| Вещество | Доза в сутки | % АУП | % ВДУ |", "|---|---:|---:|---:|"]
+        out += ["| Вещество | Доза в сутки | % АУП | % ВДУ | Превышение ВДУ |", "|---|---:|---:|---:|---|"]
         for n in report.nutrients:
-            out.append(f"| {n.name} | {n.daily_amount:.4g} {n.unit} | {n.pct_adequate:.0f}% | {n.pct_upper:.0f}% |")
+            over = f"**{times(n.ratio_upper)}**" if n.ratio_upper > 1 else "—"
+            out.append(f"| {n.name} | {n.daily_amount:.4g} {n.unit} | {n.pct_adequate:.0f}% | {n.pct_upper:.0f}% | {over} |")
         out.append("")
     out.append("## Результаты проверки\n")
     for f in _sorted(report):

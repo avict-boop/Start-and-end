@@ -20,7 +20,16 @@
     "ретинола ацетат",
     "ретинола пальмитат",
     "ретинил ацетат",
-    "ретинил пальмитат"
+    "ретинил пальмитат",
+    "vitamin a",
+    "retinol",
+    "retinyl acetate",
+    "retinyl palmitate",
+    "retinol acetate",
+    "retinylpalmitat",
+    "retinylacetat",
+    "维生素a",
+    "视黄醇"
    ]
   },
   {
@@ -32,7 +41,14 @@
    "aliases": [
     "бета-каротин",
     "β-каротин",
-    "бета каротин"
+    "бета каротин",
+    "beta-carotene",
+    "beta carotene",
+    "betacarotene",
+    "beta-carotin",
+    "betacarotin",
+    "β-胡萝卜素",
+    "胡萝卜素"
    ]
   },
   {
@@ -48,7 +64,20 @@
     "витамин д3",
     "витамин д",
     "холекальциферол",
-    "эргокальциферол"
+    "эргокальциферол",
+    "vitamin d3",
+    "vitamin d",
+    "cholecalciferol",
+    "colecalciferol",
+    "cholecalciferolo",
+    "colecalciferolo",
+    "ergocalciferol",
+    "vitamine d3",
+    "vitamine d",
+    "vitamina d3",
+    "vitamina d",
+    "维生素d3",
+    "维生素d"
    ]
   },
   {
@@ -64,7 +93,18 @@
     "токоферол",
     "токоферола ацетат",
     "альфа-токоферол",
-    "токоферилацетат"
+    "токоферилацетат",
+    "vitamin e",
+    "d-alpha tocopherol",
+    "dl-alpha tocopherol",
+    "d-alpha-tocopherol",
+    "dl-alpha-tocopheryl acetate",
+    "tocopherol",
+    "tocopheryl acetate",
+    "tocopherylacetat",
+    "vitamine e",
+    "vitamina e",
+    "维生素e"
    ]
   },
   {
@@ -81,7 +121,19 @@
     "витамин к",
     "менахинон",
     "филлохинон",
-    "фитоменадион"
+    "фитоменадион",
+    "vitamin k2",
+    "vitamin k1",
+    "vitamin k",
+    "menaquinone",
+    "menaquinone-7",
+    "mk-7",
+    "phylloquinone",
+    "phytonadione",
+    "vitamine k",
+    "vitamina k",
+    "维生素k2",
+    "维生素k"
    ]
   },
   {
@@ -96,7 +148,20 @@
     "аскорбиновая кислота",
     "аскорбат натрия",
     "аскорбат кальция",
-    "аскорбил пальмитат"
+    "аскорбил пальмитат",
+    "vitamin c",
+    "ascorbic acid",
+    "l-ascorbic acid",
+    "sodium ascorbate",
+    "calcium ascorbate",
+    "ascorbyl palmitate",
+    "ascorbinsaure",
+    "acide ascorbique",
+    "acido ascorbico",
+    "vitamine c",
+    "vitamina c",
+    "维生素c",
+    "抗坏血酸"
    ]
   },
   {
@@ -110,7 +175,19 @@
     "витамин в1",
     "тиамин",
     "тиамина мононитрат",
-    "тиамина гидрохлорид"
+    "тиамина гидрохлорид",
+    "vitamin b1",
+    "thiamine",
+    "thiamin",
+    "thiamine mononitrate",
+    "thiamine hydrochloride",
+    "thiamine hcl",
+    "thiaminmononitrat",
+    "vitamine b1",
+    "vitamina b1",
+    "tiamina",
+    "维生素b1",
+    "硫胺素"
    ]
   },
   {
@@ -122,7 +199,16 @@
    "aliases": [
     "витамин b2",
     "витамин в2",
-    "рибофлавин"
+    "рибофлавин",
+    "vitamin b2",
+    "riboflavin",
+    "riboflavine",
+    "riboflavina",
+    "vitamine b2",
+    "vitamina b2",
+    "riboflavin-5-phosphate",
+    "维生素b2",
+    "核黄素"
    ]
   },
   {
@@ -136,7 +222,20 @@
     "витамин в6",
     "пиридоксин",
     "пиридоксина гидрохлорид",
-    "пиридоксаль-5-фосфат"
+    "пиридоксаль-5-фосфат",
+    "vitamin b6",
+    "pyridoxine",
+    "pyridoxine hydrochloride",
+    "pyridoxine hcl",
+    "pyridoxal-5-phosphate",
+    "pyridoxal 5'-phosphate",
+    "p-5-p",
+    "pyridoxinhydrochlorid",
+    "vitamine b6",
+    "vitamina b6",
+    "piridoxina",
+    "维生素b6",
+    "吡哆醇"
    ]
   },
   {
@@ -152,7 +251,18 @@
     "витамин pp",
     "витамин рр",
     "витамин b3",
-    "витамин в3"
+    "витамин в3",
+    "niacin",
+    "niacinamide",
+    "nicotinamide",
+    "nicotinic acid",
+    "vitamin b3",
+    "vitamine b3",
+    "vitamina b3",
+    "niacina",
+    "nicotinamid",
+    "烟酸",
+    "烟酰胺"
    ]
   },
   {
@@ -166,7 +276,18 @@
     "витамин в12",
     "цианокобаламин",
     "метилкобаламин",
-    "кобаламин"
+    "кобаламин",
+    "vitamin b12",
+    "cyanocobalamin",
+    "methylcobalamin",
+    "adenosylcobalamin",
+    "hydroxocobalamin",
+    "cobalamin",
+    "vitamine b12",
+    "vitamina b12",
+    "cianocobalamina",
+    "维生素b12",
+    "钴胺素"
    ]
   },
   {
@@ -181,7 +302,19 @@
     "фолаты",
     "витамин b9",
     "витамин в9",
-    "метилфолат"
+    "метилфолат",
+    "folic acid",
+    "folate",
+    "folates",
+    "methylfolate",
+    "l-methylfolate",
+    "5-mthf",
+    "vitamin b9",
+    "folsaure",
+    "acide folique",
+    "acido folico",
+    "folacin",
+    "叶酸"
    ]
   },
   {
@@ -195,7 +328,18 @@
     "пантотенат кальция",
     "витамин b5",
     "витамин в5",
-    "d-пантотенат"
+    "d-пантотенат",
+    "pantothenic acid",
+    "calcium pantothenate",
+    "d-calcium pantothenate",
+    "pantothenate",
+    "vitamin b5",
+    "pantothensaure",
+    "calcium-d-pantothenat",
+    "acide pantothenique",
+    "acido pantotenico",
+    "泛酸",
+    "泛酸钙"
    ]
   },
   {
@@ -208,7 +352,14 @@
     "биотин",
     "витамин h",
     "витамин b7",
-    "витамин в7"
+    "витамин в7",
+    "biotin",
+    "d-biotin",
+    "vitamin b7",
+    "vitamin h",
+    "biotine",
+    "biotina",
+    "生物素"
    ]
   },
   {
@@ -222,7 +373,17 @@
     "кальция карбонат",
     "карбонат кальция",
     "цитрат кальция",
-    "кальция цитрат"
+    "кальция цитрат",
+    "calcium",
+    "calcium carbonate",
+    "calcium citrate",
+    "kalzium",
+    "calciumcarbonat",
+    "calciumcitrat",
+    "calcio",
+    "carbonate de calcium",
+    "钙",
+    "碳酸钙"
    ]
   },
   {
@@ -232,7 +393,11 @@
    "adequate": 800,
    "upper": 1600,
    "aliases": [
-    "фосфор"
+    "фосфор",
+    "phosphorus",
+    "phosphor",
+    "phosphore",
+    "fosforo"
    ]
   },
   {
@@ -249,7 +414,18 @@
     "оксид магния",
     "магния лактат",
     "магния бисглицинат",
-    "магния хелат"
+    "магния хелат",
+    "magnesium",
+    "magnesium citrate",
+    "magnesium oxide",
+    "magnesium glycinate",
+    "magnesium bisglycinate",
+    "magnesium lactate",
+    "magnesium malate",
+    "magnesiumcitrat",
+    "magnesiumoxid",
+    "magnesio",
+    "镁"
    ]
   },
   {
@@ -265,7 +441,18 @@
     "железа бисглицинат",
     "железа сульфат",
     "сульфат железа",
-    "железа глюконат"
+    "железа глюконат",
+    "iron",
+    "ferrous fumarate",
+    "ferrous sulfate",
+    "ferrous bisglycinate",
+    "ferrous gluconate",
+    "iron bisglycinate",
+    "eisen",
+    "fer",
+    "hierro",
+    "ferro",
+    "铁"
    ]
   },
   {
@@ -281,7 +468,18 @@
     "цинка оксид",
     "оксид цинка",
     "цинка глюконат",
-    "цинка сульфат"
+    "цинка сульфат",
+    "zinc",
+    "zinc citrate",
+    "zinc picolinate",
+    "zinc oxide",
+    "zinc gluconate",
+    "zinc sulfate",
+    "zink",
+    "zinkcitrat",
+    "zinkgluconat",
+    "zinco",
+    "锌"
    ]
   },
   {
@@ -294,7 +492,16 @@
     "йод",
     "калия йодид",
     "йодид калия",
-    "калия йодат"
+    "калия йодат",
+    "iodine",
+    "potassium iodide",
+    "potassium iodate",
+    "jod",
+    "kaliumjodid",
+    "iode",
+    "yodo",
+    "iodio",
+    "碘"
    ]
   },
   {
@@ -307,7 +514,17 @@
     "медь",
     "меди сульфат",
     "меди глюконат",
-    "меди цитрат"
+    "меди цитрат",
+    "copper",
+    "copper gluconate",
+    "copper sulfate",
+    "copper citrate",
+    "cupric",
+    "kupfer",
+    "cuivre",
+    "cobre",
+    "rame",
+    "铜"
    ]
   },
   {
@@ -319,7 +536,13 @@
    "aliases": [
     "марганец",
     "марганца сульфат",
-    "марганца глюконат"
+    "марганца глюконат",
+    "manganese",
+    "manganese sulfate",
+    "manganese gluconate",
+    "mangan",
+    "manganeso",
+    "锰"
    ]
   },
   {
@@ -332,7 +555,14 @@
     "селен",
     "селенометионин",
     "селенит натрия",
-    "натрия селенит"
+    "натрия селенит",
+    "selenium",
+    "selenomethionine",
+    "l-selenomethionine",
+    "sodium selenite",
+    "selen",
+    "selenio",
+    "硒"
    ]
   },
   {
@@ -345,7 +575,14 @@
     "хром",
     "хрома пиколинат",
     "пиколинат хрома",
-    "хрома хлорид"
+    "хрома хлорид",
+    "chromium",
+    "chromium picolinate",
+    "chromium chloride",
+    "chrom",
+    "chrome",
+    "cromo",
+    "铬"
    ]
   },
   {
@@ -356,7 +593,13 @@
    "upper": 600,
    "aliases": [
     "молибден",
-    "молибдат натрия"
+    "молибдат натрия",
+    "molybdenum",
+    "sodium molybdate",
+    "molybdan",
+    "molybdene",
+    "molibdeno",
+    "钼"
    ]
   },
   {
@@ -370,7 +613,16 @@
     "коэнзим ку10",
     "убихинон",
     "убидекаренон",
-    "убихинол"
+    "убихинол",
+    "coenzyme q10",
+    "coq10",
+    "co-q10",
+    "ubiquinone",
+    "ubiquinol",
+    "ubidecarenone",
+    "coenzym q10",
+    "coenzima q10",
+    "辅酶q10"
    ]
   },
   {
@@ -384,7 +636,15 @@
     "л-карнитин",
     "карнитин",
     "ацетил-l-карнитин",
-    "карнитина тартрат"
+    "карнитина тартрат",
+    "l-carnitine",
+    "carnitine",
+    "acetyl-l-carnitine",
+    "l-carnitine tartrate",
+    "l-carnitin",
+    "carnitina",
+    "左旋肉碱",
+    "肉碱"
    ]
   },
   {
@@ -394,7 +654,11 @@
    "adequate": 400,
    "upper": 1200,
    "aliases": [
-    "таурин"
+    "таурин",
+    "taurine",
+    "taurin",
+    "taurina",
+    "牛磺酸"
    ]
   },
   {
@@ -404,7 +668,11 @@
    "adequate": 5,
    "upper": 10,
    "aliases": [
-    "лютеин"
+    "лютеин",
+    "lutein",
+    "luteine",
+    "luteina",
+    "叶黄素"
    ]
   },
   {
@@ -414,7 +682,11 @@
    "adequate": 5,
    "upper": 10,
    "aliases": [
-    "ликопин"
+    "ликопин",
+    "lycopene",
+    "lycopin",
+    "licopeno",
+    "番茄红素"
    ]
   },
   {
@@ -425,7 +697,15 @@
    "upper": 150,
    "aliases": [
     "кофеин",
-    "кофеин безводный"
+    "кофеин безводный",
+    "caffeine",
+    "caffeine anhydrous",
+    "koffein",
+    "cafeine",
+    "cafeina",
+    "caffeina",
+    "guarana caffeine",
+    "咖啡因"
    ]
   },
   {
@@ -437,7 +717,14 @@
    "aliases": [
     "глюкозамин",
     "глюкозамина сульфат",
-    "глюкозамина гидрохлорид"
+    "глюкозамина гидрохлорид",
+    "glucosamine",
+    "glucosamine sulfate",
+    "glucosamine hcl",
+    "glucosamine hydrochloride",
+    "glucosamin",
+    "glucosamina",
+    "氨基葡萄糖"
    ]
   },
   {
@@ -449,7 +736,12 @@
    "aliases": [
     "хондроитин",
     "хондроитина сульфат",
-    "хондроитин сульфат"
+    "хондроитин сульфат",
+    "chondroitin",
+    "chondroitin sulfate",
+    "chondroitine",
+    "condroitina",
+    "软骨素"
    ]
   }
  ]

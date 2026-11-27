@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from pathlib import Path
 
 from .models import Ingredient, Product
@@ -12,25 +13,42 @@ UNIT_ALIASES = {
     "мг": "мг", "mg": "мг",
     "мкг": "мкг", "mcg": "мкг", "µg": "мкг", "μg": "мкг", "ug": "мкг",
     "г": "г", "гр": "г", "g": "г",
-    "ме": "МЕ", "iu": "МЕ", "me": "МЕ",
+    "ме": "МЕ", "iu": "МЕ", "me": "МЕ", "ui": "МЕ", "i.e.": "МЕ", "ie": "МЕ",
     "кое": "КОЕ", "cfu": "КОЕ",
+    "毫克": "мг", "微克": "мкг", "克": "г", "国际单位": "МЕ",
 }
 
 _UNIT_RE = "|".join(sorted((re.escape(u) for u in UNIT_ALIASES), key=len, reverse=True))
 AMOUNT_RE = re.compile(
-    rf"(?P<num>\d+(?:[.,]\d+)?(?:\s*[x×]\s*10\^?\d+)?)\s*(?P<unit>{_UNIT_RE})\.?(?![а-яa-z])",
+    rf"(?P<num>(?<![^\W\d_])(?<![\d.,])\d{{1,3}}(?:[ \u00a0\u202f]\d{{3}})+(?:[.,]\d+)?|\d+(?:[.,]\d+)*(?:\s*[x×]\s*10\^?\d+)?)\s*(?P<unit>{_UNIT_RE})\.?(?![а-яa-z])",
     re.IGNORECASE,
 )
 
 
+def _strip_latin_accents(text: str) -> str:
+    """é → e, ä → a, ß → ss; кириллицу (й) не трогает."""
+    out = []
+    for ch in text:
+        d = unicodedata.normalize("NFKD", ch)
+        out.append(d[0] if len(d) > 1 and d[0].isascii() else ch)
+    return "".join(out).replace("ß", "ss")
+
+
 def normalize(text: str) -> str:
-    text = text.lower().replace("ё", "е")
+    text = _strip_latin_accents(text.lower().replace("ё", "е"))
     text = text.replace("–", "-").replace("—", "-")
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _to_float(num: str) -> float:
-    num = num.replace(",", ".").replace(" ", "")
+LATIN_UNITS = {"mg", "mcg", "µg", "μg", "ug", "g", "iu", "ui", "ie", "i.e.", "cfu"}
+
+
+def _to_float(num: str, unit: str = "") -> float:
+    num = re.sub(r"[ \u00a0\u202f]", "", num)
+    # «1,000 IU» на иностранных этикетках — разделитель тысяч, а не десятичная запятая
+    if unit.lower() in LATIN_UNITS and re.fullmatch(r"\d{1,3}(,\d{3})+", num):
+        num = num.replace(",", "")
+    num = num.replace(",", ".")
     m = re.match(r"([\d.]+)[x×]10\^?(\d+)", num)
     if m:
         return float(m.group(1)) * 10 ** int(m.group(2))
@@ -48,7 +66,7 @@ def parse_ingredient(raw: str) -> Ingredient | None:
     if not name:  # количество в начале строки: «500 мг магния цитрата»
         name = raw[m.end():].strip(" -:–—)\t")
     unit = UNIT_ALIASES[m.group("unit").lower()]
-    return Ingredient(name=name, amount=_to_float(m.group("num")), unit=unit, raw=raw)
+    return Ingredient(name=name, amount=_to_float(m.group("num"), m.group("unit")), unit=unit, raw=raw)
 
 
 def parse_composition_text(text: str) -> list[Ingredient]:
@@ -59,7 +77,7 @@ def parse_composition_text(text: str) -> list[Ingredient]:
     """
     parts: list[str] = []
     for line in text.splitlines():
-        line = re.sub(r"^\s*(состав|ingredients)\s*:\s*", "", line, flags=re.IGNORECASE)
+        line = _COMPOSITION_HEAD_RE.sub("", line)
         parts.extend(line.split(";"))
     result = []
     for p in parts:
@@ -69,12 +87,10 @@ def parse_composition_text(text: str) -> list[Ingredient]:
     return result
 
 
+_RULES = json.loads((Path(__file__).parent / "data" / "rules.json").read_text(encoding="utf-8"))
 # Строки этикетки, которые заканчивают блок «Состав»
-_LABEL_SECTION_RE = re.compile(
-    r"^\s*(рекомендаци|способ применения|принимать|противопоказани|условия хранения|хранить|"
-    r"срок годности|годен до|изготовител|производител|сгр|свидетельств|перед применением|"
-    r"не является|пищевая ценность|энергетическая ценность|масса|вес нетто)", re.IGNORECASE)
-_COMPOSITION_HEAD_RE = re.compile(r"^\s*(состав|ingredients)\s*:?", re.IGNORECASE)
+_LABEL_SECTION_RE = re.compile(_RULES["label_section"], re.IGNORECASE)
+_COMPOSITION_HEAD_RE = re.compile(_RULES["composition_head"], re.IGNORECASE)
 
 
 def extract_composition(text: str) -> str:

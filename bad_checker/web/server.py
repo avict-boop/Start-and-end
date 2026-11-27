@@ -17,7 +17,12 @@ from ..ocr import OCRUnavailable, image_to_text
 from ..parser import product_from_text
 from ..report import to_dict, to_markdown
 
-STATIC = Path(__file__).parent / "static"
+ROOT = Path(__file__).resolve().parent.parent.parent
+SITE = ROOT / "site"                                   # фронтенд (тот же, что на GitHub Pages)
+DATA = Path(__file__).resolve().parent.parent / "data"  # справочники
+TYPES = {".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
+         ".js": "text/javascript; charset=utf-8", ".json": "application/json; charset=utf-8",
+         ".webmanifest": "application/manifest+json", ".png": "image/png", ".svg": "image/svg+xml"}
 MAX_BODY = 15 * 1024 * 1024  # 15 МБ — фото этикетки с запасом
 
 
@@ -73,12 +78,17 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, json.dumps(data, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
     def do_GET(self) -> None:  # noqa: N802
-        if self.path in ("/", "/index.html"):
-            self._send(200, (STATIC / "index.html").read_bytes(), "text/html; charset=utf-8")
-        elif self.path == "/api/health":
-            self._json(200, {"ok": True, "ocr": ocr_status()})
-        else:
-            self._json(404, {"error": "Не найдено"})
+        path = self.path.split("?", 1)[0]
+        if path == "/api/health":
+            return self._json(200, {"ok": True, "ocr": ocr_status()})
+        if path == "/":
+            path = "/index.html"
+        base, rel = (DATA, path[len("/data/"):]) if path.startswith("/data/") else (SITE, path.lstrip("/"))
+        target = (base / rel).resolve()
+        if not target.is_file() or base.resolve() not in target.parents:
+            return self._json(404, {"error": "Не найдено"})
+        ctype = TYPES.get(target.suffix, "application/octet-stream")
+        self._send(200, target.read_bytes(), ctype)
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/api/analyze":

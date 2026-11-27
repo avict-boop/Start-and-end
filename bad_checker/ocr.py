@@ -12,6 +12,11 @@ from pathlib import Path
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff"}
 
 
+# Языки распознавания: используются те, что установлены (tesseract-ocr-deu, -fra, …)
+PREFERRED_LANGS = ("rus", "eng", "deu", "fra", "spa", "ita")
+OCR_LANGS = "rus+eng"
+
+
 class OCRUnavailable(RuntimeError):
     pass
 
@@ -30,6 +35,8 @@ def _deps():
         raise OCRUnavailable("Не найден исполняемый файл tesseract (apt install tesseract-ocr tesseract-ocr-rus)") from e
     if "rus" not in langs:
         raise OCRUnavailable("В Tesseract нет русского языка (apt install tesseract-ocr-rus)")
+    global OCR_LANGS
+    OCR_LANGS = "+".join(l for l in PREFERRED_LANGS if l in langs)
     return pytesseract, Image, ImageOps
 
 
@@ -55,7 +62,7 @@ def image_to_text(source: str | Path | bytes) -> str:
     pytesseract, Image, ImageOps = _deps()
     img = Image.open(io.BytesIO(source) if isinstance(source, bytes) else source)
     img = _preprocess(img, Image, ImageOps)
-    text = pytesseract.image_to_string(img, lang="rus+eng", config="--psm 6")
+    text = pytesseract.image_to_string(img, lang=OCR_LANGS, config="--psm 6")
     return clean_ocr_text(text)
 
 

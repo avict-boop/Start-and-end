@@ -1,0 +1,182 @@
+{
+ "_meta": {
+  "note": "Общие правила для Python- и JavaScript-движков. Регулярные выражения в синтаксисе Python; \\b и \\w — с поддержкой Unicode.",
+  "compound_markers": "Признаки того, что указана масса соли/соединения минерала, а не элемента",
+  "elemental_markers": "Признаки того, что количество уже указано в пересчёте на элемент (в т.ч. «Zinc (as zinc citrate) 10 mg» на этикетках США)"
+ },
+ "label_requirements": [
+  {
+   "code": "label_bad_status",
+   "patterns": [
+    "биологически активн\\w* добавк\\w* к пище",
+    "\\bбад\\b"
+   ],
+   "message": "Не указано, что продукт является биологически активной добавкой к пище",
+   "basis": "ТР ТС 022/2011, ст. 4.4; ТР ТС 021/2011"
+  },
+  {
+   "code": "label_not_drug",
+   "patterns": [
+    "не является лекарственн\\w* (средством|препаратом)"
+   ],
+   "message": "Нет надписи «Не является лекарственным средством»",
+   "basis": "ТР ТС 022/2011, ст. 4.4"
+  },
+  {
+   "code": "label_usage",
+   "patterns": [
+    "рекомендаци\\w* по применению",
+    "способ применения",
+    "принимать по"
+   ],
+   "message": "Нет рекомендаций по применению (дозировка, способ применения)",
+   "basis": "ТР ТС 022/2011, ст. 4.4"
+  },
+  {
+   "code": "label_contra",
+   "patterns": [
+    "противопоказани"
+   ],
+   "message": "Не указаны противопоказания",
+   "basis": "ТР ТС 022/2011, ст. 4.4"
+  },
+  {
+   "code": "label_storage",
+   "patterns": [
+    "услови\\w* хранения",
+    "хранить"
+   ],
+   "message": "Не указаны условия хранения",
+   "basis": "ТР ТС 022/2011, ст. 4.1"
+  },
+  {
+   "code": "label_shelf",
+   "patterns": [
+    "срок годности",
+    "годен до"
+   ],
+   "message": "Не указан срок годности",
+   "basis": "ТР ТС 022/2011, ст. 4.1"
+  },
+  {
+   "code": "label_manufacturer",
+   "patterns": [
+    "изготовител",
+    "производител"
+   ],
+   "message": "Не указан изготовитель",
+   "basis": "ТР ТС 022/2011, ст. 4.1"
+  },
+  {
+   "code": "label_sgr",
+   "patterns": [
+    "свидетельств\\w* о (государственной )?регистрации",
+    "\\bсгр\\b",
+    "ru\\.\\d{2}\\.\\d{2}"
+   ],
+   "message": "Не указаны сведения о государственной регистрации (СГР)",
+   "basis": "ТР ТС 021/2011, ст. 24; ТР ТС 022/2011, ст. 4.4"
+  }
+ ],
+ "medical_claims": [
+  "\\bлеч(ит|ат|ени\\w*|ебн\\w*|ащ\\w*|им\\w*)",
+  "\\bизлеч\\w*",
+  "\\bвылеч\\w*",
+  "\\bисцел\\w*",
+  "\\bот (всех )?болезн\\w*",
+  "\\bтерапи\\w*",
+  "\\bзаменяет (лекарств\\w*|препарат\\w*)",
+  "\\bгарантирует\\w*",
+  "\\b100\\s*% (результат|эффект)\\w*",
+  "\\bcur(e|es|ed|ing)\\b",
+  "\\btreat(s|ment|ing)?\\b",
+  "\\bheal(s|ing)?\\b",
+  "\\bprevents? (disease|illness|cancer)",
+  "\\bheilt\\b",
+  "\\bheilung\\b",
+  "\\bguerit\\b",
+  "\\bcura\\b",
+  "\\bcurativ\\w*"
+ ],
+ "medical_claims_basis": "ТР ТС 022/2011, ст. 4.4; ФЗ № 38-ФЗ «О рекламе», ст. 25",
+ "minerals": [
+  "calcium",
+  "chromium",
+  "copper",
+  "iodine",
+  "iron",
+  "magnesium",
+  "manganese",
+  "molybdenum",
+  "phosphorus",
+  "selenium",
+  "zinc"
+ ],
+ "compound_markers": [
+  "цитрат",
+  "оксид",
+  "карбонат",
+  "сульфат",
+  "глюконат",
+  "фумарат",
+  "бисглицинат",
+  "пиколинат",
+  "лактат",
+  "хлорид",
+  "йодид",
+  "йодат",
+  "селенит",
+  "молибдат",
+  "хелат",
+  "аспарагинат",
+  "малат",
+  "citrate",
+  "citrat",
+  "oxide",
+  "oxid",
+  "carbonate",
+  "carbonat",
+  "sulfate",
+  "sulfat",
+  "sulphate",
+  "gluconate",
+  "gluconat",
+  "fumarate",
+  "fumarat",
+  "glycinate",
+  "glycinat",
+  "picolinate",
+  "picolinat",
+  "lactate",
+  "lactat",
+  "chloride",
+  "chlorid",
+  "iodide",
+  "jodid",
+  "iodate",
+  "jodat",
+  "selenite",
+  "selenit",
+  "molybdate",
+  "chelate",
+  "aspartate",
+  "malate",
+  "orotate"
+ ],
+ "elemental_markers": [
+  "в пересчете на",
+  "элементарн",
+  "в т.ч.",
+  "в том числе",
+  "(as ",
+  " as ",
+  "elemental",
+  "elementar",
+  "(als ",
+  "sous forme",
+  "en forma de",
+  "(come "
+ ],
+ "composition_head": "^\\s*(состав|ingredients|ingrédients|supplement facts|nutrition facts|composition|zutaten|inhaltsstoffe|ingredientes|ingredienti|composizione|skład|склад|配料|成分|原料)\\s*:?\\s*",
+ "label_section": "^\\s*(рекомендаци|способ применения|принимать|противопоказани|условия хранения|хранить|срок годности|годен до|изготовител|производител|сгр|свидетельств|перед применением|не является|пищевая ценность|энергетическая ценность|масса|вес нетто|suggested use|directions|recommended use|warning|caution|storage|store |keep out|manufactured|distributed|made in|best before|exp|net wt|verzehrempfehlung|hinweis|aufbewahr|mode d.emploi|conseils d.utilisation|precautions|modo de empleo|advertencias|modalita d.uso|avvertenze)"
+}
