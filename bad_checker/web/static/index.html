@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Анализатор БАД</title>
+<style>
+:root {
+  --bg: #f6f7f5; --surface: #ffffff; --text: #1d2420; --muted: #5d6862; --line: #dfe3df;
+  --accent: #2f6b4f; --accent-ink: #ffffff;
+  --crit: #b3261e; --crit-bg: #fbeceb; --warn: #8a5a00; --warn-bg: #fdf3e1;
+  --info: #2b5c8a; --info-bg: #eaf2fa; --ok: #2f6b4f; --ok-bg: #e8f3ec;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131714; --surface: #1b211d; --text: #e5ebe7; --muted: #9aa69f; --line: #2c3530;
+    --accent: #6fbf95; --accent-ink: #0f1a14;
+    --crit: #ff8a80; --crit-bg: #3a1d1b; --warn: #f2c165; --warn-bg: #352a14;
+    --info: #8cbcf0; --info-bg: #17283a; --ok: #7fd1a4; --ok-bg: #16291f;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { padding: 20px 16px 8px; max-width: 1200px; margin: 0 auto; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+header p { margin: 0; color: var(--muted); }
+main { max-width: 1200px; margin: 0 auto; padding: 12px 16px 40px;
+  display: grid; gap: 20px; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); align-items: start; }
+@media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; }
+label { display: block; font-weight: 600; margin: 12px 0 4px; }
+label:first-child { margin-top: 0; }
+.hint { color: var(--muted); font-size: 13px; font-weight: 400; }
+input[type=text], input[type=number], textarea {
+  width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: inherit; }
+textarea { min-height: 150px; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13.5px; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+.row > div { flex: 1 1 140px; }
+.check { display: flex; gap: 8px; align-items: center; font-weight: 400; margin-top: 10px; }
+.drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 14px; text-align: center; color: var(--muted); cursor: pointer; }
+.drop.has { border-color: var(--accent); color: var(--text); }
+.drop img { max-width: 100%; max-height: 160px; display: block; margin: 8px auto 0; border-radius: 6px; }
+button { font: inherit; font-weight: 600; border: 0; border-radius: 8px; padding: 10px 18px; cursor: pointer; }
+.primary { background: var(--accent); color: var(--accent-ink); }
+.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+.actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
+button:disabled { opacity: .6; cursor: progress; }
+.verdict { border-radius: var(--radius); padding: 14px 16px; font-weight: 700; font-size: 18px; margin-bottom: 14px; }
+.verdict small { display: block; font-weight: 400; font-size: 13.5px; margin-top: 2px; }
+.v-critical { background: var(--crit-bg); color: var(--crit); }
+.v-warning { background: var(--warn-bg); color: var(--warn); }
+.v-ok { background: var(--ok-bg); color: var(--ok); }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 600; font-size: 13px; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 3px; min-width: 60px; }
+.bar i { display: block; height: 100%; background: var(--ok); }
+.bar i.over { background: var(--crit); }
+.table-wrap { overflow-x: auto; margin-bottom: 16px; }
+h2 { font-size: 16px; margin: 4px 0 10px; }
+.finding { border-left: 4px solid; border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; }
+.finding .tag { font-size: 12px; font-weight: 700; letter-spacing: .03em; }
+.finding .basis { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+.f-critical { border-color: var(--crit); background: var(--crit-bg); } .f-critical .tag { color: var(--crit); }
+.f-warning { border-color: var(--warn); background: var(--warn-bg); } .f-warning .tag { color: var(--warn); }
+.f-info { border-color: var(--info); background: var(--info-bg); } .f-info .tag { color: var(--info); }
+.f-ok { border-color: var(--ok); background: var(--ok-bg); } .f-ok .tag { color: var(--ok); }
+.filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.filters button { padding: 4px 10px; font-size: 13px; font-weight: 500; background: var(--bg); color: var(--text); border: 1px solid var(--line); }
+.filters button.on { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.empty { color: var(--muted); text-align: center; padding: 40px 10px; }
+.error { color: var(--crit); background: var(--crit-bg); padding: 10px; border-radius: 8px; margin-top: 12px; }
+details { margin-top: 12px; } summary { cursor: pointer; color: var(--muted); }
+pre { white-space: pre-wrap; font-size: 12.5px; background: var(--bg); padding: 10px; border-radius: 8px; }
+.disclaimer { color: var(--muted); font-size: 12.5px; margin-top: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Анализатор состава БАД</h1>
+  <p>Проверка состава и маркировки по ТР ТС 021/2011, ТР ТС 022/2011, ТР ТС 029/2012 и Единым санитарно-эпидемиологическим требованиям</p>
+</header>
+<main>
+  <form class="card" id="form">
+    <label for="name">Название продукта</label>
+    <input type="text" id="name" placeholder="Например: Магний B6 Форте">
+
+    <label for="composition">Состав <span class="hint">— каждый компонент с новой строки или через «;»</span></label>
+    <textarea id="composition" placeholder="Магний (цитрат, в пересчете на магний) – 100 мг&#10;Витамин B6 (пиридоксина гидрохлорид) – 2 мг&#10;Микрокристаллическая целлюлоза"></textarea>
+
+    <div class="row">
+      <div>
+        <label for="perday">Единиц в сутки</label>
+        <input type="number" id="perday" value="1" min="0.1" step="any">
+      </div>
+      <div>
+        <label class="check"><input type="checkbox" id="perunit" checked> Количества указаны на 1 единицу</label>
+      </div>
+    </div>
+
+    <label for="label">Текст этикетки <span class="hint">— для проверки маркировки и СГР</span></label>
+    <textarea id="label" style="min-height:110px" placeholder="Биологически активная добавка к пище. Не является лекарственным средством…"></textarea>
+
+    <label>Фото этикетки <span class="hint" id="ocrhint">— текст будет распознан автоматически</span></label>
+    <div class="drop" id="drop" tabindex="0">Нажмите или перетащите изображение (JPG, PNG)
+      <input type="file" id="file" accept="image/*" hidden>
+    </div>
+
+    <div class="actions">
+      <button class="primary" type="submit" id="go">Проверить</button>
+      <button class="ghost" type="button" id="example">Пример</button>
+      <button class="ghost" type="button" id="clear">Очистить</button>
+    </div>
+    <div id="err"></div>
+  </form>
+
+  <section class="card" id="result">
+    <div class="empty">Введите состав или загрузите фото этикетки и нажмите «Проверить»</div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let imageData = null, lastReport = null, filter = "all";
+
+function el(tag, attrs = {}, ...children) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v; else if (k === "style") e.style.cssText = v; else e.setAttribute(k, v);
+  }
+  for (const c of children) if (c != null) e.append(c);
+  return e;
+}
+
+fetch("/api/health").then(r => r.json()).then(h => {
+  if (!h.ocr.available) {
+    $("ocrhint").textContent = "— распознавание недоступно: " + h.ocr.reason;
+    $("drop").style.opacity = .5;
+  }
+}).catch(() => {});
+
+const drop = $("drop"), file = $("file");
+drop.onclick = () => file.click();
+drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); file.click(); } };
+drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("has"); };
+drop.ondragleave = () => { if (!imageData) drop.classList.remove("has"); };
+drop.ondrop = (e) => { e.preventDefault(); if (e.dataTransfer.files[0]) loadImage(e.dataTransfer.files[0]); };
+file.onchange = () => { if (file.files[0]) loadImage(file.files[0]); };
+
+function loadImage(f) {
+  if (f.size > 14 * 1024 * 1024) { showError("Файл больше 14 МБ"); return; }
+  const r = new FileReader();
+  r.onload = () => {
+    imageData = r.result;
+    drop.classList.add("has");
+    drop.replaceChildren(document.createTextNode(f.name + " — нажмите, чтобы заменить"), el("img", { src: imageData, alt: "" }), file);
+  };
+  r.readAsDataURL(f);
+}
+
+function showError(msg) { $("err").replaceChildren(msg ? el("div", { class: "error" }, msg) : ""); }
+
+$("example").onclick = () => {
+  $("name").value = "Энергия Плюс";
+  $("composition").value = "Экстракт травы эфедры – 150 мг\nКофеин безводный – 100 мг\nВитамин B6 (пиридоксина гидрохлорид) – 5 мг\nМагния цитрат – 300 мг\nВитамин D3 – 1000 МЕ\nКраситель E123";
+  $("perday").value = 2;
+  $("label").value = "Биологически активная добавка к пище. Помогает в лечении усталости. Принимать по 1 капсуле 2 раза в день. Хранить в сухом месте. Срок годности 2 года. Изготовитель: ООО «Пример». СГР RU.77.99.11.003.R.001234.13.24";
+};
+$("clear").onclick = () => {
+  $("form").reset(); imageData = null; drop.classList.remove("has");
+  drop.replaceChildren(document.createTextNode("Нажмите или перетащите изображение (JPG, PNG)"), file);
+  $("result").replaceChildren(el("div", { class: "empty" }, "Введите состав или загрузите фото этикетки и нажмите «Проверить»"));
+  showError("");
+};
+
+$("form").onsubmit = async (e) => {
+  e.preventDefault();
+  showError("");
+  if (!$("composition").value.trim() && !imageData) { showError("Введите состав или загрузите фото"); return; }
+  const btn = $("go"); btn.disabled = true; btn.textContent = imageData ? "Распознаю фото…" : "Проверяю…";
+  try {
+    const res = await fetch("/api/analyze", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: $("name").value, composition_text: $("composition").value, label_text: $("label").value,
+        units_per_day: $("perday").value, amounts_per_unit: $("perunit").checked, image: imageData,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    lastReport = data; filter = "all"; render();
+  } catch (err) { showError("Ошибка: " + err.message); }
+  finally { btn.disabled = false; btn.textContent = "Проверить"; }
+};
+
+const LEVEL = { critical: "НАРУШЕНИЕ", warning: "ВНИМАНИЕ", info: "ИНФО", ok: "OK" };
+const fmt = (x) => x >= 10 ? (Math.round(x * 10) / 10).toLocaleString("ru") : (+x.toPrecision(3)).toLocaleString("ru");
+
+function render() {
+  const r = lastReport, c = r.counts;
+  const vClass = c.critical ? "v-critical" : c.warning ? "v-warning" : "v-ok";
+  const out = [el("div", { class: "verdict " + vClass }, r.verdict,
+    el("small", {}, `${r.product} · нарушений: ${c.critical} · предупреждений: ${c.warning} · компонентов: ${r.ingredients.length}`))];
+
+  if (r.nutrients.length) {
+    const tbody = el("tbody");
+    for (const n of r.nutrients) {
+      const over = n.pct_upper > 100;
+      tbody.append(el("tr", {},
+        el("td", {}, n.name, el("div", { class: "hint" }, n.ingredient)),
+        el("td", { class: "num" }, `${fmt(n.daily_amount)} ${n.unit}`),
+        el("td", { class: "num" }, `${Math.round(n.pct_adequate)}%`),
+        el("td", { class: "num" }, `${Math.round(n.pct_upper)}%`,
+          el("div", { class: "bar" }, el("i", { class: over ? "over" : "", style: `width:${Math.min(100, n.pct_upper)}%` })))));
+    }
+    out.push(el("h2", {}, "Нормируемые вещества (в сутки)"),
+      el("div", { class: "table-wrap" }, el("table", {},
+        el("thead", {}, el("tr", {}, el("th", {}, "Вещество"), el("th", { class: "num" }, "Доза"),
+          el("th", { class: "num", title: "Адекватный уровень потребления" }, "% АУП"),
+          el("th", { class: "num", title: "Верхний допустимый уровень" }, "% ВДУ"))), tbody)));
+  }
+
+  const filters = el("div", { class: "filters" });
+  for (const [key, title] of [["all", "Все"], ["critical", "Нарушения"], ["warning", "Внимание"], ["info", "Инфо"], ["ok", "OK"]]) {
+    const n = key === "all" ? r.findings.length : c[key];
+    if (key !== "all" && !n) continue;
+    const b = el("button", { type: "button", class: filter === key ? "on" : "" }, `${title} (${n})`);
+    b.onclick = () => { filter = key; render(); };
+    filters.append(b);
+  }
+  out.push(el("h2", {}, "Результаты проверки"), filters);
+  for (const f of r.findings.filter(f => filter === "all" || f.level === filter)) {
+    out.push(el("div", { class: "finding f-" + f.level },
+      el("span", { class: "tag" }, LEVEL[f.level]), " ", f.message,
+      f.basis ? el("div", { class: "basis" }, "Основание: " + f.basis) : null));
+  }
+
+  if (r.ocr_text) out.push(el("details", {}, el("summary", {}, "Распознанный с фото текст"), el("pre", {}, r.ocr_text)));
+  const dl = el("button", { type: "button", class: "ghost" }, "Скачать отчёт (.md)");
+  dl.onclick = () => {
+    const a = el("a", { href: URL.createObjectURL(new Blob([r.markdown], { type: "text/markdown" })), download: `отчет-${r.product}.md` });
+    a.click(); URL.revokeObjectURL(a.href);
+  };
+  out.push(el("div", { class: "actions" }, dl), el("p", { class: "disclaimer" }, r.disclaimer));
+  $("result").replaceChildren(...out);
+}
+</script>
+</body>
+</html>

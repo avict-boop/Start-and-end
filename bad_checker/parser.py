@@ -69,6 +69,39 @@ def parse_composition_text(text: str) -> list[Ingredient]:
     return result
 
 
+# Строки этикетки, которые заканчивают блок «Состав»
+_LABEL_SECTION_RE = re.compile(
+    r"^\s*(рекомендаци|способ применения|принимать|противопоказани|условия хранения|хранить|"
+    r"срок годности|годен до|изготовител|производител|сгр|свидетельств|перед применением|"
+    r"не является|пищевая ценность|энергетическая ценность|масса|вес нетто)", re.IGNORECASE)
+_COMPOSITION_HEAD_RE = re.compile(r"^\s*(состав|ingredients)\s*:?", re.IGNORECASE)
+
+
+def extract_composition(text: str) -> str:
+    """Выделить блок «Состав: …» из полного текста этикетки.
+
+    Если заголовка «Состав» нет — возвращается весь текст.
+    """
+    lines = text.splitlines()
+    start = next((i for i, l in enumerate(lines) if _COMPOSITION_HEAD_RE.match(l)), None)
+    if start is None:
+        return text
+    block = []
+    for line in lines[start:]:
+        if block and _LABEL_SECTION_RE.match(line):
+            break
+        block.append(line)
+    return "\n".join(block)
+
+
+def product_from_text(text: str, name: str = "Без названия", units_per_day: float = 1.0,
+                      label_text: str | None = None) -> Product:
+    """Продукт из свободного текста (состав + этикетка, например после OCR)."""
+    return Product(name=name, ingredients=parse_composition_text(extract_composition(text)),
+                   units_per_day=units_per_day,
+                   label_text=text if label_text is None else label_text)
+
+
 def product_from_dict(data: dict) -> Product:
     ingredients: list[Ingredient] = []
     for item in data.get("ingredients", []):
@@ -100,11 +133,12 @@ def product_from_dict(data: dict) -> Product:
 
 def load_product(path: str | Path, units_per_day: float | None = None) -> Product:
     path = Path(path)
-    text = path.read_text(encoding="utf-8")
+    from .ocr import image_to_text, is_image
+    text = image_to_text(path) if is_image(path) else path.read_text(encoding="utf-8")
     if path.suffix.lower() == ".json":
         product = product_from_dict(json.loads(text))
     else:
-        product = Product(name=path.stem, ingredients=parse_composition_text(text), label_text=text)
+        product = product_from_text(text, name=path.stem)
     if units_per_day is not None:
         product.units_per_day = units_per_day
     return product

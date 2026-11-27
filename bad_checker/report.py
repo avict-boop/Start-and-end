@@ -59,14 +59,21 @@ def to_markdown(report: Report) -> str:
     return "\n".join(out)
 
 
-def to_json(report: Report) -> str:
-    return json.dumps({
-        "product": report.product.name,
+def to_dict(report: Report) -> dict:
+    p = report.product
+    return {
+        "product": p.name,
         "verdict": report.verdict,
+        "counts": {lvl.value: report.count(lvl) for lvl in ORDER},
+        "ingredients": [{"name": i.name, "amount": i.amount, "unit": i.unit} for i in p.ingredients],
         "nutrients": [n.to_dict() for n in report.nutrients],
         "findings": [f.to_dict() for f in _sorted(report)],
         "disclaimer": DISCLAIMER,
-    }, ensure_ascii=False, indent=2)
+    }
+
+
+def to_json(report: Report) -> str:
+    return json.dumps(to_dict(report), ensure_ascii=False, indent=2)
 
 
 FORMATTERS = {"text": to_text, "md": to_markdown, "json": to_json}

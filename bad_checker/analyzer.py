@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .models import Finding, Ingredient, Level, NutrientResult, Product, Report
 from .parser import normalize
+from . import sgr
 
 DATA_DIR = Path(__file__).parent / "data"
 
@@ -50,7 +51,7 @@ LABEL_REQUIREMENTS = [
 
 # БАД не может позиционироваться как лекарство (ТР ТС 022/2011 ст. 4.4; 38-ФЗ «О рекламе» ст. 25)
 MEDICAL_CLAIMS = [
-    r"\bлеч(ит|ение|ения|ебн\w*)\b", r"\bизлеч\w*", r"\bвылеч\w*",
+    r"\bлеч(ит|ат|ени\w*|ебн\w*|ащ\w*|им\w*)", r"\bизлеч\w*", r"\bвылеч\w*",
     r"\bисцел\w*", r"\bот (всех )?болезн\w*", r"\bтерапи\w*",
     r"\bзаменяет (лекарств\w*|препарат\w*)", r"\bгарантирует\w*",
     r"\b100\s*% (результат|эффект)\w*",
@@ -252,6 +253,7 @@ class Analyzer:
         for code, patterns, message, basis in LABEL_REQUIREMENTS:
             if not any(re.search(p, text) for p in patterns):
                 report.findings.append(Finding(Level.WARNING, code, message, basis=basis))
+        self._check_sgr(label, report)
         for p in MEDICAL_CLAIMS:
             m = re.search(p, text)
             if m:
@@ -260,6 +262,31 @@ class Analyzer:
                     f"Недопустимое заявление лечебных свойств: «{m.group(0)}». "
                     f"БАД не может позиционироваться как лекарственное средство",
                     basis="ТР ТС 022/2011, ст. 4.4; ФЗ № 38-ФЗ «О рекламе», ст. 25"))
+
+    def _check_sgr(self, label: str, report: Report) -> None:
+        numbers = sgr.find_sgr(label)
+        if not numbers:
+            bad = sgr.has_malformed_sgr(label)
+            if bad:
+                report.findings.append(Finding(
+                    Level.WARNING, "sgr_malformed",
+                    f"Номер СГР «{bad}» не соответствует формату RU.77.99.11.003.R.000000.01.24",
+                    basis="Решение Комиссии ТС № 299, гл. I; ТР ТС 021/2011, ст. 24"))
+            return
+        for n in numbers:
+            problems = n.problems()
+            country = sgr.COUNTRIES.get(n.country, n.country)
+            if problems:
+                report.findings.append(Finding(
+                    Level.WARNING, "sgr_suspicious",
+                    f"СГР {n.raw} ({country}, {n.month:02d}.{n.year}): " + "; ".join(problems),
+                    basis="ТР ТС 021/2011, ст. 24"))
+            else:
+                report.findings.append(Finding(
+                    Level.INFO, "sgr_found",
+                    f"СГР {n.raw} ({country}, выдано {n.month:02d}.{n.year}) — формат корректен. "
+                    f"Действительность сверьте в Едином реестре ЕАЭС: {sgr.REGISTRY_URL}",
+                    basis="ТР ТС 021/2011, ст. 24"))
 
 
 def analyze(product: Product) -> Report:
